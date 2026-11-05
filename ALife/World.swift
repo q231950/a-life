@@ -3,7 +3,6 @@ import RealityKit
 import AppKit
 typealias PlatformColor = NSColor
 #else
-import ARKit
 import UIKit
 typealias PlatformColor = UIColor
 #endif
@@ -13,14 +12,14 @@ typealias PlatformColor = UIColor
 @MainActor
 final class World {
     let root = Entity()
-    /// Only used in a window. On a table the device is the camera.
+    /// Only used in a window. On a real surface the device is the camera.
     let camera = CameraRig()
 
     private var grid = TileGrid(width: 16, depth: 16)
     private let tileSize: Float = 1
+    private let tileThickness: Float = 0.1
     private let character: Entity
     private let marker: ModelEntity
-    private let sun: DirectionalLight
 
     init() {
         character = Self.makeCharacter()
@@ -28,7 +27,6 @@ final class World {
             mesh: .generateBox(width: 0.35, height: 0.02, depth: 0.35, cornerRadius: 0.05),
             materials: [SimpleMaterial(color: PlatformColor(red: 1, green: 0.85, blue: 0.2, alpha: 1), isMetallic: false)]
         )
-        sun = Self.makeSun()
 
         placeHouse()
         placeBushes()
@@ -42,7 +40,7 @@ final class World {
         marker.isEnabled = false
         root.addChild(marker)
 
-        root.addChild(sun)
+        root.addChild(Self.makeSun())
     }
 
     // MARK: Showing the lot
@@ -54,28 +52,31 @@ final class World {
     }
 
     #if os(iOS)
-    /// For a real table: the lot shrunk to `width` metres across, sitting on
-    /// the first table RealityKit finds. The anchor stays put on the table
-    /// while you walk around it.
+    /// For a real surface: the lot shrunk to `width` metres across, with the
+    /// bottom of its floor tiles at y = 0. Put it under an entity whose y-axis
+    /// is the surface's normal.
     ///
-    /// The orbit camera stays out of this tree: a camera entity under the
-    /// anchor would pin the lot to the screen instead of the table.
-    func contentForTable(width: Float = 0.5) -> AnchorEntity {
-        // Telling tables apart from other surfaces needs an A12 chip or later,
-        // so older iPads take any horizontal surface.
-        let surface: AnchoringComponent.Target.Classification = ARPlaneAnchor.isClassificationSupported ? .table : .any
-        let table = AnchorEntity(.plane(.horizontal, classification: surface, minimumBounds: [0.3, 0.3]))
-
+    /// The orbit camera stays out of this tree: a camera entity under an
+    /// anchor pins the content to the screen instead of the surface.
+    func contentForSurface(width: Float = 0.5) -> Entity {
         // Tiles are 1 m, so the lot is 16 m wide. Walks are measured in the
         // lot's own space, so they shrink along with it.
-        root.scale = SIMD3(repeating: width / (Float(grid.width) * tileSize))
-        table.addChild(root)
+        let scale = width / (Float(grid.width) * tileSize)
+        root.scale = SIMD3(repeating: scale)
+        root.position = [0, tileThickness * scale, 0]
+        return root
+    }
 
-        // The sun moves onto the unscaled anchor so its shadow distance is in
-        // real metres. 30 m suits a window; over a table, 3 m is plenty.
-        table.addChild(sun)
-        sun.shadow?.maximumDistance = 3
-        return table
+    /// See-through, with tiles that ignore taps, while the lot is being placed.
+    func setPreview(_ isPreview: Bool) {
+        if isPreview {
+            root.components.set(OpacityComponent(opacity: 0.5))
+        } else {
+            root.components.remove(OpacityComponent.self)
+        }
+        for tile in root.children where tile.components.has(TileComponent.self) {
+            tile.components[InputTargetComponent.self]?.isEnabled = !isPreview
+        }
     }
     #endif
 
@@ -118,14 +119,14 @@ final class World {
     // MARK: Building the lot
 
     private func placeFloor() {
-        let mesh = MeshResource.generateBox(width: tileSize, height: 0.1, depth: tileSize)
-        let shape = ShapeResource.generateBox(width: tileSize, height: 0.1, depth: tileSize)
+        let mesh = MeshResource.generateBox(width: tileSize, height: tileThickness, depth: tileSize)
+        let shape = ShapeResource.generateBox(width: tileSize, height: tileThickness, depth: tileSize)
         let light = SimpleMaterial(color: PlatformColor(red: 0.55, green: 0.78, blue: 0.38, alpha: 1), roughness: 0.9, isMetallic: false)
         let dark = SimpleMaterial(color: PlatformColor(red: 0.48, green: 0.71, blue: 0.33, alpha: 1), roughness: 0.9, isMetallic: false)
 
         for tile in grid.allTiles {
             let entity = ModelEntity(mesh: mesh, materials: [(tile.x + tile.z).isMultiple(of: 2) ? light : dark])
-            entity.position = position(of: tile) - [0, 0.05, 0] // top face at y = 0
+            entity.position = position(of: tile) - [0, tileThickness / 2, 0] // top face at y = 0
             entity.components.set(TileComponent(tile: tile))
             // Both are needed for an entity to receive targeted gestures.
             entity.components.set(CollisionComponent(shapes: [shape]))
@@ -187,7 +188,7 @@ final class World {
         return character
     }
 
-    private static func makeSun() -> DirectionalLight {
+    private static func makeSun() -> Entity {
         let sun = DirectionalLight()
         sun.light.intensity = 4000
         sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 30, depthBias: 2)

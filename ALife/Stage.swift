@@ -9,17 +9,17 @@ enum Stage {
     /// and iPhones or iPads where the camera may not be used.
     case window
     #if os(iOS)
-    /// On a real table, seen through the device camera.
-    case table
+    /// On a real surface (a floor, a table, a wall), seen through the device camera.
+    case surface
     #endif
 
-    /// The table when this device can track the world and may use the camera,
-    /// otherwise the window. Asks for camera access the first time.
+    /// A real surface when this device can track the world and may use the
+    /// camera, otherwise the window. Asks for camera access the first time.
     static func choose() async -> Stage {
         #if os(iOS)
         // False in the Simulator, which has no camera to track with.
         if ARWorldTrackingConfiguration.isSupported, await AVCaptureDevice.requestAccess(for: .video) {
-            return .table
+            return .surface
         }
         #endif
         return .window

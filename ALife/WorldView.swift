@@ -10,8 +10,8 @@ struct WorldView: View {
     /// waiting for the camera permission prompt.
     @State private var stage: Stage?
     #if os(iOS)
-    @State private var isOnTable = false
-    @State private var anchoring: EventSubscription?
+    @State private var placement: SurfacePlacement?
+    @State private var frameUpdates: EventSubscription?
     #endif
     #if os(macOS)
     @State private var scrollMonitor: Any?
@@ -37,36 +37,66 @@ struct WorldView: View {
     private func scene(on stage: Stage) -> some View {
         RealityView { content in
             let world = World()
+            self.world = world
             switch stage {
             case .window:
+                #if os(iOS)
+                // On iOS a RealityView shows the camera unless told otherwise.
+                content.camera = .virtual
+                #endif
                 content.add(world.contentForWindow())
             #if os(iOS)
-            case .table:
+            case .surface:
                 content.camera = .spatialTracking
-                let table = world.contentForTable()
-                content.add(table)
-                // The lot appears once RealityKit has found a table. Until
-                // then the hint says what to do.
-                anchoring = content.subscribe(to: SceneEvents.AnchoredStateChanged.self, on: table) { event in
-                    isOnTable = event.isAnchored
+                let placement = SurfacePlacement(world: world)
+                content.add(placement.preview)
+                frameUpdates = content.subscribe(to: SceneEvents.Update.self) { event in
+                    placement.update(deltaTime: Float(event.deltaTime))
                 }
+                self.placement = placement
+                await placement.start()
             #endif
             }
-            self.world = world
         }
         .ignoresSafeArea()
         .gesture(tapToWalk)
-        // On a table you walk around the lot instead, so the orbit gestures
-        // are switched off there. `.subviews` leaves the tap working.
+        // On a real surface you walk around the lot instead, so the orbit
+        // gestures are off there. `.subviews` leaves the other taps working.
         .simultaneousGesture(orbit, including: stage == .window ? .all : .subviews)
         .simultaneousGesture(zoom, including: stage == .window ? .all : .subviews)
+        #if os(iOS)
+        .simultaneousGesture(tapToPlace, including: placement?.phase == .previewing ? .all : .subviews)
+        .overlay {
+            if let placement {
+                CoachingOverlay(session: placement.session)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                if placement.phase != .placed {
+                    reticle
+                }
+            }
+        }
+        #endif
         .overlay(alignment: .bottom) {
-            Text(hint(on: stage))
-                .font(.footnote)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.thinMaterial, in: Capsule())
-                .padding()
+            HStack {
+                Text(hint(on: stage))
+                    .font(.footnote)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+                #if os(iOS)
+                if placement?.phase == .placed {
+                    Button("Move", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
+                        placement?.pickUp()
+                    }
+                    .font(.footnote)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+                }
+                #endif
+            }
+            .padding()
         }
     }
 
@@ -79,13 +109,26 @@ struct WorldView: View {
             return "Tap the grass to walk · drag to orbit · pinch to zoom"
             #endif
         #if os(iOS)
-        case .table:
-            return isOnTable
-                ? "Tap the grass to walk · move around the table to look"
-                : "Point the camera at a table and move it slowly"
+        case .surface:
+            switch placement?.phase ?? .searching {
+            case .searching: return "Point the camera at a floor, a table or a wall"
+            case .previewing: return "Tap to put the lot here"
+            case .placed: return "Tap the grass to walk"
+            }
         #endif
         }
     }
+
+    #if os(iOS)
+    /// Marks the middle of the screen, where the lot will go.
+    private var reticle: some View {
+        Circle()
+            .strokeBorder(.white, lineWidth: 2)
+            .frame(width: 28, height: 28)
+            .shadow(radius: 2)
+            .allowsHitTesting(false)
+    }
+    #endif
 
     // MARK: Gestures
 
@@ -97,6 +140,15 @@ struct WorldView: View {
                 world?.walk(to: value.entity)
             }
     }
+
+    #if os(iOS)
+    /// Tap anywhere to put the lot where the preview is. The preview's tiles
+    /// ignore taps, so this doesn't also start a walk.
+    private var tapToPlace: some Gesture {
+        TapGesture()
+            .onEnded { placement?.place() }
+    }
+    #endif
 
     /// Drag to turn and tilt the camera.
     private var orbit: some Gesture {
