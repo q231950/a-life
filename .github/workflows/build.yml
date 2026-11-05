@@ -1,0 +1,25 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iOS Simulator, macOS]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: |
+          xcodebuild -version
+          xcodebuild build \
+            -project ALife.xcodeproj \
+            -scheme ALife \
+            -destination 'generic/platform=${{ matrix.platform }}' \
+            CODE_SIGNING_ALLOWED=NO
