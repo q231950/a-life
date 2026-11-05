@@ -260,6 +260,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "a*life";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.simulation-games";
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphoneos*]" = "a*life uses the camera to put the lot on your table.";
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphonesimulator*]" = "a*life uses the camera to put the lot on your table.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -301,6 +303,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "a*life";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.simulation-games";
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphoneos*]" = "a*life uses the camera to put the lot on your table.";
+				"INFOPLIST_KEY_NSCameraUsageDescription[sdk=iphonesimulator*]" = "a*life uses the camera to put the lot on your table.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

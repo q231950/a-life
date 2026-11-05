@@ -3,6 +3,7 @@ import RealityKit
 import AppKit
 typealias PlatformColor = NSColor
 #else
+import ARKit
 import UIKit
 typealias PlatformColor = UIColor
 #endif
@@ -12,12 +13,14 @@ typealias PlatformColor = UIColor
 @MainActor
 final class World {
     let root = Entity()
+    /// Only used in a window. On a table the device is the camera.
     let camera = CameraRig()
 
     private var grid = TileGrid(width: 16, depth: 16)
     private let tileSize: Float = 1
     private let character: Entity
     private let marker: ModelEntity
+    private let sun: DirectionalLight
 
     init() {
         character = Self.makeCharacter()
@@ -25,6 +28,7 @@ final class World {
             mesh: .generateBox(width: 0.35, height: 0.02, depth: 0.35, cornerRadius: 0.05),
             materials: [SimpleMaterial(color: PlatformColor(red: 1, green: 0.85, blue: 0.2, alpha: 1), isMetallic: false)]
         )
+        sun = Self.makeSun()
 
         placeHouse()
         placeBushes()
@@ -38,9 +42,42 @@ final class World {
         marker.isEnabled = false
         root.addChild(marker)
 
-        root.addChild(Self.makeSun())
-        root.addChild(camera.root)
+        root.addChild(sun)
     }
+
+    // MARK: Showing the lot
+
+    /// For a window: the lot at full size, seen through the orbit camera.
+    func contentForWindow() -> Entity {
+        root.addChild(camera.root)
+        return root
+    }
+
+    #if os(iOS)
+    /// For a real table: the lot shrunk to `width` metres across, sitting on
+    /// the first table RealityKit finds. The anchor stays put on the table
+    /// while you walk around it.
+    ///
+    /// The orbit camera stays out of this tree: a camera entity under the
+    /// anchor would pin the lot to the screen instead of the table.
+    func contentForTable(width: Float = 0.5) -> AnchorEntity {
+        // Telling tables apart from other surfaces needs an A12 chip or later,
+        // so older iPads take any horizontal surface.
+        let surface: AnchoringComponent.Target.Classification = ARPlaneAnchor.isClassificationSupported ? .table : .any
+        let table = AnchorEntity(.plane(.horizontal, classification: surface, minimumBounds: [0.3, 0.3]))
+
+        // Tiles are 1 m, so the lot is 16 m wide. Walks are measured in the
+        // lot's own space, so they shrink along with it.
+        root.scale = SIMD3(repeating: width / (Float(grid.width) * tileSize))
+        table.addChild(root)
+
+        // The sun moves onto the unscaled anchor so its shadow distance is in
+        // real metres. 30 m suits a window; over a table, 3 m is plenty.
+        table.addChild(sun)
+        sun.shadow?.maximumDistance = 3
+        return table
+    }
+    #endif
 
     // MARK: Walking
 
@@ -150,7 +187,7 @@ final class World {
         return character
     }
 
-    private static func makeSun() -> Entity {
+    private static func makeSun() -> DirectionalLight {
         let sun = DirectionalLight()
         sun.light.intensity = 4000
         sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 30, depthBias: 2)

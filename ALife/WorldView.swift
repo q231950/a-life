@@ -6,32 +6,85 @@ import AppKit
 
 struct WorldView: View {
     @State private var world: World?
+    /// `nil` until `Stage.choose()` has answered, which on iOS can mean
+    /// waiting for the camera permission prompt.
+    @State private var stage: Stage?
+    #if os(iOS)
+    @State private var isOnTable = false
+    @State private var anchoring: EventSubscription?
+    #endif
     #if os(macOS)
     @State private var scrollMonitor: Any?
     #endif
 
     var body: some View {
+        ZStack {
+            if let stage {
+                scene(on: stage)
+            } else {
+                Color.clear
+            }
+        }
+        .task {
+            stage = await Stage.choose()
+        }
+        #if os(macOS)
+        .onAppear(perform: startScrollZoom)
+        .onDisappear(perform: stopScrollZoom)
+        #endif
+    }
+
+    private func scene(on stage: Stage) -> some View {
         RealityView { content in
             let world = World()
-            content.add(world.root)
+            switch stage {
+            case .window:
+                content.add(world.contentForWindow())
+            #if os(iOS)
+            case .table:
+                content.camera = .spatialTracking
+                let table = world.contentForTable()
+                content.add(table)
+                // The lot appears once RealityKit has found a table. Until
+                // then the hint says what to do.
+                anchoring = content.subscribe(to: SceneEvents.AnchoredStateChanged.self, on: table) { event in
+                    isOnTable = event.isAnchored
+                }
+            #endif
+            }
             self.world = world
         }
         .ignoresSafeArea()
         .gesture(tapToWalk)
-        .simultaneousGesture(orbit)
-        .simultaneousGesture(zoom)
+        // On a table you walk around the lot instead, so the orbit gestures
+        // are switched off there. `.subviews` leaves the tap working.
+        .simultaneousGesture(orbit, including: stage == .window ? .all : .subviews)
+        .simultaneousGesture(zoom, including: stage == .window ? .all : .subviews)
         .overlay(alignment: .bottom) {
-            Text(hint)
+            Text(hint(on: stage))
                 .font(.footnote)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(.thinMaterial, in: Capsule())
                 .padding()
         }
-        #if os(macOS)
-        .onAppear(perform: startScrollZoom)
-        .onDisappear(perform: stopScrollZoom)
+    }
+
+    private func hint(on stage: Stage) -> String {
+        switch stage {
+        case .window:
+            #if os(macOS)
+            return "Click the grass to walk · drag to orbit · scroll or pinch to zoom"
+            #else
+            return "Tap the grass to walk · drag to orbit · pinch to zoom"
+            #endif
+        #if os(iOS)
+        case .table:
+            return isOnTable
+                ? "Tap the grass to walk · move around the table to look"
+                : "Point the camera at a table and move it slowly"
         #endif
+        }
     }
 
     // MARK: Gestures
@@ -60,8 +113,6 @@ struct WorldView: View {
     }
 
     #if os(macOS)
-    private let hint = "Click the grass to walk · drag to orbit · scroll or pinch to zoom"
-
     /// SwiftUI has no scroll-wheel gesture, so listen for the events directly.
     private func startScrollZoom() {
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
@@ -79,8 +130,6 @@ struct WorldView: View {
         }
         scrollMonitor = nil
     }
-    #else
-    private let hint = "Tap the grass to walk · drag to orbit · pinch to zoom"
     #endif
 }
 
