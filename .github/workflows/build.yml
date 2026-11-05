@@ -12,7 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [iOS Simulator, macOS]
+        # iOS builds for a device, which compiles the AR code the Simulator skips.
+        platform: [iOS, iOS Simulator, macOS]
     steps:
       - uses: actions/checkout@v5
       - name: Build

@@ -45,6 +45,9 @@ final class SurfacePlacement {
     }
 
     func start() async {
+        // The Simulator SDK has no `run(_:session:arConfiguration:)`. The
+        // Simulator never gets here anyway: `Stage.choose()` picks the window.
+        #if !targetEnvironment(simulator)
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
         configuration.environmentTexturing = .automatic
@@ -56,6 +59,7 @@ final class SurfacePlacement {
         // With this overload the app runs the ARKit session, per Apple's
         // docs. Running it again with the same configuration is harmless.
         session.run(configuration)
+        #endif
     }
 
     /// Call every frame. Moves the preview onto the surface in the middle of the screen.
