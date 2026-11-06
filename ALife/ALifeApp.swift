@@ -4,7 +4,6 @@ import RealityKit
 @main
 struct ALifeApp: App {
     init() {
-        TileComponent.registerComponent()
         WalkComponent.registerComponent()
         WalkSystem.registerSystem()
     }

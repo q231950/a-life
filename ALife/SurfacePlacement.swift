@@ -10,6 +10,8 @@ import SwiftUI
 /// While placing, a see-through lot follows the middle of the screen, lying
 /// flat on the surface under it. A tap pins it there with an ARKit anchor,
 /// which keeps it in place while you walk around it.
+///
+/// Call `start(in:)` from the RealityView's make closure.
 @MainActor
 @Observable
 final class SurfacePlacement {
@@ -29,13 +31,13 @@ final class SurfacePlacement {
     let session = ARSession()
 
     /// Follows the surface under the middle of the screen while placing.
-    /// Add it to the RealityView's content.
-    let preview = Entity()
+    private let preview = Entity()
 
     private let world: World
     private let tracking = SpatialTrackingSession()
     @ObservationIgnored private var pin: (anchor: ARAnchor, entity: AnchorEntity)?
     @ObservationIgnored private var framesWithoutSurface = 0
+    @ObservationIgnored private var subscriptions: [EventSubscription] = []
 
     init(world: World) {
         self.world = world
@@ -44,7 +46,20 @@ final class SurfacePlacement {
         world.setPreview(true)
     }
 
-    func start() async {
+    /// Switches the RealityView to the device camera, adds the lot and starts
+    /// tracking the world.
+    func start(in content: inout RealityViewCameraContent) async {
+        content.camera = .spatialTracking
+        content.add(preview)
+        subscriptions = [
+            content.subscribe(to: SceneEvents.Update.self) { [weak self] event in
+                self?.update(deltaTime: Float(event.deltaTime))
+            },
+            content.subscribe(to: AnchorStateEvents.DidAnchor.self) { [weak self] event in
+                self?.didAnchor(event.entity)
+            },
+        ]
+
         // The Simulator SDK has no `run(_:session:arConfiguration:)`. The
         // Simulator never gets here anyway: `Stage.choose()` picks the window.
         #if !targetEnvironment(simulator)
@@ -62,8 +77,8 @@ final class SurfacePlacement {
         #endif
     }
 
-    /// Call every frame. Moves the preview onto the surface in the middle of the screen.
-    func update(deltaTime: Float) {
+    /// Every frame: moves the preview onto the surface in the middle of the screen.
+    private func update(deltaTime: Float) {
         guard phase != .placed, let frame = session.currentFrame else { return }
 
         guard let pose = surfacePose(in: frame) else {
@@ -89,28 +104,37 @@ final class SurfacePlacement {
         change(to: .previewing)
     }
 
-    /// Pins the lot where the preview is.
+    /// Pins the lot where the preview is. The preview holds still, with the
+    /// lot in it, until RealityKit reports that the anchor has landed.
     func place() {
         guard phase == .previewing, let scene = preview.scene else { return }
         let anchor = ARAnchor(name: "lot", transform: preview.transformMatrix(relativeTo: nil))
         session.add(anchor: anchor)
         let pinned = AnchorEntity(anchor: anchor)
         scene.addAnchor(pinned)
-        pinned.addChild(world.root)
 
-        preview.isEnabled = false
         world.setPreview(false)
         pin = (anchor, pinned)
         change(to: .placed)
+    }
+
+    /// Moves the lot from the preview under its anchor once the anchor has
+    /// landed, so it never shows up wherever an unresolved anchor sits.
+    private func didAnchor(_ entity: Entity) {
+        guard let pin, entity === pin.entity, world.root.parent !== pin.entity else { return }
+        pin.entity.addChild(world.root)
+        preview.isEnabled = false
     }
 
     /// Takes the lot off its surface so it can be placed somewhere else.
     func pickUp() {
         guard let pin else { return }
         // Start the preview where the lot is now, so it glides from there.
-        preview.transform = Transform(matrix: pin.entity.transformMatrix(relativeTo: nil))
+        if let holder = world.root.parent, holder !== preview {
+            preview.transform = Transform(matrix: holder.transformMatrix(relativeTo: nil))
+            preview.addChild(world.root)
+        }
         preview.isEnabled = true
-        preview.addChild(world.root)
         pin.entity.removeFromParent()
         session.remove(anchor: pin.anchor)
 

@@ -1,4 +1,5 @@
 import RealityKit
+import SwiftUI
 #if os(macOS)
 import AppKit
 typealias PlatformColor = NSColor
@@ -20,6 +21,7 @@ final class World {
     private let tileThickness: Float = 0.1
     private let character: Entity
     private let marker: ModelEntity
+    private var floorTiles: [Entity] = []
 
     init() {
         character = Self.makeCharacter()
@@ -74,7 +76,7 @@ final class World {
         } else {
             root.components.remove(OpacityComponent.self)
         }
-        for tile in root.children where tile.components.has(TileComponent.self) {
+        for tile in floorTiles {
             tile.components[InputTargetComponent.self]?.isEnabled = !isPreview
         }
     }
@@ -82,9 +84,8 @@ final class World {
 
     // MARK: Walking
 
-    /// Called with whatever entity the tap gesture hit.
-    func walk(to tappedEntity: Entity) {
-        guard let goal = tappedEntity.components[TileComponent.self]?.tile else { return }
+    /// Called when a floor tile is tapped.
+    private func walk(to goal: Tile) {
         let start = tile(at: character.position)
         guard let route = grid.path(from: start, to: goal) else { return }
 
@@ -127,10 +128,14 @@ final class World {
         for tile in grid.allTiles {
             let entity = ModelEntity(mesh: mesh, materials: [(tile.x + tile.z).isMultiple(of: 2) ? light : dark])
             entity.position = position(of: tile) - [0, tileThickness / 2, 0] // top face at y = 0
-            entity.components.set(TileComponent(tile: tile))
-            // Both are needed for an entity to receive targeted gestures.
+            // The collision shape is what a tap hits, the input target lets
+            // it receive taps, and the gesture says what a tap does.
             entity.components.set(CollisionComponent(shapes: [shape]))
             entity.components.set(InputTargetComponent())
+            entity.components.set(GestureComponent(TapGesture().onEnded { [weak self] in
+                self?.walk(to: tile)
+            }))
+            floorTiles.append(entity)
             root.addChild(entity)
         }
     }

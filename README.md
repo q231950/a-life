@@ -6,9 +6,9 @@ On an iPhone or iPad you put the lot on any flat surface around you, seen throug
 
 ## Run it
 
-Open `ALife.xcodeproj` in Xcode 16 or later, pick the **ALife** scheme, and run it on an iPhone/iPad simulator or **My Mac**. To put the lot on a real surface, run it on a real iPhone or iPad: set your team under *Signing & Capabilities* and allow camera access when asked.
+Open `ALife.xcodeproj` in Xcode 26 or later, pick the **ALife** scheme, and run it on an iPhone/iPad simulator or **My Mac**. To put the lot on a real surface, run it on a real iPhone or iPad: set your team under *Signing & Capabilities* and allow camera access when asked.
 
-Requires iOS 18 / macOS 15, the first releases where `RealityView` and entity-targeted gestures work outside visionOS.
+Requires iOS 26 / macOS 26. The app uses APIs that are new in those releases: `GestureComponent` for taps on tiles, `AnchorStateEvents` for AR anchoring, and Liquid Glass for the on-screen controls.
 
 | | iPhone / iPad | Mac, iOS Simulator |
 |---|---|---|
@@ -26,20 +26,20 @@ If camera access is turned off, the iPhone or iPad falls back to the window with
 |---|---|
 | `ALifeApp.swift` | App entry point. Registers the custom components and the walk system. |
 | `Stage.swift` | Decides at launch whether the lot goes on a real surface (AR) or in a window, asking for camera access on iOS. |
-| `SurfacePlacement.swift` | iOS only. Runs the ARKit session, moves a see-through lot onto the surface in the middle of the screen, and pins it there with an anchor on tap. Also wraps Apple's coaching overlay. |
-| `WorldView.swift` | The `RealityView` for either stage, plus the gestures, the on-screen hints and the macOS scroll-wheel monitor. |
-| `World.swift` | Builds the lot (tiles, walls, bushes, character, sun), turns a tapped tile into a walk, and sets the lot up for a window or a surface. |
+| `SurfacePlacement.swift` | iOS only. Switches the `RealityView` to the device camera, runs the ARKit session, moves a see-through lot onto the surface in the middle of the screen, and pins it there with an anchor on tap. Also wraps Apple's coaching overlay. |
+| `WorldView.swift` | The `RealityView` for either stage, plus the camera and placing gestures, the Liquid Glass hints and the macOS scroll-wheel monitor. |
+| `World.swift` | Builds the lot (tiles, walls, bushes, character, sun), gives every tile a tap gesture that walks there, and sets the lot up for a window or a surface. |
 | `CameraRig.swift` | Orbit camera for the window: a pivot entity that yaws and pitches, with a `PerspectiveCamera` on a boom. |
-| `WalkSystem.swift` | ECS: `TileComponent`, `WalkComponent`, and a `System` that moves walkers along their waypoints every frame. |
+| `WalkSystem.swift` | ECS: `WalkComponent`, and a `System` that moves walkers along their waypoints every frame. |
 | `TileGrid.swift` | Plain Swift with no RealityKit: the floor plan and A* (8-directional, no corner cutting). |
 
-Every floor tile is its own entity with a `CollisionComponent` and an `InputTargetComponent`. A tap therefore hits the tile directly, so the code never has to turn a screen point into a world position. That works the same way in AR.
+Every floor tile is its own entity with a `CollisionComponent`, an `InputTargetComponent` and a `GestureComponent` holding a `TapGesture` for that tile. A tap therefore walks straight to the tile it hit: the app never has to work out which entity was tapped or turn a screen point into a world position. That works the same way in AR.
 
 ### On a real surface
 
 `WorldView` sets `content.camera = .spatialTracking`. `SurfacePlacement` creates the `ARSession` and hands it to RealityKit with `SpatialTrackingSession.run(_:session:arConfiguration:)`, with horizontal and vertical plane detection. Owning the session lets it ask ARKit what's under the middle of the screen every frame: an `ARFrame.raycastQuery` against planes ARKit has already mapped, falling back to an estimated plane, which a LiDAR device finds almost at once.
 
-The hit becomes the preview's pose. The lot's up is the surface's normal: up on a floor or table, out of a wall. On a floor or table its front edge faces you; on a wall its front edge is at the bottom, like a map hung on a wall. A tap adds an `ARAnchor` at that pose and moves the lot under an `AnchorEntity(anchor:)`. ARKit keeps refining where that anchor is, so the lot stays put while you walk around it.
+The hit becomes the preview's pose. The lot's up is the surface's normal: up on a floor or table, out of a wall. On a floor or table its front edge faces you; on a wall its front edge is at the bottom, like a map hung on a wall. A tap adds an `ARAnchor` at that pose and an `AnchorEntity(anchor:)` for it. The lot holds still in the preview until `AnchorStateEvents.DidAnchor` reports that the anchor has landed, then moves under it, so it never flashes wherever an unresolved anchor sits. ARKit keeps refining where that anchor is, so the lot stays put while you walk around it.
 
 The lot is scaled down to 0.5 m. The walk system works in the lot's own space, so walking needs no changes. While placing, the lot is see-through (`OpacityComponent`) and its tiles' `InputTargetComponent`s are disabled, so the placing tap can't also start a walk.
 
@@ -47,7 +47,7 @@ The orbit camera's `PerspectiveCamera` is left out of the tree in AR. With a cam
 
 ## Ideas for next steps
 
-- Swap `TileGrid` for RealityKit's navigation mesh (`NavigationMeshResource` / `NavigationComponent` / `NavigationController`, new at WWDC26) once you can raise the deployment target. `TileGrid.path` already returns the same thing `computePath` does: `nil` if there's no path, `[]` if you're already there.
+- Swap `TileGrid` for RealityKit's navigation mesh (`NavigationMeshResource` / `NavigationComponent` / `NavigationController`, new in iOS 27 and macOS 27) once you can raise the deployment target to 27. `TileGrid.path` already returns the same thing `computePath` does: `nil` if there's no path, `[]` if you're already there.
 - Replace the box character with a rigged USDZ that has walk and idle animations.
 - Build mode: snap furniture to the grid and call `grid.block(_:)` for each piece.
 - Keyboard camera controls on macOS with `.onKeyPress`.

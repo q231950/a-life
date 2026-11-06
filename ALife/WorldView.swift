@@ -11,7 +11,6 @@ struct WorldView: View {
     @State private var stage: Stage?
     #if os(iOS)
     @State private var placement: SurfacePlacement?
-    @State private var frameUpdates: EventSubscription?
     #endif
     #if os(macOS)
     @State private var scrollMonitor: Any?
@@ -47,25 +46,20 @@ struct WorldView: View {
                 content.add(world.contentForWindow())
             #if os(iOS)
             case .surface:
-                content.camera = .spatialTracking
                 let placement = SurfacePlacement(world: world)
-                content.add(placement.preview)
-                frameUpdates = content.subscribe(to: SceneEvents.Update.self) { event in
-                    placement.update(deltaTime: Float(event.deltaTime))
-                }
                 self.placement = placement
-                await placement.start()
+                await placement.start(in: &content)
             #endif
             }
         }
         .ignoresSafeArea()
-        .gesture(tapToWalk)
-        // On a real surface you walk around the lot instead, so the orbit
-        // gestures are off there. `.subviews` leaves the other taps working.
-        .simultaneousGesture(orbit, including: stage == .window ? .all : .subviews)
-        .simultaneousGesture(zoom, including: stage == .window ? .all : .subviews)
+        // Taps on tiles are handled by the tiles themselves (see
+        // `World.placeFloor()`). On a real surface you walk around the lot
+        // instead of orbiting it.
+        .simultaneousGesture(orbit, isEnabled: stage == .window)
+        .simultaneousGesture(zoom, isEnabled: stage == .window)
         #if os(iOS)
-        .simultaneousGesture(tapToPlace, including: placement?.phase == .previewing ? .all : .subviews)
+        .simultaneousGesture(tapToPlace, isEnabled: placement?.phase == .previewing)
         .overlay {
             if let placement {
                 CoachingOverlay(session: placement.session)
@@ -78,23 +72,23 @@ struct WorldView: View {
         }
         #endif
         .overlay(alignment: .bottom) {
-            HStack {
-                Text(hint(on: stage))
-                    .font(.footnote)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.thinMaterial, in: Capsule())
-                #if os(iOS)
-                if placement?.phase == .placed {
-                    Button("Move", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
-                        placement?.pickUp()
+            GlassEffectContainer {
+                HStack {
+                    Text(hint(on: stage))
+                        .font(.footnote)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .glassEffect()
+                    #if os(iOS)
+                    if placement?.phase == .placed {
+                        Button("Move", systemImage: "arrow.up.and.down.and.arrow.left.and.right") {
+                            placement?.pickUp()
+                        }
+                        .font(.footnote)
+                        .buttonStyle(.glass)
                     }
-                    .font(.footnote)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.thinMaterial, in: Capsule())
+                    #endif
                 }
-                #endif
             }
             .padding()
         }
@@ -131,15 +125,6 @@ struct WorldView: View {
     #endif
 
     // MARK: Gestures
-
-    /// Tap (or click) a floor tile to walk there.
-    private var tapToWalk: some Gesture {
-        SpatialTapGesture()
-            .targetedToAnyEntity()
-            .onEnded { value in
-                world?.walk(to: value.entity)
-            }
-    }
 
     #if os(iOS)
     /// Tap anywhere to put the lot where the preview is. The preview's tiles

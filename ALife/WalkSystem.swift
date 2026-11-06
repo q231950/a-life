@@ -1,11 +1,6 @@
 import Foundation
 import RealityKit
 
-/// Marks a floor entity as a tile so a tap on it can be turned into a destination.
-struct TileComponent: Component {
-    let tile: Tile
-}
-
 /// Waypoints an entity is currently walking along, in its parent's space.
 struct WalkComponent: Component {
     var waypoints: [SIMD3<Float>] = []
