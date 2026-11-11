@@ -23,3 +23,11 @@ jobs:
             -scheme ALife \
             -destination 'generic/platform=${{ matrix.platform }}' \
             CODE_SIGNING_ALLOWED=NO
+
+  package:
+    name: ManagedAgents package
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test
+        run: swift test --package-path ManagedAgents

@@ -1,3 +1,4 @@
+import ManagedAgents
 import RealityKit
 #if os(macOS)
 import AppKit
@@ -7,8 +8,8 @@ import UIKit
 typealias PlatformColor = UIColor
 #endif
 
-/// Builds the lot (floor tiles, a little house, some bushes, one character)
-/// and turns taps on tiles into walks.
+/// Builds the lot (floor tiles, a little house, some bushes, your character),
+/// turns taps on tiles into walks, and shows one character per agent.
 @MainActor
 final class World {
     let root = Entity()
@@ -18,9 +19,10 @@ final class World {
     private let tileSize: Float = 1
     private let character: Entity
     private let marker: ModelEntity
+    private var agentCharacters: [String: AgentCharacter] = [:]
 
     init() {
-        character = Self.makeCharacter()
+        character = Self.makeCharacter(shirt: PlatformColor(red: 0.25, green: 0.45, blue: 0.85, alpha: 1))
         marker = ModelEntity(
             mesh: .generateBox(width: 0.35, height: 0.02, depth: 0.35, cornerRadius: 0.05),
             materials: [SimpleMaterial(color: PlatformColor(red: 1, green: 0.85, blue: 0.2, alpha: 1), isMetallic: false)]
@@ -46,19 +48,111 @@ final class World {
 
     /// Called with whatever entity the tap gesture hit.
     func walk(to tappedEntity: Entity) {
-        guard let goal = tappedEntity.components[TileComponent.self]?.tile else { return }
-        let start = tile(at: character.position)
-        guard let route = grid.path(from: start, to: goal) else { return }
+        guard let goal = tappedEntity.components[TileComponent.self]?.tile,
+              walk(character, to: goal) else { return }
+        marker.position = position(of: goal) + [0, 0.02, 0]
+        marker.isEnabled = true
+    }
+
+    /// Sends `walker` to `goal`. Returns `false` if there is no way there.
+    @discardableResult
+    private func walk(_ walker: Entity, to goal: Tile) -> Bool {
+        let start = tile(at: walker.position)
+        guard let route = grid.path(from: start, to: goal) else { return false }
 
         var waypoints = route.map(position(of:))
         // When re-routing mid-step, first get back onto the centre of a tile.
-        if simd_distance(character.position, position(of: start)) > 0.05 {
+        if simd_distance(walker.position, position(of: start)) > 0.05 {
             waypoints.insert(position(of: start), at: 0)
         }
-        character.components[WalkComponent.self]?.waypoints = waypoints
+        walker.components[WalkComponent.self]?.waypoints = waypoints
+        return true
+    }
 
-        marker.position = position(of: goal) + [0, 0.02, 0]
-        marker.isEnabled = true
+    // MARK: Agents
+
+    private struct AgentCharacter {
+        let entity: Entity
+        /// Which desk and which spot on the lawn belong to this agent.
+        let slot: Int
+        var name: String
+        var destination: Tile
+    }
+
+    /// The floor inside the house: where agents go while they work.
+    private static let desks = (6...9).flatMap { z in (6...9).map { x in Tile(x: x, z: z) } }
+    /// The lawn in front of the door: where agents wait.
+    private static let lawn = (12...14).flatMap { z in (5...10).map { x in Tile(x: x, z: z) } }
+
+    /// Makes the scene match the session: one character per agent, inside the
+    /// house while its agent is running and out on the lawn otherwise.
+    func show(_ agents: [AgentThread]) {
+        let current = Set(agents.map(\.id))
+        for (id, gone) in agentCharacters where !current.contains(id) {
+            gone.entity.removeFromParent()
+            agentCharacters[id] = nil
+        }
+
+        for agent in agents {
+            var shown = agentCharacters[agent.id] ?? addCharacter(for: agent)
+            if shown.name != agent.name {
+                shown.name = agent.name
+                Self.setLabel(agent.name, on: shown.entity)
+            }
+            let spots = agent.status == .running ? Self.desks : Self.lawn
+            let destination = spots[shown.slot % spots.count]
+            if shown.destination != destination, walk(shown.entity, to: destination) {
+                shown.destination = destination
+            }
+            agentCharacters[agent.id] = shown
+        }
+    }
+
+    private func addCharacter(for agent: AgentThread) -> AgentCharacter {
+        let taken = Set(agentCharacters.values.map(\.slot))
+        let slot = (0...taken.count).first { !taken.contains($0) } ?? 0
+        let home = Self.lawn[slot % Self.lawn.count]
+
+        let shirts: [PlatformColor] = [
+            PlatformColor(red: 0.85, green: 0.35, blue: 0.3, alpha: 1),
+            PlatformColor(red: 0.95, green: 0.65, blue: 0.2, alpha: 1),
+            PlatformColor(red: 0.3, green: 0.7, blue: 0.65, alpha: 1),
+            PlatformColor(red: 0.8, green: 0.45, blue: 0.75, alpha: 1),
+            PlatformColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1),
+        ]
+        let entity = Self.makeCharacter(
+            shirt: agent.isCoordinator ? PlatformColor(red: 0.45, green: 0.3, blue: 0.75, alpha: 1) : shirts[slot % shirts.count]
+        )
+        entity.name = agent.id
+        if agent.isCoordinator { entity.scale = [1.15, 1.15, 1.15] }
+        entity.position = position(of: home)
+        entity.components.set(WalkComponent())
+        Self.setLabel(agent.name, on: entity)
+        root.addChild(entity)
+        return AgentCharacter(entity: entity, slot: slot, name: agent.name, destination: home)
+    }
+
+    /// A name floating above the character's head, always facing the camera.
+    private static func setLabel(_ name: String, on character: Entity) {
+        character.findEntity(named: "Label")?.removeFromParent()
+
+        let mesh = MeshResource.generateText(
+            String(name.prefix(20)),
+            extrusionDepth: 0.004,
+            font: .systemFont(ofSize: 0.13),
+            containerFrame: .zero,
+            alignment: .center,
+            lineBreakMode: .byTruncatingTail
+        )
+        let text = ModelEntity(mesh: mesh, materials: [UnlitMaterial(color: .white)])
+        text.position = [-mesh.bounds.center.x, 0, 0] // text meshes start at their left edge
+
+        let label = Entity()
+        label.name = "Label"
+        label.position = [0, 1.1, 0]
+        label.components.set(BillboardComponent())
+        label.addChild(text)
+        character.addChild(label)
     }
 
     // MARK: Grid <-> world space
@@ -128,9 +222,9 @@ final class World {
         }
     }
 
-    private static func makeCharacter() -> Entity {
+    private static func makeCharacter(shirt: PlatformColor) -> Entity {
         let skin = SimpleMaterial(color: PlatformColor(red: 0.96, green: 0.8, blue: 0.67, alpha: 1), roughness: 0.6, isMetallic: false)
-        let shirt = SimpleMaterial(color: PlatformColor(red: 0.25, green: 0.45, blue: 0.85, alpha: 1), roughness: 0.6, isMetallic: false)
+        let shirt = SimpleMaterial(color: shirt, roughness: 0.6, isMetallic: false)
 
         let body = ModelEntity(mesh: .generateBox(width: 0.32, height: 0.6, depth: 0.22, cornerRadius: 0.08), materials: [shirt])
         body.position = [0, 0.4, 0]

@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A1FE00000000000000000010 /* ManagedAgents in Frameworks */ = {isa = PBXBuildFile; productRef = A1FE00000000000000000011 /* ManagedAgents */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		A1FE00000000000000000001 /* ALife.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ALife.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1FE00000000000000000010 /* ManagedAgents in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = ALife;
 			packageProductDependencies = (
+				A1FE00000000000000000011 /* ManagedAgents */,
 			);
 			productName = ALife;
 			productReference = A1FE00000000000000000001 /* ALife.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = A1FE00000000000000000004;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ManagedAgents" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1FE00000000000000000005 /* Products */;
 			projectDirPath = "";
@@ -255,6 +264,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -296,6 +306,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -349,6 +360,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ManagedAgents" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ManagedAgents;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1FE00000000000000000011 /* ManagedAgents */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ManagedAgents;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A1FE00000000000000000009 /* Project object */;
 }
