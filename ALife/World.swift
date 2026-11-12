@@ -1,4 +1,4 @@
-import ManagedAgents
+import ALifeClient
 import RealityKit
 #if os(macOS)
 import AppKit
@@ -84,9 +84,9 @@ final class World {
     /// The lawn in front of the door: where agents wait.
     private static let lawn = (12...14).flatMap { z in (5...10).map { x in Tile(x: x, z: z) } }
 
-    /// Makes the scene match the session: one character per agent, inside the
+    /// Makes the scene match the team: one character per agent, inside the
     /// house while its agent is running and out on the lawn otherwise.
-    func show(_ agents: [AgentThread]) {
+    func show(_ agents: [Agent]) {
         let current = Set(agents.map(\.id))
         for (id, gone) in agentCharacters where !current.contains(id) {
             gone.entity.removeFromParent()
@@ -108,7 +108,7 @@ final class World {
         }
     }
 
-    private func addCharacter(for agent: AgentThread) -> AgentCharacter {
+    private func addCharacter(for agent: Agent) -> AgentCharacter {
         let taken = Set(agentCharacters.values.map(\.slot))
         let slot = (0...taken.count).first { !taken.contains($0) } ?? 0
         let home = Self.lawn[slot % Self.lawn.count]

@@ -1,4 +1,4 @@
-import ManagedAgents
+import ALifeClient
 import SwiftUI
 
 /// What the session is doing, and the button that opens the settings.
@@ -27,12 +27,10 @@ struct SessionStatusBar: View {
 
     private var statusText: String {
         switch agentSession.phase {
-        case .needsAPIKey: return "Add an API key to bring in the agents"
-        case .settingUp: return "Setting up the team…"
+        case .needsServer: return "Set a server to bring in the team"
         case .connecting: return "Connecting…"
-        case .reconnecting: return "Reconnecting…"
-        case .failed(let message): return message
-        case .disconnected: return agentSession.status == .terminated ? "Session ended" : "Disconnected"
+        case .reconnecting(let reason): return "Reconnecting… \(reason)"
+        case .disconnected: return "Disconnected"
         case .live: break
         }
         switch agentSession.status {
@@ -43,9 +41,9 @@ struct SessionStatusBar: View {
             return "Session ended"
         default:
             switch agentSession.stopReason {
-            case "requires_action": return "Waiting for your answer"
-            case "budget_reached": return "Session budget reached"
-            default: return "Agents are idle"
+            case .requiresAction: return "Waiting for your answer"
+            case .interrupted: return "Stopped"
+            default: return "The team is idle"
             }
         }
     }
@@ -53,7 +51,7 @@ struct SessionStatusBar: View {
     private var statusColor: Color {
         switch agentSession.phase {
         case .live: return agentSession.status == .running ? .green : .secondary
-        case .failed, .needsAPIKey: return .orange
+        case .needsServer, .reconnecting: return .orange
         default: return .yellow
         }
     }

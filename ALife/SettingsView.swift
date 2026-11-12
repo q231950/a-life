@@ -1,62 +1,77 @@
-import ManagedAgents
+import ALifeClient
 import SwiftUI
 
-/// Where the Anthropic API key is set, and where the IDs of the server-side
-/// objects the app works with can be looked up.
+/// Where the address of the a-life-server is set.
 struct SettingsView: View {
     @Environment(AgentSession.self) private var agentSession
     @Environment(\.dismiss) private var dismiss
-    @State private var apiKey = ""
+    @State private var address = ""
+    @State private var addressIsInvalid = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    SecureField(agentSession.hasAPIKey ? "Replace the stored key" : "sk-ant-…", text: $apiKey)
+                    TextField("https://my-mac.my-tailnet.ts.net", text: $address)
                         .autocorrectionDisabled()
-                    Button(agentSession.hasAPIKey ? "Replace key" : "Save key") {
-                        agentSession.setAPIKey(apiKey)
-                        apiKey = ""
-                        dismiss()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        #endif
+                        .onSubmit(save)
+                    Button("Connect", action: save)
+                        .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button("Use this machine (localhost:8080)") {
+                        address = "http://localhost:8080"
+                        save()
                     }
-                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if agentSession.hasAPIKey {
-                        Button("Remove key", role: .destructive) {
-                            agentSession.setAPIKey(nil)
-                        }
+                    if addressIsInvalid {
+                        Text("That isn't an http or https address.")
+                            .foregroundStyle(.red)
                     }
                 } header: {
-                    Text("Anthropic API key")
+                    Text("Server")
                 } footer: {
-                    Text("Kept in the Keychain on this device and sent only to api.anthropic.com. The first connection creates an agent, an environment and a session in the key's workspace; using a different key later starts over.")
+                    Text("The address of your a-life-server. Over Tailscale, that is the https address `tailscale serve` prints on the Mac running it. See a-life-server/README.md.")
                 }
 
                 Section {
-                    LabeledContent("Session", value: agentSession.reference.sessionID ?? "—")
-                    LabeledContent("Agent", value: agentSession.reference.agentID ?? "—")
-                    LabeledContent("Environment", value: agentSession.reference.environmentID ?? "—")
+                    LabeledContent("Connected to", value: agentSession.serverURL?.absoluteString ?? "—")
                     Button("Start a new session") {
-                        agentSession.startNewSession()
+                        Task { await agentSession.startNewSession() }
                         dismiss()
                     }
-                    .disabled(agentSession.reference.sessionID == nil)
+                    .disabled(agentSession.phase != .live)
+                    if agentSession.serverURL != nil {
+                        Button("Forget this server", role: .destructive) {
+                            agentSession.setServerURL("")
+                            address = ""
+                        }
+                    }
                 } header: {
                     Text("Session")
                 } footer: {
-                    Text("The session runs on Anthropic's side and keeps going when the app is closed. A new session leaves the old one in place; you can still open it in the Claude Console.")
+                    Text("The session lives on the server and is shared by every front end connected to it. Starting a new one clears it for all of them.")
                 }
             }
             .formStyle(.grouped)
-            .textSelection(.enabled)
             .navigationTitle("Settings")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
+            .onAppear {
+                address = agentSession.serverURL?.absoluteString ?? ""
+            }
         }
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 420)
         #endif
+    }
+
+    private func save() {
+        addressIsInvalid = !agentSession.setServerURL(address)
+        if !addressIsInvalid { dismiss() }
     }
 }

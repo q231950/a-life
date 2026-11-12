@@ -1,17 +1,15 @@
-import ManagedAgents
+import ALifeClient
 import RealityKit
 import SwiftUI
 
 @main
 struct ALifeApp: App {
-    /// The app's handle on the multiagent session. The session itself runs on
-    /// Anthropic's side; this remembers its ID and follows it.
+    /// The app's handle on the team's session. The session itself lives on
+    /// the a-life-server; this follows it.
     @State private var agentSession: AgentSession
 
     init() {
-        _agentSession = State(initialValue: AgentSession(
-            apiKeyStore: KeychainAPIKeyStore(service: "com.q231950.alife")
-        ))
+        _agentSession = State(initialValue: AgentSession())
 
         TileComponent.registerComponent()
         WalkComponent.registerComponent()

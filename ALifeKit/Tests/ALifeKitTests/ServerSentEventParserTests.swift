@@ -1,5 +1,5 @@
 import XCTest
-@testable import ManagedAgents
+@testable import ALifeClient
 
 final class ServerSentEventParserTests: XCTestCase {
     func testParsesEventsSplitAcrossChunks() {

@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A1FE00000000000000000010 /* ManagedAgents in Frameworks */ = {isa = PBXBuildFile; productRef = A1FE00000000000000000011 /* ManagedAgents */; };
+		A1FE00000000000000000010 /* ALifeClient in Frameworks */ = {isa = PBXBuildFile; productRef = A1FE00000000000000000011 /* ALifeClient */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,7 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1FE00000000000000000010 /* ManagedAgents in Frameworks */,
+				A1FE00000000000000000010 /* ALifeClient in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,7 +70,7 @@
 			);
 			name = ALife;
 			packageProductDependencies = (
-				A1FE00000000000000000011 /* ManagedAgents */,
+				A1FE00000000000000000011 /* ALifeClient */,
 			);
 			productName = ALife;
 			productReference = A1FE00000000000000000001 /* ALife.app */;
@@ -101,7 +101,7 @@
 			mainGroup = A1FE00000000000000000004;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ManagedAgents" */,
+				A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ALifeKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1FE00000000000000000005 /* Products */;
@@ -268,6 +268,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "ALife-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "a*life";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.simulation-games";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -310,6 +311,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "ALife-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "a*life";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.simulation-games";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -362,16 +364,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ManagedAgents" */ = {
+		A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ALifeKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ManagedAgents;
+			relativePath = ALifeKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		A1FE00000000000000000011 /* ManagedAgents */ = {
+		A1FE00000000000000000011 /* ALifeClient */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = ManagedAgents;
+			productName = ALifeClient;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

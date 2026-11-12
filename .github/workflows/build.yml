@@ -24,10 +24,14 @@ jobs:
             -destination 'generic/platform=${{ matrix.platform }}' \
             CODE_SIGNING_ALLOWED=NO
 
-  package:
-    name: ManagedAgents package
+  packages:
+    name: ${{ matrix.package }} tests
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [ALifeKit, a-life-server]
     steps:
       - uses: actions/checkout@v5
       - name: Test
-        run: swift test --package-path ManagedAgents
+        run: swift test --package-path ${{ matrix.package }}

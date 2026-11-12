@@ -1,4 +1,4 @@
-import ManagedAgents
+import ALifeClient
 import RealityKit
 import SwiftUI
 #if os(macOS)
@@ -47,7 +47,7 @@ struct WorldView: View {
         }
         .task {
             agentSession.connect()
-            showsSettings = agentSession.phase == .needsAPIKey
+            showsSettings = agentSession.phase == .needsServer
         }
         #if os(macOS)
         .onAppear(perform: startScrollZoom)
@@ -107,5 +107,5 @@ struct WorldView: View {
 
 #Preview {
     WorldView()
-        .environment(AgentSession(apiKeyStore: InMemoryAPIKeyStore()))
+        .environment(AgentSession(serverURLStore: InMemoryServerURLStore()))
 }
