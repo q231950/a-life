@@ -72,8 +72,12 @@ final class ALifeServerTests: XCTestCase {
 
         // A new session empties both.
         await session.startNewSession()
-        await wait(for: "the reset") { session.transcript.isEmpty && latecomer.transcript.isEmpty }
-        XCTAssertEqual(session.agents.map(\.name), ["Team lead"])
+        // The new session's events arrive one by one: first the start, which
+        // clears everything, then the team lead joining.
+        await wait(for: "the reset") {
+            session.transcript.isEmpty && latecomer.transcript.isEmpty
+                && session.agents.map(\.name) == ["Team lead"] && latecomer.agents.map(\.name) == ["Team lead"]
+        }
 
         session.disconnect()
         latecomer.disconnect()
