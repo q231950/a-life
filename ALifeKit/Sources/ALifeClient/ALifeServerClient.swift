@@ -25,40 +25,46 @@ public struct ALifeServerClient: Sendable {
         self.urlSession = urlSession
     }
 
-    /// The session as the server knows it right now.
-    public func state() async throws -> SessionState {
-        try JSONDecoder().decode(SessionState.self, from: await send("GET", "/v1/session"))
+    /// Every session on the server, one per character, as it is right now.
+    public func sessions() async throws -> [SessionState] {
+        try JSONDecoder().decode([SessionState].self, from: await send("GET", "/v1/sessions"))
     }
 
-    /// Sends an instruction to the coordinator. Instructions queue on the
-    /// server, so this works while the team is busy.
-    public func sendMessage(_ text: String) async throws {
-        try await send("POST", "/v1/session/messages", body: SendMessageRequest(text: text))
+    /// One session as the server knows it right now.
+    public func state(of sessionID: String) async throws -> SessionState {
+        try JSONDecoder().decode(SessionState.self, from: await send("GET", path(sessionID)))
     }
 
-    /// Stops one agent, or the whole team when `agentID` is `nil`.
-    public func interrupt(agentID: String? = nil) async throws {
-        try await send("POST", "/v1/session/interrupt", body: InterruptRequest(agentID: agentID))
+    /// Says something to a session's character. It works while the character
+    /// is busy, too: the character takes it up at its next step. Refused
+    /// while the character waits for an approval.
+    public func sendMessage(_ text: String, to sessionID: String) async throws {
+        try await send("POST", path(sessionID, "messages"), body: SendMessageRequest(text: text))
+    }
+
+    /// Stops whatever a session's character is doing.
+    public func interrupt(_ sessionID: String) async throws {
+        try await send("POST", path(sessionID, "interrupt"))
     }
 
     /// Answers a tool call that is waiting for approval.
-    public func decide(approvalID: String, allow: Bool) async throws {
-        try await send("POST", "/v1/session/approvals/\(approvalID)", body: ApprovalDecision(allow: allow))
+    public func decide(approvalID: String, allow: Bool, in sessionID: String) async throws {
+        try await send("POST", path(sessionID, "approvals", approvalID), body: ApprovalDecision(allow: allow))
     }
 
-    /// Ends the current session and starts an empty one.
-    public func resetSession() async throws {
-        try await send("POST", "/v1/session/reset")
+    /// Ends a session's conversation and starts an empty one.
+    public func startOver(_ sessionID: String) async throws {
+        try await send("POST", path(sessionID, "reset"))
     }
 
-    /// Follows the session. Pass what you last saw and the server first sends
+    /// Follows a session. Pass what you last saw and the server first sends
     /// everything after it, then live events as they happen; pass nothing and
-    /// it starts from the beginning of the current session. Returns once the
-    /// server has accepted the connection.
-    public func events(sessionID: String? = nil, after seq: Int = 0) async throws -> AsyncThrowingStream<EventEnvelope, Error> {
+    /// it starts from the beginning of the session's current conversation.
+    /// Returns once the server has accepted the connection.
+    public func events(of sessionID: String, conversationID: String? = nil, after seq: Int = 0) async throws -> AsyncThrowingStream<EventEnvelope, Error> {
         var query = [URLQueryItem(name: "after", value: String(seq))]
-        if let sessionID { query.append(URLQueryItem(name: "session", value: sessionID)) }
-        var request = makeRequest("GET", "/v1/session/events", query: query)
+        if let conversationID { query.append(URLQueryItem(name: "conversation", value: conversationID)) }
+        var request = makeRequest("GET", path(sessionID, "events"), query: query)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         // An idle timeout. The server sends a heartbeat every few seconds; if
         // it goes quiet this long the stream errors and the caller reconnects.
@@ -67,6 +73,11 @@ public struct ALifeServerClient: Sendable {
     }
 
     // MARK: Plumbing
+
+    /// `/v1/sessions/{id}`, then `components`.
+    private func path(_ sessionID: String, _ components: String...) -> String {
+        "/v1/sessions/" + ([sessionID] + components).joined(separator: "/")
+    }
 
     private func makeRequest(_ method: String, _ path: String, query: [URLQueryItem] = []) -> URLRequest {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!

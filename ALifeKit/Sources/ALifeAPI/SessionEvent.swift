@@ -1,15 +1,16 @@
 import Foundation
 
-/// Something that happened in the session. The server keeps these in order
-/// and sends them to every client; applying them in order to a
-/// `SessionState` reproduces what the server knows.
+/// Something that happened in a session. The server keeps a session's events
+/// in order and sends them to every client following it; applying them in
+/// order to a `SessionState` reproduces what the server knows.
 public enum SessionEvent: Equatable, Sendable {
-    /// A new session began. Everything known about the previous one is void.
-    case sessionStarted(sessionID: String)
+    /// A new conversation began in the session. Everything known about the
+    /// previous one is void.
+    case conversationStarted(conversationID: String)
     case statusChanged(RunStatus, stopReason: StopReason?)
-    /// An agent joined the team or changed.
-    case agentUpdated(Agent)
-    case agentRemoved(agentID: String)
+    /// What the character is doing changed, such as the tool it is using.
+    /// `nil` when it isn't doing anything in particular.
+    case activityChanged(String?)
     case message(Message)
     case approvalRequested(Approval)
     /// The approval was answered or is no longer needed.
@@ -20,10 +21,9 @@ public enum SessionEvent: Equatable, Sendable {
     /// The name the event travels under.
     public var type: String {
         switch self {
-        case .sessionStarted: return "session.started"
+        case .conversationStarted: return "conversation.started"
         case .statusChanged: return "session.status"
-        case .agentUpdated: return "agent.updated"
-        case .agentRemoved: return "agent.removed"
+        case .activityChanged: return "session.activity"
         case .message: return "message"
         case .approvalRequested: return "approval.requested"
         case .approvalResolved: return "approval.resolved"
@@ -34,10 +34,9 @@ public enum SessionEvent: Equatable, Sendable {
 
 extension SessionEvent: Codable {
     enum CodingKeys: String, CodingKey {
-        case type, status, agent, message, approval
-        case sessionID = "session_id"
+        case type, status, activity, message, approval
+        case conversationID = "conversation_id"
         case stopReason = "stop_reason"
-        case agentID = "agent_id"
         case approvalID = "approval_id"
     }
 
@@ -45,17 +44,15 @@ extension SessionEvent: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
-        case "session.started":
-            self = .sessionStarted(sessionID: try container.decode(String.self, forKey: .sessionID))
+        case "conversation.started":
+            self = .conversationStarted(conversationID: try container.decode(String.self, forKey: .conversationID))
         case "session.status":
             self = .statusChanged(
                 try container.decode(RunStatus.self, forKey: .status),
                 stopReason: try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
             )
-        case "agent.updated":
-            self = .agentUpdated(try container.decode(Agent.self, forKey: .agent))
-        case "agent.removed":
-            self = .agentRemoved(agentID: try container.decode(String.self, forKey: .agentID))
+        case "session.activity":
+            self = .activityChanged(try container.decodeIfPresent(String.self, forKey: .activity))
         case "message":
             self = .message(try container.decode(Message.self, forKey: .message))
         case "approval.requested":
@@ -71,15 +68,13 @@ extension SessionEvent: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(type, forKey: .type)
         switch self {
-        case .sessionStarted(let sessionID):
-            try container.encode(sessionID, forKey: .sessionID)
+        case .conversationStarted(let conversationID):
+            try container.encode(conversationID, forKey: .conversationID)
         case .statusChanged(let status, let stopReason):
             try container.encode(status, forKey: .status)
             try container.encodeIfPresent(stopReason, forKey: .stopReason)
-        case .agentUpdated(let agent):
-            try container.encode(agent, forKey: .agent)
-        case .agentRemoved(let agentID):
-            try container.encode(agentID, forKey: .agentID)
+        case .activityChanged(let activity):
+            try container.encodeIfPresent(activity, forKey: .activity)
         case .message(let message):
             try container.encode(message, forKey: .message)
         case .approvalRequested(let approval):
@@ -92,8 +87,9 @@ extension SessionEvent: Codable {
     }
 }
 
-/// An event with its place in the server's log. Sequence numbers only go up,
-/// so a client that remembers the last one it saw can ask for what it missed.
+/// An event with its place in its session's log. Sequence numbers only go
+/// up, so a client that remembers the last one it saw can ask for what it
+/// missed.
 public struct EventEnvelope: Codable, Equatable, Sendable {
     public let seq: Int
     public let event: SessionEvent
@@ -104,38 +100,45 @@ public struct EventEnvelope: Codable, Equatable, Sendable {
     }
 }
 
-/// Everything a front end shows about the session. Built by applying events
-/// in order; the server and the clients use the same code to do it.
-public struct SessionState: Codable, Equatable, Sendable {
-    public var sessionID: String?
-    /// Running while any agent is.
+/// One character's session: who the character is, what it is doing, the
+/// conversation with it, and any tool calls waiting for a yes or no.
+///
+/// Built by applying the session's events in order; the server and the
+/// clients use the same code to do it.
+public struct SessionState: Codable, Equatable, Identifiable, Sendable {
+    /// The session's id, which is also its character's, such as `gardener`.
+    /// It never changes; it is what the session's URLs use.
+    public let id: String
+    /// The character's name, such as `Gardener`.
+    public var name: String
+    /// The conversation going on in the session. Starting the session over
+    /// begins a new one.
+    public var conversationID: String?
     public var status: RunStatus = .unknown
     public var stopReason: StopReason?
-    public var agents: [Agent] = []
+    /// What the character is doing right now, such as the name of a tool.
+    public var activity: String?
     public var messages: [Message] = []
     public var approvals: [Approval] = []
     /// Sequence number of the last event applied.
     public var lastSeq = 0
 
-    public init() {}
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
 
     public mutating func apply(_ envelope: EventEnvelope) {
         switch envelope.event {
-        case .sessionStarted(let sessionID):
-            self = SessionState()
-            self.sessionID = sessionID
+        case .conversationStarted(let conversationID):
+            self = SessionState(id: id, name: name)
+            self.conversationID = conversationID
             status = .idle
         case .statusChanged(let status, let stopReason):
             self.status = status
             self.stopReason = stopReason
-        case .agentUpdated(let agent):
-            if let index = agents.firstIndex(where: { $0.id == agent.id }) {
-                agents[index] = agent
-            } else {
-                agents.append(agent)
-            }
-        case .agentRemoved(let agentID):
-            agents.removeAll { $0.id == agentID }
+        case .activityChanged(let activity):
+            self.activity = activity
         case .message(let message):
             if !messages.contains(where: { $0.id == message.id }) {
                 messages.append(message)
@@ -153,8 +156,8 @@ public struct SessionState: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case status, agents, messages, approvals
-        case sessionID = "session_id"
+        case id, name, status, activity, messages, approvals
+        case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case lastSeq = "last_seq"
     }

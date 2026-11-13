@@ -2,9 +2,9 @@
 
 The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) server meant to run on your own Mac and be reached over [Tailscale](https://tailscale.com).
 
-It holds one session: a team of agents, the conversation with them, and any tool calls waiting for a yes or no. Front ends follow the session over a stream of events and send instructions back.
+It holds one session per character on the lot. Each session is the character's own, like a separate Claude Code session: its conversation, what it is doing, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
 
-**The team is a dummy for now.** Every instruction plays the same short script so the front ends can be run end to end. No model is called and nothing real happens. See [The dummy team](#the-dummy-team).
+**The characters are dummies for now.** Each one plays a short script for whatever it is told, so the front ends can be run end to end. No model is called and nothing real happens. See [The dummy characters](#the-dummy-characters).
 
 ## Run it
 
@@ -26,25 +26,33 @@ To use another port: `swift run ALifeServer serve --port 9000`.
 
 ### Try it without a front end
 
-In one terminal, follow the session:
+See who is on the lot:
 
 ```sh
-curl -N http://127.0.0.1:8080/v1/session/events
+curl http://127.0.0.1:8080/v1/sessions
 ```
 
-In another, send an instruction, then answer the approval the Builder asks for:
+In one terminal, follow the Builder's session:
 
 ```sh
-curl -X POST http://127.0.0.1:8080/v1/session/messages \
+curl -N http://127.0.0.1:8080/v1/sessions/builder/events
+```
+
+In another, tell the Builder what to do, then answer the approval it asks for:
+
+```sh
+curl -X POST http://127.0.0.1:8080/v1/sessions/builder/messages \
   -H 'Content-Type: application/json' -d '{"text":"Tidy the lot"}'
 
 # a few seconds later, look up the approval's id ...
-curl http://127.0.0.1:8080/v1/session
+curl http://127.0.0.1:8080/v1/sessions/builder
 
 # ... and allow it
-curl -X POST http://127.0.0.1:8080/v1/session/approvals/<id> \
+curl -X POST http://127.0.0.1:8080/v1/sessions/builder/approvals/<id> \
   -H 'Content-Type: application/json' -d '{"allow":true}'
 ```
+
+The Gardener's session is at `/v1/sessions/gardener`, and carries on independently.
 
 ## Make it reachable over Tailscale
 
@@ -74,7 +82,7 @@ Notes:
 
 - If the `tailscale` command isn't found, the Mac app ships it at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; the app's settings can also install the command for you.
 - These commands are for current Tailscale versions. If yours differs, `tailscale serve --help` shows the syntax.
-- **There is no login on this server.** Anyone who can reach the address can instruct the team and answer approvals. With `tailscale serve` that means the devices in your tailnet, subject to its access rules. Don't use `tailscale funnel` for it: that publishes the address to the whole internet.
+- **There is no login on this server.** Anyone who can reach the address can instruct the characters and answer approvals. With `tailscale serve` that means the devices in your tailnet, subject to its access rules. Don't use `tailscale funnel` for it: that publishes the address to the whole internet.
 
 ### Without HTTPS
 
@@ -95,56 +103,60 @@ The macOS app and the iOS simulator can use `http://localhost:8080` with no Tail
 
 All bodies are JSON. The types are defined once, in the `ALifeAPI` module of [`../ALifeKit`](../ALifeKit), and used by both the server and the clients.
 
+A session's `{id}` is its character's, such as `gardener` or `builder`, and never changes.
+
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/v1/session` | | The session right now: status, agents, messages, pending approvals, last sequence number. |
-| `GET` | `/v1/session/events` | | The event stream (server-sent events). See below. |
-| `POST` | `/v1/session/messages` | `{"text": "…"}` | An instruction for the team lead. Instructions queue while the team is busy. |
-| `POST` | `/v1/session/interrupt` | `{"agent_id": "…"}` or nothing | Stops one agent, or the whole team. |
-| `POST` | `/v1/session/approvals/{id}` | `{"allow": true}` | Answers a tool call that is waiting. `404` if there is no such approval. |
-| `POST` | `/v1/session/reset` | | Ends the session and starts an empty one, for every front end. |
+| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, status, what it is doing, messages, pending approvals, last sequence number. |
+| `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
+| `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
+| `POST` | `/v1/sessions/{id}/messages` | `{"text": "…"}` | Says something to the character. Works while it is busy: it answers at its next step. `409` while it waits for an approval. |
+| `POST` | `/v1/sessions/{id}/interrupt` | | Stops whatever the character is doing, and withdraws a pending approval. |
+| `POST` | `/v1/sessions/{id}/approvals/{approval id}` | `{"allow": true}` | Answers a tool call that is waiting. `404` if there is no such approval. |
+| `POST` | `/v1/sessions/{id}/reset` | | Ends the session's conversation and starts an empty one, for every front end. The other sessions carry on. |
 
-The `POST` routes answer `202 Accepted` as soon as the request is taken; what happens next arrives on the event stream. Errors look like `{"error": true, "reason": "…"}`.
+An unknown session id gets a `404`. The `POST` routes answer `202 Accepted` as soon as the request is taken; what happens next arrives on the event stream. Errors look like `{"error": true, "reason": "…"}`.
 
 ### The event stream
 
-`GET /v1/session/events` stays open and sends one event per thing that happens:
+`GET /v1/sessions/{id}/events` stays open and sends one event per thing that happens in that session:
 
 ```
-id: 5
-event: agent.updated
-data: {"seq":5,"event":{"type":"agent.updated","agent":{"id":"lead","name":"Team lead","status":"running","is_coordinator":true,"activity":"planning"}}}
+id: 4
+event: session.activity
+data: {"seq":4,"event":{"type":"session.activity","activity":"read"}}
 ```
 
-Every event has a sequence number that only goes up. A client applies events in order to build its picture of the session, and remembers the last number it saw. When it reconnects it passes that number and the session's id:
+Every event has a sequence number that only goes up within its session. A client applies events in order to build its picture of the session, and remembers the last number it saw. When it reconnects it passes that number and the conversation's id:
 
 ```
-GET /v1/session/events?after=5&session=<session id>
+GET /v1/sessions/builder/events?after=4&conversation=<conversation id>
 ```
 
-The server then sends everything after 5 and carries on live, so nothing is missed or repeated. If the session id isn't the current one (the session was reset, or the server restarted), or none is given, the server sends the current session from its start. A comment line (`: ping`) goes out every 15 seconds to keep the connection open.
+The server then sends everything after 4 and carries on live, so nothing is missed or repeated. If the conversation id isn't the current one (the session was started over, or the server restarted), or none is given, the server sends the current conversation from its start. A comment line (`: ping`) goes out every 15 seconds to keep the connection open.
+
+A front end follows every session at once: it reads `GET /v1/sessions` to learn who is on the lot, then opens one stream per session.
 
 | Event | Carries | Meaning |
 |---|---|---|
-| `session.started` | `session_id` | A new session began. Drop everything known about the old one. |
-| `session.status` | `status`, `stop_reason` | The team as a whole is `running` or `idle`. When idle, `stop_reason` is `end_turn`, `requires_action` (an approval is waiting) or `interrupted`. |
-| `agent.updated` | `agent` | An agent joined or changed: `id`, `name`, `status`, `is_coordinator`, `activity`. |
-| `agent.removed` | `agent_id` | An agent left. |
-| `message` | `message` | A line of the conversation: `id`, `kind` (`user`, `agent`, `handoff`, `error`), `speaker`, `text`. |
-| `approval.requested` | `approval` | A tool call needs a yes or no: `id`, `agent_id`, `agent_name`, `tool_name`, `input`. |
+| `conversation.started` | `conversation_id` | A new conversation began in the session. Drop everything known about the old one. |
+| `session.status` | `status`, `stop_reason` | The character is `running` or `idle`. When idle, `stop_reason` is `end_turn`, `requires_action` (an approval is waiting) or `interrupted`. |
+| `session.activity` | `activity` | What the character is doing right now, such as the tool it is using. Absent when it isn't doing anything in particular. |
+| `message` | `message` | A line of the conversation: `id`, `kind` (`user`, `agent`, `error`), `speaker`, `text`. |
+| `approval.requested` | `approval` | A tool call needs a yes or no: `id`, `tool_name`, `input`. |
 | `approval.resolved` | `approval_id` | It was answered, or is no longer needed. |
 
 Clients skip event types they don't know, so new ones can be added.
 
-## The dummy team
+## The dummy characters
 
-`DummyTeam` plays this for every instruction:
+`configure.swift` sets up the cast: a `DummyCharacter` for each, with a session of its own.
 
-1. The **Team lead** plans, then hands a task each to the **Gardener** and the **Builder**.
-2. The Gardener reports back.
-3. The Builder asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes.
-4. Once answered, the Builder reports back (what it says depends on the answer) and the Team lead sums up.
+- The **Gardener** only looks. It reads, then searches, then reports back. It never asks for permission, like a Claude Code session in plan mode.
+- The **Builder** changes things. It reads, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back.
+
+Both can be talked to while they work: something said mid-task is answered at the next step ("Still on … Right now I'm …") and the work carries on. Something said after the last step becomes the next instruction. While the Builder waits for an approval, messages to it are refused with `409` until the approval is answered.
 
 Each step takes 1.5 seconds. Set `ALIFE_DUMMY_STEP_MS` to change that:
 
@@ -152,27 +164,29 @@ Each step takes 1.5 seconds. Set `ALIFE_DUMMY_STEP_MS` to change that:
 ALIFE_DUMMY_STEP_MS=300 swift run ALifeServer
 ```
 
-An interrupt stops the whole team, whichever agent it names. Nothing is saved: restarting the server starts a new session.
+An interrupt stops one character and leaves the others be. Nothing is saved: restarting the server starts every session afresh.
 
-## Putting a real team behind it
+To add a character, add a line to `cast` in `configure.swift`. The front ends pick it up when they next connect.
 
-The routes know nothing about the dummy. They talk to two things:
+## Putting real sessions behind it
 
-- `SessionHub` keeps the event log and the open streams. Whatever drives the team calls `hub.emit(_:)` for each thing that happens.
-- `TeamBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `reset`.
+The routes know nothing about the dummies. For each session they talk to two things:
 
-A real team is another type that conforms to `TeamBackend` and emits the same events. `configure.swift` is the one place that chooses which to use.
+- `SessionHub` keeps the session's event log and its open streams. Whatever drives the session calls `hub.emit(_:)` for each thing that happens.
+- `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `reset`.
+
+A real session, such as one Claude Code session per character, is another type that conforms to `SessionBackend` and emits the same events. `configure.swift` is the one place that chooses what each character runs.
 
 ## Layout
 
 | File | What it does |
 |---|---|
 | `entrypoint.swift` | Starts Vapor. |
-| `configure.swift` | Creates the hub and the team, registers the routes. |
-| `routes.swift` | The HTTP API, including the event stream. |
-| `SessionHub.swift` | Event log, snapshot, and fan-out to the open streams. |
-| `TeamBackend.swift` | The protocol a team implements. |
-| `DummyTeam.swift` | The scripted stand-in. |
+| `configure.swift` | The cast, a hub and a backend per character, and the routes. |
+| `routes.swift` | The HTTP API, including the event streams. |
+| `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
+| `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
+| `DummyCharacter.swift` | The scripted stand-in. |
 
 ## Tests
 
@@ -180,4 +194,4 @@ A real team is another type that conforms to `TeamBackend` and emits the same ev
 swift test
 ```
 
-The tests start the server on a free local port and drive it with the real client package: a front end running the dummy team from start to finish, a second front end joining late, interrupting, reconnecting mid-session, and bad requests.
+The tests start the server on a free local port and drive it with the real client package: each character in a session of its own, the Builder's approval, a second front end joining late, starting one session over, interrupting one character while the other carries on, a question answered mid-task, reconnecting mid-session, and bad requests.

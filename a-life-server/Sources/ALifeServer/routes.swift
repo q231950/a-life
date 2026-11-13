@@ -3,26 +3,48 @@ import Vapor
 
 extension SessionState: @retroactive Content {}
 
-func routes(_ app: Application, hub: SessionHub, team: any TeamBackend) {
+func routes(_ app: Application, sessions: [HostedSession]) {
+    let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+
+    /// The session a request names in its path.
+    @Sendable func session(_ request: Request) throws -> HostedSession {
+        guard let id = request.parameters.get("session"), let session = byID[id] else {
+            throw Abort(.notFound, reason: "No such session")
+        }
+        return session
+    }
+
     app.get("health") { _ in
         ["status": "ok"]
     }
 
-    let session = app.grouped("v1", "session")
+    let all = app.grouped("v1", "sessions")
 
-    // The session as it is right now. Handy with curl; front ends follow
-    // the event stream instead.
-    session.get { _ in
-        await hub.state
+    // Every session as it is right now, one per character. Front ends read
+    // this to learn who is on the lot, then follow each session's events.
+    all.get { _ -> [SessionState] in
+        var states: [SessionState] = []
+        for session in sessions {
+            states.append(await session.hub.state)
+        }
+        return states
+    }
+
+    let one = all.grouped(":session")
+
+    // One session as it is right now. Handy with curl.
+    one.get { request in
+        try await session(request).hub.state
     }
 
     // Server-sent events: what the client missed, then live events.
-    //   ?after=<seq>      the last sequence number the client has seen
-    //   ?session=<id>     the session that number belongs to
-    session.get("events") { request -> Response in
+    //   ?after=<seq>              the last sequence number the client has seen
+    //   ?conversation=<id>        the conversation that number belongs to
+    one.get("events") { request -> Response in
+        let hub = try session(request).hub
         let after = (try? request.query.get(Int.self, at: "after")) ?? 0
-        let sessionID = try? request.query.get(String.self, at: "session")
-        let events = await hub.subscribe(sessionID: sessionID, after: after)
+        let conversationID = try? request.query.get(String.self, at: "conversation")
+        let events = await hub.subscribe(conversationID: conversationID, after: after)
 
         let response = Response(status: .ok)
         response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
@@ -62,30 +84,30 @@ func routes(_ app: Application, hub: SessionHub, team: any TeamBackend) {
         return response
     }
 
-    session.post("messages") { request -> HTTPStatus in
+    one.post("messages") { request -> HTTPStatus in
+        let backend = try session(request).backend
         let body = try request.content.decode(SendMessageRequest.self)
         let text = body.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw Abort(.badRequest, reason: "The message is empty") }
-        await team.handleMessage(text)
+        try await backend.handleMessage(text)
         return .accepted
     }
 
-    session.post("interrupt") { request -> HTTPStatus in
-        // The body is optional: no body stops the whole team.
-        let body = try? request.content.decode(InterruptRequest.self)
-        await team.interrupt(agentID: body?.agentID)
+    one.post("interrupt") { request -> HTTPStatus in
+        try await session(request).backend.interrupt()
         return .accepted
     }
 
-    session.post("approvals", ":id") { request -> HTTPStatus in
-        let id = try request.parameters.require("id")
+    one.post("approvals", ":approval") { request -> HTTPStatus in
+        let backend = try session(request).backend
+        let id = try request.parameters.require("approval")
         let decision = try request.content.decode(ApprovalDecision.self)
-        try await team.decide(approvalID: id, allow: decision.allow)
+        try await backend.decide(approvalID: id, allow: decision.allow)
         return .accepted
     }
 
-    session.post("reset") { _ -> HTTPStatus in
-        await team.reset()
+    one.post("reset") { request -> HTTPStatus in
+        try await session(request).backend.reset()
         return .accepted
     }
 }
