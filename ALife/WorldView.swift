@@ -1,11 +1,14 @@
-import SwiftUI
+import ALifeClient
 import RealityKit
+import SwiftUI
 #if os(macOS)
 import AppKit
 #endif
 
 struct WorldView: View {
+    @Environment(AgentSession.self) private var agentSession
     @State private var world: World?
+    @State private var showsSettings = false
     #if os(macOS)
     @State private var scrollMonitor: Any?
     #endif
@@ -13,6 +16,7 @@ struct WorldView: View {
     var body: some View {
         RealityView { content in
             let world = World()
+            world.show(agentSession.agents)
             content.add(world.root)
             self.world = world
         }
@@ -20,13 +24,30 @@ struct WorldView: View {
         .gesture(tapToWalk)
         .simultaneousGesture(orbit)
         .simultaneousGesture(zoom)
-        .overlay(alignment: .bottom) {
-            Text(hint)
-                .font(.footnote)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.thinMaterial, in: Capsule())
+        .onChange(of: agentSession.agents) { _, agents in
+            world?.show(agents)
+        }
+        .overlay(alignment: .top) {
+            SessionStatusBar(showsSettings: $showsSettings)
                 .padding()
+        }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 8) {
+                AgentPanel()
+                Text(hint)
+                    .font(.footnote)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.thinMaterial, in: Capsule())
+            }
+            .padding()
+        }
+        .sheet(isPresented: $showsSettings) {
+            SettingsView()
+        }
+        .task {
+            agentSession.connect()
+            showsSettings = agentSession.phase == .needsServer
         }
         #if os(macOS)
         .onAppear(perform: startScrollZoom)
@@ -86,4 +107,5 @@ struct WorldView: View {
 
 #Preview {
     WorldView()
+        .environment(AgentSession(serverURLStore: InMemoryServerURLStore()))
 }

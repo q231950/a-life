@@ -23,3 +23,15 @@ jobs:
             -scheme ALife \
             -destination 'generic/platform=${{ matrix.platform }}' \
             CODE_SIGNING_ALLOWED=NO
+
+  packages:
+    name: ${{ matrix.package }} tests
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [ALifeKit, a-life-server]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test
+        run: swift test --package-path ${{ matrix.package }}
