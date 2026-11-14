@@ -6,8 +6,10 @@ import AppKit
 #endif
 
 struct WorldView: View {
-    @Environment(AgentSession.self) private var agentSession
+    @Environment(ServerConnection.self) private var server
     @State private var world: World?
+    /// The character you are talking to. `nil` means the first one.
+    @State private var selectedID: String?
     @State private var showsSettings = false
     #if os(macOS)
     @State private var scrollMonitor: Any?
@@ -16,16 +18,19 @@ struct WorldView: View {
     var body: some View {
         RealityView { content in
             let world = World()
-            world.show(agentSession.agents)
+            world.show(residents, selectedID: selected?.id)
             content.add(world.root)
             self.world = world
         }
         .ignoresSafeArea()
-        .gesture(tapToWalk)
+        .gesture(tap)
         .simultaneousGesture(orbit)
         .simultaneousGesture(zoom)
-        .onChange(of: agentSession.agents) { _, agents in
-            world?.show(agents)
+        .onChange(of: residents) { _, residents in
+            world?.show(residents, selectedID: selected?.id)
+        }
+        .onChange(of: selected?.id) { _, id in
+            world?.show(residents, selectedID: id)
         }
         .overlay(alignment: .top) {
             SessionStatusBar(showsSettings: $showsSettings)
@@ -33,7 +38,7 @@ struct WorldView: View {
         }
         .overlay(alignment: .bottom) {
             VStack(spacing: 8) {
-                AgentPanel()
+                AgentPanel(selectedID: $selectedID)
                 Text(hint)
                     .font(.footnote)
                     .padding(.horizontal, 12)
@@ -46,8 +51,8 @@ struct WorldView: View {
             SettingsView()
         }
         .task {
-            agentSession.connect()
-            showsSettings = agentSession.phase == .needsServer
+            server.connect()
+            showsSettings = server.phase == .needsServer
         }
         #if os(macOS)
         .onAppear(perform: startScrollZoom)
@@ -55,14 +60,35 @@ struct WorldView: View {
         #endif
     }
 
+    /// The character you are talking to.
+    private var selected: AgentSession? {
+        server.session(selectedBy: selectedID)
+    }
+
+    /// What the lot shows of each session.
+    private var residents: [World.Resident] {
+        server.sessions.map { session in
+            World.Resident(
+                id: session.id,
+                name: session.name,
+                isAtWork: session.status == .running || session.isWaitingForYou,
+                isWaitingForYou: session.isWaitingForYou
+            )
+        }
+    }
+
     // MARK: Gestures
 
-    /// Tap (or click) a floor tile to walk there.
-    private var tapToWalk: some Gesture {
+    /// Tap (or click) a character to talk to it, or a floor tile to walk there.
+    private var tap: some Gesture {
         SpatialTapGesture()
             .targetedToAnyEntity()
             .onEnded { value in
-                world?.walk(to: value.entity)
+                if let id = world?.residentID(of: value.entity) {
+                    selectedID = id
+                } else {
+                    world?.walk(to: value.entity)
+                }
             }
     }
 
@@ -81,7 +107,7 @@ struct WorldView: View {
     }
 
     #if os(macOS)
-    private let hint = "Click the grass to walk · drag to orbit · scroll or pinch to zoom"
+    private let hint = "Click a character to talk to it · click the grass to walk · drag to orbit · scroll or pinch to zoom"
 
     /// SwiftUI has no scroll-wheel gesture, so listen for the events directly.
     private func startScrollZoom() {
@@ -101,11 +127,11 @@ struct WorldView: View {
         scrollMonitor = nil
     }
     #else
-    private let hint = "Tap the grass to walk · drag to orbit · pinch to zoom"
+    private let hint = "Tap a character to talk to it · tap the grass to walk · drag to orbit · pinch to zoom"
     #endif
 }
 
 #Preview {
     WorldView()
-        .environment(AgentSession(serverURLStore: InMemoryServerURLStore()))
+        .environment(ServerConnection(serverURLStore: InMemoryServerURLStore()))
 }

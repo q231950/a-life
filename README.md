@@ -2,7 +2,7 @@
 
 A minimal life-sim sandbox for iOS and macOS, built with SwiftUI and RealityKit. A little character walks around a 16×16 lot. Tap a tile and the character finds its way there with A* pathfinding, around the walls of a small house and some bushes.
 
-The lot also shows a team of agents: one character per agent. An agent walks into the house while it is working and waits on the lawn while it is idle. The team lives on a small server you run yourself, [`a-life-server`](a-life-server), which the apps reach over Tailscale. For now the team is a dummy that plays a fixed script.
+The lot also shows your agents: one character per session. Each character is a session of its own, like a separate Claude Code session: you talk to it directly, it asks you before it does anything risky, and what you tell one never reaches the others. A character walks into the house while it works, stays at its desk with a "!" over its head while it waits for your answer, and waits on the lawn otherwise. The sessions live on a small server you run yourself, [`a-life-server`](a-life-server), which the apps reach over Tailscale. For now every character is a dummy that plays a short script.
 
 ## Run it
 
@@ -18,22 +18,24 @@ Requires iOS 18 / macOS 15, the first releases where `RealityView` and entity-ta
 
 ## The agents
 
-The front ends don't run agents themselves. They follow a session on the server and send it instructions.
+The front ends don't run agents themselves. They follow each character's session on the server and send it what you say.
 
 1. Start the server on your Mac: `cd a-life-server && swift run ALifeServer`.
 2. Run the app, open the settings (the gear at the top) and set the server's address. On the same Mac or in the simulator, press **Use this machine**. From another device, enter the HTTPS address `tailscale serve` gives you; [`a-life-server/README.md`](a-life-server/README.md) walks through that.
-3. Type an instruction in the field at the bottom. The team lead hands work to the Gardener and the Builder, the Builder asks for approval of a command (Allow or Deny), and the team lead sums up.
+3. Tap a character, or its name in the panel at the bottom, and tell it what to do. The **Gardener** looks around and reports back; it never needs permission. The **Builder** asks for approval of a command first (Allow or Deny), and can't be told anything else until you answer. You can talk to a character while it works, too: it answers at its next step and carries on.
 
-Every front end connected to the same server sees the same session. If the connection drops, the app reconnects and the server sends what it missed.
+There is no team lead: you are the one handing out work and carrying news between characters. Your own character, the one labelled "You", is the one that walks where you tap.
+
+Every front end connected to the same server sees the same sessions. If the connection drops, the app reconnects and the server sends what it missed.
 
 ## How it's put together
 
 | File | What it does |
 |---|---|
-| `ALifeApp.swift` | App entry point. Registers the custom components and the walk system, and owns the `AgentSession`. |
-| `WorldView.swift` | The `RealityView`, plus the gestures and the macOS scroll-wheel monitor. |
-| `World.swift` | Builds the lot (tiles, walls, bushes, character, sun), turns a tapped tile into a walk, and keeps one character per agent. |
-| `AgentPanel.swift` | The status pill, the last few messages, tool approvals and the instruction field. |
+| `ALifeApp.swift` | App entry point. Registers the custom components and the walk system, and owns the `ServerConnection`. |
+| `WorldView.swift` | The `RealityView`, plus the gestures (tap a character to talk to it, a tile to walk there) and the macOS scroll-wheel monitor. |
+| `World.swift` | Builds the lot (tiles, walls, bushes, your character, sun), turns a tapped tile into a walk, and keeps one character per session, with a ring under the one you're talking to. |
+| `AgentPanel.swift` | The status pill, a button per character, and the conversation with the one you picked: its last few messages, tool approvals, the message field, Stop and Start over. |
 | `SettingsView.swift` | Sets the server's address. |
 | `CameraRig.swift` | Orbit camera: a pivot entity that yaws and pitches, with a `PerspectiveCamera` on a boom. |
 | `WalkSystem.swift` | ECS: `TileComponent`, `WalkComponent`, and a `System` that moves walkers along their waypoints every frame. |
@@ -47,12 +49,12 @@ Every floor tile is its own entity with a `CollisionComponent` and an `InputTarg
 
 | Module | What it holds |
 |---|---|
-| `ALifeAPI` | The wire format: `Agent`, `Message`, `Approval`, `SessionEvent`, the request bodies, and `SessionState`, which turns a sequence of events into what a front end shows. The server uses this module too, so the two can't drift apart. |
-| `ALifeClient` | What a front end uses. `AgentSession` is the observable handle on the session: `connect()`, `send(_:)`, `interrupt(_:)`, `respond(to:allow:)`, `startNewSession()`, `setServerURL(_:)`, and the state to draw (`agents`, `transcript`, `pendingApprovals`, `phase`, `status`). `ALifeServerClient` makes the HTTP calls and reads the event stream. |
+| `ALifeAPI` | The wire format: `Message`, `Approval`, `SessionEvent`, the request bodies, and `SessionState`, which turns a session's events into what a front end shows of that character. The server uses this module too, so the two can't drift apart. |
+| `ALifeClient` | What a front end uses. `ServerConnection` follows every session on a server: `connect()`, `setServerURL(_:)`, `startEverySessionOver()`, `phase`, and `sessions`, one `AgentSession` per character. An `AgentSession` is the observable handle on one character: `send(_:)`, `interrupt()`, `respond(to:allow:)`, `startOver()`, and the state to draw (`status`, `activity`, `transcript`, `pendingApprovals`, `isWaitingForYou`, `lastError`). `ALifeServerClient` makes the HTTP calls and reads the event streams. |
 
 ### The server
 
-[`a-life-server/`](a-life-server) is a separate Swift package (Vapor). Its README covers running it, Tailscale, the API and where a real team would plug in.
+[`a-life-server/`](a-life-server) is a separate Swift package (Vapor). Its README covers running it, Tailscale, the API and where real sessions would plug in.
 
 ### Tests
 

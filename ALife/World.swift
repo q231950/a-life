@@ -1,4 +1,3 @@
-import ALifeClient
 import RealityKit
 #if os(macOS)
 import AppKit
@@ -9,7 +8,8 @@ typealias PlatformColor = UIColor
 #endif
 
 /// Builds the lot (floor tiles, a little house, some bushes, your character),
-/// turns taps on tiles into walks, and shows one character per agent.
+/// turns taps on tiles into walks, and shows one character per session on
+/// the server.
 @MainActor
 final class World {
     let root = Entity()
@@ -34,6 +34,7 @@ final class World {
 
         character.position = position(of: Tile(x: 2, z: 2))
         character.components.set(WalkComponent())
+        Self.setLabel("You", on: character)
         root.addChild(character)
 
         marker.orientation = simd_quatf(angle: .pi / 4, axis: [0, 1, 0])
@@ -71,12 +72,23 @@ final class World {
 
     // MARK: Agents
 
+    /// What the lot shows of one session's character.
+    struct Resident: Equatable {
+        let id: String
+        let name: String
+        /// Working, or waiting for you in the middle of its work.
+        let isAtWork: Bool
+        /// A tool call is waiting for your yes or no.
+        let isWaitingForYou: Bool
+    }
+
     private struct AgentCharacter {
         let entity: Entity
         /// Which desk and which spot on the lawn belong to this agent.
         let slot: Int
         var name: String
         var destination: Tile
+        var isWaitingForYou = false
     }
 
     /// The floor inside the house: where agents go while they work.
@@ -84,31 +96,50 @@ final class World {
     /// The lawn in front of the door: where agents wait.
     private static let lawn = (12...14).flatMap { z in (5...10).map { x in Tile(x: x, z: z) } }
 
-    /// Makes the scene match the team: one character per agent, inside the
-    /// house while its agent is running and out on the lawn otherwise.
-    func show(_ agents: [Agent]) {
-        let current = Set(agents.map(\.id))
+    /// Makes the scene match the sessions: one character each, inside the
+    /// house while it works (or waits for you mid-task) and out on the lawn
+    /// otherwise, with a ring under the one you are talking to.
+    func show(_ residents: [Resident], selectedID: String?) {
+        let current = Set(residents.map(\.id))
         for (id, gone) in agentCharacters where !current.contains(id) {
             gone.entity.removeFromParent()
             agentCharacters[id] = nil
         }
 
-        for agent in agents {
-            var shown = agentCharacters[agent.id] ?? addCharacter(for: agent)
-            if shown.name != agent.name {
-                shown.name = agent.name
-                Self.setLabel(agent.name, on: shown.entity)
+        for resident in residents {
+            var shown = agentCharacters[resident.id] ?? addCharacter(for: resident)
+            if shown.name != resident.name {
+                shown.name = resident.name
+                Self.setLabel(resident.name, on: shown.entity)
             }
-            let spots = agent.status == .running ? Self.desks : Self.lawn
+            if shown.isWaitingForYou != resident.isWaitingForYou {
+                shown.isWaitingForYou = resident.isWaitingForYou
+                Self.setWaitingMarker(resident.isWaitingForYou, on: shown.entity)
+            }
+            shown.entity.findEntity(named: "Selection")?.isEnabled = resident.id == selectedID
+
+            let spots = resident.isAtWork ? Self.desks : Self.lawn
             let destination = spots[shown.slot % spots.count]
             if shown.destination != destination, walk(shown.entity, to: destination) {
                 shown.destination = destination
             }
-            agentCharacters[agent.id] = shown
+            agentCharacters[resident.id] = shown
         }
     }
 
-    private func addCharacter(for agent: Agent) -> AgentCharacter {
+    /// The session whose character `entity` is, or is part of.
+    func residentID(of entity: Entity) -> String? {
+        var current: Entity? = entity
+        while let candidate = current {
+            if let id = agentCharacters.first(where: { $0.value.entity === candidate })?.key {
+                return id
+            }
+            current = candidate.parent
+        }
+        return nil
+    }
+
+    private func addCharacter(for resident: Resident) -> AgentCharacter {
         let taken = Set(agentCharacters.values.map(\.slot))
         let slot = (0...taken.count).first { !taken.contains($0) } ?? 0
         let home = Self.lawn[slot % Self.lawn.count]
@@ -120,16 +151,52 @@ final class World {
             PlatformColor(red: 0.8, green: 0.45, blue: 0.75, alpha: 1),
             PlatformColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1),
         ]
-        let entity = Self.makeCharacter(
-            shirt: agent.isCoordinator ? PlatformColor(red: 0.45, green: 0.3, blue: 0.75, alpha: 1) : shirts[slot % shirts.count]
-        )
-        entity.name = agent.id
-        if agent.isCoordinator { entity.scale = [1.15, 1.15, 1.15] }
+        let entity = Self.makeCharacter(shirt: shirts[slot % shirts.count])
+        entity.name = resident.id
         entity.position = position(of: home)
         entity.components.set(WalkComponent())
-        Self.setLabel(agent.name, on: entity)
+        // Both are needed for a tap to land on the character itself.
+        let shape = ShapeResource.generateBox(width: 0.5, height: 1.1, depth: 0.5).offsetBy(translation: [0, 0.55, 0])
+        entity.components.set(CollisionComponent(shapes: [shape]))
+        entity.components.set(InputTargetComponent())
+        Self.setLabel(resident.name, on: entity)
+
+        // Shown under the character you are talking to.
+        let ring = ModelEntity(
+            mesh: .generatePlane(width: 0.7, depth: 0.7, cornerRadius: 0.35),
+            materials: [UnlitMaterial(color: .white)]
+        )
+        ring.name = "Selection"
+        ring.position = [0, 0.015, 0]
+        ring.isEnabled = false
+        entity.addChild(ring)
+
         root.addChild(entity)
-        return AgentCharacter(entity: entity, slot: slot, name: agent.name, destination: home)
+        return AgentCharacter(entity: entity, slot: slot, name: resident.name, destination: home)
+    }
+
+    /// A "!" over the character's head while it waits for your answer.
+    private static func setWaitingMarker(_ isShown: Bool, on character: Entity) {
+        character.findEntity(named: "Waiting")?.removeFromParent()
+        guard isShown else { return }
+
+        let mesh = MeshResource.generateText(
+            "!",
+            extrusionDepth: 0.01,
+            font: .boldSystemFont(ofSize: 0.3),
+            containerFrame: .zero,
+            alignment: .center,
+            lineBreakMode: .byTruncatingTail
+        )
+        let text = ModelEntity(mesh: mesh, materials: [UnlitMaterial(color: PlatformColor(red: 1, green: 0.6, blue: 0.1, alpha: 1))])
+        text.position = [-mesh.bounds.center.x, 0, 0]
+
+        let marker = Entity()
+        marker.name = "Waiting"
+        marker.position = [0, 1.3, 0]
+        marker.components.set(BillboardComponent())
+        marker.addChild(text)
+        character.addChild(marker)
     }
 
     /// A name floating above the character's head, always facing the camera.

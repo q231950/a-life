@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Where the address of the a-life-server is set.
 struct SettingsView: View {
-    @Environment(AgentSession.self) private var agentSession
+    @Environment(ServerConnection.self) private var server
     @Environment(\.dismiss) private var dismiss
     @State private var address = ""
     @State private var addressIsInvalid = false
@@ -36,22 +36,22 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LabeledContent("Connected to", value: agentSession.serverURL?.absoluteString ?? "—")
-                    Button("Start a new session") {
-                        Task { await agentSession.startNewSession() }
+                    LabeledContent("Connected to", value: server.serverURL?.absoluteString ?? "—")
+                    Button("Start every session over") {
+                        Task { await server.startEverySessionOver() }
                         dismiss()
                     }
-                    .disabled(agentSession.phase != .live)
-                    if agentSession.serverURL != nil {
+                    .disabled(server.phase != .live || server.sessions.isEmpty)
+                    if server.serverURL != nil {
                         Button("Forget this server", role: .destructive) {
-                            agentSession.setServerURL("")
+                            server.setServerURL("")
                             address = ""
                         }
                     }
                 } header: {
-                    Text("Session")
+                    Text("Sessions")
                 } footer: {
-                    Text("The session lives on the server and is shared by every front end connected to it. Starting a new one clears it for all of them.")
+                    Text("Each character has a session of its own on the server, shared by every front end connected to it. Starting one over clears its conversation for all of them. To start just one over, use the … button next to its name.")
                 }
             }
             .formStyle(.grouped)
@@ -62,7 +62,7 @@ struct SettingsView: View {
                 }
             }
             .onAppear {
-                address = agentSession.serverURL?.absoluteString ?? ""
+                address = server.serverURL?.absoluteString ?? ""
             }
         }
         #if os(macOS)
@@ -71,7 +71,7 @@ struct SettingsView: View {
     }
 
     private func save() {
-        addressIsInvalid = !agentSession.setServerURL(address)
+        addressIsInvalid = !server.setServerURL(address)
         if !addressIsInvalid { dismiss() }
     }
 }
