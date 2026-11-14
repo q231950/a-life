@@ -130,7 +130,7 @@ final class ALifeServerTests: XCTestCase {
     func testSomethingSaidMidTaskIsAnsweredStraightAway() async throws {
         // A slow step, so the question surely arrives while the first one runs.
         let hub = SessionHub(id: "gardener", name: "Gardener")
-        let gardener = DummyCharacter(cast[0], hub: hub, step: .milliseconds(300))
+        let gardener = DummyCharacter(.gardener, hub: hub, step: .milliseconds(300))
         await gardener.reset()
 
         try await gardener.handleMessage("Look for snails")
@@ -166,7 +166,7 @@ final class ALifeServerTests: XCTestCase {
     }
 
     func testTheGardenerWaitsForItsHelpersToReportBack() async throws {
-        let events = try await play(cast[0], "Look for snails", until: .endTurn)
+        let events = try await play(.gardener, "Look for snails", until: .endTurn)
 
         var sent: [Subagent] = []
         var reported: [String] = []
@@ -188,7 +188,7 @@ final class ALifeServerTests: XCTestCase {
     }
 
     func testTheBuildersHelperIsBackBeforeItAsks() async throws {
-        let events = try await play(cast[1], "Tidy the lot", until: .requiresAction)
+        let events = try await play(.builder, "Tidy the lot", until: .requiresAction)
         let types = events.map(\.type).filter { $0.hasPrefix("subagent.") || $0.hasPrefix("approval.") }
         XCTAssertEqual(types, ["subagent.started", "subagent.finished", "approval.requested"])
         guard case .subagentStarted(let helper) = events.first(where: { $0.type == "subagent.started" }) else {
@@ -200,7 +200,7 @@ final class ALifeServerTests: XCTestCase {
     func testInterruptingCallsTheHelpersBack() async throws {
         // Slow steps, so the helpers are surely still out.
         let hub = SessionHub(id: "gardener", name: "Gardener")
-        let gardener = DummyCharacter(cast[0], hub: hub, step: .milliseconds(300))
+        let gardener = DummyCharacter(.gardener, hub: hub, step: .milliseconds(300))
         await gardener.reset()
         try await gardener.handleMessage("Look for snails")
         for _ in 0..<300 where await hub.state.subagents.count < 2 {
