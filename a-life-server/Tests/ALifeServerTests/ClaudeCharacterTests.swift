@@ -84,6 +84,7 @@ final class ClaudeCharacterTests: XCTestCase {
         // construction worker and nobody else's helper.
         let arguments = try XCTUnwrap(claudeCode.launches.first)
         XCTAssertEqual(claudeCode.launches.count, 1)
+        XCTAssertEqual(claudeCode.workspaces, [.lot])
         XCTAssertEqual(value(after: "--input-format", in: arguments), "stream-json")
         XCTAssertEqual(value(after: "--output-format", in: arguments), "stream-json")
         XCTAssertEqual(value(after: "--permission-prompt-tool", in: arguments), "stdio")
@@ -175,6 +176,43 @@ final class ClaudeCharacterTests: XCTestCase {
         cli.say(result(text: "Roses are in."))
         state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
         XCTAssertEqual(transcript(state), ["You: Plant some roses", "Gardener: Roses are in."])
+    }
+
+    func testTheEngineerSendsItsALifeExpertToChangeALife() async throws {
+        let (engineer, hub, claudeCode) = await make(.engineer)
+        try await engineer.handleMessage("Make the sheep jump when they take off")
+
+        // The Engineer is an ordinary Claude Code session, in the a*life
+        // checkout rather than on the lot, which asks before every change.
+        let arguments = try XCTUnwrap(claudeCode.launches.first)
+        XCTAssertEqual(claudeCode.workspaces, [.aLife])
+        XCTAssertEqual(value(after: "--permission-mode", in: arguments), "default")
+        XCTAssertFalse(arguments.joined(separator: " ").contains("--cloud"))
+        let agents = try JSONValue.decode(Data(XCTUnwrap(value(after: "--agents", in: arguments)).utf8))
+        XCTAssertEqual(agents["a-life-expert"]?["tools"], ["Read", "Glob", "Grep", "Write", "Edit", "Bash"])
+        XCTAssertEqual(agents["a-life-expert"]?["model"], "inherit")
+        XCTAssertNil(agents["construction-worker"])
+        XCTAssertTrue(try XCTUnwrap(value(after: "--append-system-prompt", in: arguments)).contains("`a-life-expert` agent"))
+
+        // A change to a*life goes to its a*life expert, which asks before it
+        // runs the tests.
+        let cli = try XCTUnwrap(claudeCode.clis.first)
+        cli.say(sendsOff("a-life-expert", to: "Make the sheep jump"))
+        cli.say(taskStarted("a-life-expert"))
+        var state = await until(hub, "the a*life expert") { !$0.subagents.isEmpty }
+        XCTAssertEqual(state.subagents, [Subagent(id: "toolu_agent", task: "Make the sheep jump")])
+        cli.say(#"{"type":"control_request","request_id":"request-test","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"swift test --package-path ALifeKit"},"tool_use_id":"toolu_test","agent_id":"task-1"}}"#)
+        state = await until(hub, "the approval") { !$0.approvals.isEmpty }
+        XCTAssertEqual(state.approvals, [Approval(id: "request-test", toolName: "Bash", input: "a-life-expert: swift test --package-path ALifeKit")])
+
+        try await engineer.decide(approvalID: "request-test", allow: true)
+        cli.say(taskNotification("completed"))
+        cli.say(helperReport())
+        cli.say(says("The sheep jump before they fly off now, and the tests pass."))
+        cli.say(result(text: "The sheep jump before they fly off now, and the tests pass."))
+        state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
+        XCTAssertTrue(state.subagents.isEmpty)
+        XCTAssertEqual(transcript(state).last, "Engineer: The sheep jump before they fly off now, and the tests pass.")
     }
 
     func testDenyingTellsClaudeCodeNo() async throws {
@@ -372,7 +410,7 @@ final class ClaudeCodeProcessTests: XCTestCase {
         let claudeCode = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: lot, model: "haiku")
         // `sh -c` takes the arguments after the script as $0, $1, …
         let script = #"printf '{"background":"%s","directory":"%s","model":"%s %s"}\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$(pwd -P)" "$0" "$1""#
-        let connection = try claudeCode.launch(["-c", script])
+        let connection = try claudeCode.launch(["-c", script], in: .lot)
         var said: JSONValue?
         for await message in connection.messages {
             said = message
@@ -382,6 +420,40 @@ final class ClaudeCodeProcessTests: XCTestCase {
         let directory = try XCTUnwrap(said?["directory"]?.string)
         // On macOS, /var is a link to /private/var.
         XCTAssertEqual(URL(fileURLWithPath: directory).resolvingSymlinksInPath().path, lot.resolvingSymlinksInPath().path)
+    }
+
+    func testCharactersWhoWorkOnALifeWorkInTheCheckout() async throws {
+        let checkout = try lot()
+        let claudeCode = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: try lot(), repository: checkout)
+        let connection = try claudeCode.launch(["-c", #"printf '{"directory":"%s"}\n' "$(pwd -P)""#], in: .aLife)
+        var said: JSONValue?
+        for await message in connection.messages {
+            said = message
+        }
+        let directory = try XCTUnwrap(said?["directory"]?.string)
+        XCTAssertEqual(URL(fileURLWithPath: directory).resolvingSymlinksInPath().path, checkout.resolvingSymlinksInPath().path)
+
+        // Without a checkout, they can't start; the others still can.
+        let withoutCheckout = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: try lot())
+        XCTAssertThrowsError(try withoutCheckout.launch(["-c", "true"], in: .aLife)) { error in
+            XCTAssertEqual("\(error)", "There's no a*life checkout to work in. Set ALIFE_REPO_DIR to one and restart the server.")
+        }
+        XCTAssertNoThrow(try withoutCheckout.launch(["-c", "true"], in: .lot).close())
+    }
+
+    func testTheCheckoutIsALIFE_REPO_DIROrTheOneTheServerWasBuiltFrom() throws {
+        // These tests are built from an a*life checkout, too.
+        let builtFrom = try XCTUnwrap(ClaudeCode.builtFrom)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: builtFrom.appendingPathComponent("a-life-server/Sources/ALifeServer/agents.yaml").path))
+        XCTAssertEqual(try ClaudeCode.findRepository(in: [:])?.path, builtFrom.path)
+        XCTAssertEqual(try ClaudeCode.findRepository(in: ["ALIFE_REPO_DIR": ""])?.path, builtFrom.path)
+
+        let elsewhere = try lot()
+        XCTAssertEqual(try ClaudeCode.findRepository(in: ["ALIFE_REPO_DIR": elsewhere.path])?.path, elsewhere.path)
+        let missing = elsewhere.appendingPathComponent("nowhere").path
+        XCTAssertThrowsError(try ClaudeCode.findRepository(in: ["ALIFE_REPO_DIR": missing])) { error in
+            XCTAssertEqual("\(error)", "ALIFE_REPO_DIR is \(missing), which isn't a directory. Set it to a checkout of a*life.")
+        }
     }
 }
 
@@ -440,10 +512,13 @@ final class LiveClaudeCodeTests: XCTestCase {
 final class FakeClaudeCode: ClaudeCodeLauncher, @unchecked Sendable {
     private let lock = NSLock()
     private var _launches: [[String]] = []
+    private var _workspaces: [Workspace] = []
     private var _clis: [FakeClaudeCLI] = []
     private var _failure: Error?
 
     var launches: [[String]] { lock.lock(); defer { lock.unlock() }; return _launches }
+    /// Where each launch was to work, in the order they were launched.
+    var workspaces: [Workspace] { lock.lock(); defer { lock.unlock() }; return _workspaces }
     var clis: [FakeClaudeCLI] { lock.lock(); defer { lock.unlock() }; return _clis }
     /// What starting the CLI fails with, if anything.
     var failure: Error? {
@@ -451,12 +526,13 @@ final class FakeClaudeCode: ClaudeCodeLauncher, @unchecked Sendable {
         set { lock.lock(); defer { lock.unlock() }; _failure = newValue }
     }
 
-    func launch(_ arguments: [String]) throws -> any ClaudeCodeConnection {
+    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
         lock.lock()
         defer { lock.unlock() }
         if let _failure { throw _failure }
         let cli = FakeClaudeCLI()
         _launches.append(arguments)
+        _workspaces.append(workspace)
         _clis.append(cli)
         return cli
     }

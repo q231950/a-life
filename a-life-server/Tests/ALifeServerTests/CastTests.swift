@@ -16,6 +16,7 @@ final class CastTests: XCTestCase {
             name: Painter
             color: "#3366CC"
             permission_mode: acceptEdits
+            works_in: a-life
             changes_things: true
             role: |
               You are the Painter.
@@ -43,12 +44,14 @@ final class CastTests: XCTestCase {
         XCTAssertEqual(cast.map(\.name), ["Gardener", "Builder", "Engineer"])
         XCTAssertEqual(cast.map(\.color), ["#D9594D", "#F2A633", "#8050C8"])
         XCTAssertEqual(cast.map(\.permissionMode), ["acceptEdits", "default", "default"])
+        // The Engineer works on a*life itself, in its checkout.
+        XCTAssertEqual(cast.map(\.workspace), [.lot, .lot, .aLife])
         XCTAssertEqual(cast.map(\.changesThings), [false, true, true])
-        XCTAssertEqual(cast.map(\.helper.name), ["planter", "construction-worker", "technician"])
+        XCTAssertEqual(cast.map(\.helper.name), ["planter", "construction-worker", "a-life-expert"])
         XCTAssertEqual(cast.map(\.helper.tools), [
             ["Read", "Glob", "Grep", "Write", "Edit"],
             ["Read", "Glob", "Grep", "Write", "Edit"],
-            ["Bash"],
+            ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
         ])
 
         for character in cast {
@@ -60,15 +63,19 @@ final class CastTests: XCTestCase {
             XCTAssertFalse(character.helper.description.isEmpty)
         }
 
-        // Lists and commands in a helper's prompt keep their lines.
+        // Lists in a helper's prompt keep their lines.
         XCTAssertTrue(Character.gardener.helper.prompt.contains("garden/rose-bed.md, with:\n- a title and one line on what grows there,\n"))
-        XCTAssertTrue(Character.engineer.helper.prompt.contains("""
-            ```
-            claude -p --cloud "${ALIFE_CLOUD_SESSION:?not set}" <<'ALIFE_JOB'
-            <the job>
-            ALIFE_JOB
-            ```
-            """))
+
+        // The Engineer sends its a*life expert for any change to a*life, and
+        // the expert knows its way around the app, the package and the server.
+        XCTAssertTrue(Character.engineer.helper.description.contains("Use it whenever a*life is to be changed."))
+        let expert = Character.engineer.helper.prompt
+        for part in ["ALife/", "ALifeKit/", "a-life-server/", "World.swift", "SheepSystem.swift", "ClaudeCharacter.swift", "agents.yaml"] {
+            XCTAssertTrue(expert.contains(part), "the a*life expert doesn't know \(part)")
+        }
+        XCTAssertTrue(expert.contains("\n1. Run git status first."))
+        XCTAssertTrue(expert.contains("swift test --package-path a-life-server"))
+        XCTAssertFalse(expert.contains("--cloud"))
     }
 
     // MARK: What a file says
@@ -82,6 +89,7 @@ final class CastTests: XCTestCase {
                 color: "#3366CC",
                 changesThings: true,
                 permissionMode: "acceptEdits",
+                workspace: .aLife,
                 // Without the line break a YAML block ends with.
                 role: "You are the Painter.\n\nYou paint the house.",
                 helper: Helper(name: "brush", description: "Paints walls.", prompt: "You paint walls.", tools: ["Read", "Edit"])
@@ -89,7 +97,7 @@ final class CastTests: XCTestCase {
         ])
     }
 
-    func testAnAgentCanLeaveOutItsColourPermissionModeAndWhetherItChangesThings() throws {
+    func testAnAgentCanLeaveOutItsColourPermissionModeWorkspaceAndWhetherItChangesThings() throws {
         let yaml = """
             agents:
               - id: painter
@@ -100,6 +108,7 @@ final class CastTests: XCTestCase {
         let painter = try XCTUnwrap(Cast.decode(yaml, from: "agents.yaml").first)
         XCTAssertNil(painter.color) // the front ends choose one
         XCTAssertEqual(painter.permissionMode, "default") // asks before every change
+        XCTAssertEqual(painter.workspace, .lot)
         XCTAssertFalse(painter.changesThings)
     }
 
@@ -136,7 +145,7 @@ final class CastTests: XCTestCase {
             ),
             (
                 amended(replacing: "color:", with: "colour:"),
-                "agents.yaml: agents[0].colour isn't a field of an agent. The fields are id, name, color, permission_mode, changes_things, role and helper."
+                "agents.yaml: agents[0].colour isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, changes_things, role and helper."
             ),
             (
                 amended(replacing: "\"#3366CC\"", with: "purple"),
@@ -157,6 +166,10 @@ final class CastTests: XCTestCase {
             (
                 amended(replacing: "permission_mode: acceptEdits", with: "permission_mode: ask"),
                 "agents.yaml: agents[0].permission_mode \"ask\" isn't one of Claude Code's permission modes: default, manual, acceptEdits, plan, auto, dontAsk, bypassPermissions."
+            ),
+            (
+                amended(replacing: "works_in: a-life", with: "works_in: garden"),
+                "agents.yaml: agents[0].works_in \"garden\" isn't somewhere a character can work. It can be lot, the lot the characters share, or a-life, a checkout of the a*life repository."
             ),
             (
                 amended(replacing: "changes_things: true", with: "changes_things: sometimes"),

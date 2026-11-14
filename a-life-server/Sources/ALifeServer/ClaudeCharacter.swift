@@ -16,8 +16,10 @@ import Vapor
 ///   helper out, until the subagent reports back. Each character has one
 ///   subagent of its own, defined with `--agents`: see `Character.helper`.
 ///
-/// The CLI starts with the first message of a conversation and keeps
-/// running, so the character remembers what was said. Starting over stops
+/// The CLI runs where the character works: on the lot, or in the a*life
+/// checkout for the Engineer (`Character.workspace`). It starts with the
+/// first message of a conversation and keeps running, so the character
+/// remembers what was said. Starting over stops
 /// it; the next message starts a fresh session. If the CLI stops on its own,
 /// the next message resumes the same session.
 actor ClaudeCharacter: SessionBackend {
@@ -163,7 +165,7 @@ actor ClaudeCharacter: SessionBackend {
         if let connection { return connection }
         let connection: any ClaudeCodeConnection
         do {
-            connection = try claudeCode.launch(arguments)
+            connection = try claudeCode.launch(arguments, in: character.workspace)
         } catch {
             logger.error("Couldn't start Claude Code for \(character.name): \(error)")
             throw Abort(.serviceUnavailable, reason: "Couldn't start Claude Code for \(character.name): \(error)")
