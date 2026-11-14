@@ -108,7 +108,7 @@ A session's `{id}` is its character's, such as `gardener` or `builder`, and neve
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, status, what it is doing, messages, pending approvals, last sequence number. |
+| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, status, what it is doing, messages, pending approvals, helpers out, last sequence number. |
 | `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
 | `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
 | `POST` | `/v1/sessions/{id}/messages` | `{"text": "…"}` | Says something to the character. Works while it is busy: it answers at its next step. `409` while it waits for an approval. |
@@ -146,6 +146,8 @@ A front end follows every session at once: it reads `GET /v1/sessions` to learn 
 | `message` | `message` | A line of the conversation: `id`, `kind` (`user`, `agent`, `error`), `speaker`, `text`. |
 | `approval.requested` | `approval` | A tool call needs a yes or no: `id`, `tool_name`, `input`. |
 | `approval.resolved` | `approval_id` | It was answered, or is no longer needed. |
+| `subagent.started` | `subagent` | The character sent a helper (a subagent) off to do part of its work: `id`, `task`. |
+| `subagent.finished` | `subagent_id` | The helper reported back to the character, or was called back because the character was stopped or started over. |
 
 Clients skip event types they don't know, so new ones can be added.
 
@@ -153,8 +155,10 @@ Clients skip event types they don't know, so new ones can be added.
 
 `configure.swift` sets up the cast: a `DummyCharacter` for each, with a session of its own.
 
-- The **Gardener** only looks. It reads, then searches, then reports back. It never asks for permission, like a Claude Code session in plan mode.
-- The **Builder** changes things. It reads, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back.
+- The **Gardener** only looks. It reads, then sends two helpers off at once, one to search the flower beds and one to check the hedges, and reports back once both have reported back to it. It never asks for permission, like a Claude Code session in plan mode.
+- The **Builder** changes things. It reads, sends a helper off to measure the north corner and waits for it, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back.
+
+The helpers stand in for a Claude Code session's subagents. Each one is out for a few steps (the Gardener's for four and six, the Builder's for four) and takes no messages of its own; while they are out, the character's activity is `agent`.
 
 Both can be talked to while they work: something said mid-task is answered at the next step ("Still on … Right now I'm …") and the work carries on. Something said after the last step becomes the next instruction. While the Builder waits for an approval, messages to it are refused with `409` until the approval is answered.
 
@@ -164,7 +168,7 @@ Each step takes 1.5 seconds. Set `ALIFE_DUMMY_STEP_MS` to change that:
 ALIFE_DUMMY_STEP_MS=300 swift run ALifeServer
 ```
 
-An interrupt stops one character and leaves the others be. Nothing is saved: restarting the server starts every session afresh.
+An interrupt stops one character and leaves the others be, and calls back any helpers it has out. Nothing is saved: restarting the server starts every session afresh.
 
 To add a character, add a line to `cast` in `configure.swift`. The front ends pick it up when they next connect.
 
@@ -194,4 +198,4 @@ A real session, such as one Claude Code session per character, is another type t
 swift test
 ```
 
-The tests start the server on a free local port and drive it with the real client package: each character in a session of its own, the Builder's approval, a second front end joining late, starting one session over, interrupting one character while the other carries on, a question answered mid-task, reconnecting mid-session, and bad requests.
+The tests start the server on a free local port and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.

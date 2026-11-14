@@ -12,6 +12,8 @@ final class SessionStateTests: XCTestCase {
             .message(Message(id: "m1", kind: .agent, speaker: "Gardener", text: "Trimmed the bushes")),
             .approvalRequested(Approval(id: "p1", toolName: "bash", input: "ls")),
             .approvalResolved(approvalID: "p1"),
+            .subagentStarted(Subagent(id: "s1", task: "Search the flower beds")),
+            .subagentFinished(subagentID: "s1"),
         ]
         for (index, event) in events.enumerated() {
             let envelope = EventEnvelope(seq: index + 1, event: event)
@@ -28,6 +30,13 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(event?["type"] as? String, "approval.requested")
         XCTAssertEqual((event?["approval"] as? [String: Any])?["tool_name"] as? String, "bash")
 
+        let started = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SessionEvent.subagentStarted(Subagent(id: "s1", task: "Count the snails")))) as? [String: Any]
+        XCTAssertEqual(started?["type"] as? String, "subagent.started")
+        XCTAssertEqual((started?["subagent"] as? [String: Any])?["task"] as? String, "Count the snails")
+        let finished = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SessionEvent.subagentFinished(subagentID: "s1"))) as? [String: Any]
+        XCTAssertEqual(finished?["type"] as? String, "subagent.finished")
+        XCTAssertEqual(finished?["subagent_id"] as? String, "s1")
+
         var state = SessionState(id: "builder", name: "Builder")
         state.apply(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "c1")))
         state.apply(EventEnvelope(seq: 2, event: .statusChanged(.idle, stopReason: .endTurn)))
@@ -43,6 +52,38 @@ final class SessionStateTests: XCTestCase {
         let json = #"[{"seq":1,"event":{"type":"weather.changed","sky":"rain"}},{"seq":2,"event":{"type":"session.status","status":"napping","stop_reason":"bored"}}]"#
         let envelopes = try JSONDecoder().decode([EventEnvelope].self, from: Data(json.utf8))
         XCTAssertEqual(envelopes.map(\.event), [.unknown(type: "weather.changed"), .statusChanged(.unknown, stopReason: .unknown)])
+    }
+
+    func testASnapshotFromBeforeThereWereHelpersStillDecodes() throws {
+        let json = #"{"id":"gardener","name":"Gardener","status":"idle","messages":[],"approvals":[],"last_seq":3}"#
+        let state = try JSONDecoder().decode(SessionState.self, from: Data(json.utf8))
+        XCTAssertEqual(state.id, "gardener")
+        XCTAssertEqual(state.lastSeq, 3)
+        XCTAssertTrue(state.subagents.isEmpty)
+    }
+
+    func testHelpersComeAndGo() {
+        var state = SessionState(id: "gardener", name: "Gardener")
+        let beds = Subagent(id: "s1", task: "Search the flower beds")
+        let snails = Subagent(id: "s2", task: "Count the snails")
+        let events: [SessionEvent] = [
+            .conversationStarted(conversationID: "c1"),
+            .subagentStarted(beds),
+            .subagentStarted(snails),
+            .subagentStarted(beds), // a repeat changes nothing
+        ]
+        for (index, event) in events.enumerated() {
+            state.apply(EventEnvelope(seq: index + 1, event: event))
+        }
+        XCTAssertEqual(state.subagents, [beds, snails])
+
+        // One that has reported back is no longer listed.
+        state.apply(EventEnvelope(seq: 5, event: .subagentFinished(subagentID: "s1")))
+        XCTAssertEqual(state.subagents, [snails])
+
+        // A new conversation has no helpers out.
+        state.apply(EventEnvelope(seq: 6, event: .conversationStarted(conversationID: "c2")))
+        XCTAssertTrue(state.subagents.isEmpty)
     }
 
     func testApplyingEventsBuildsTheState() {

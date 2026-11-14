@@ -15,6 +15,10 @@ public enum SessionEvent: Equatable, Sendable {
     case approvalRequested(Approval)
     /// The approval was answered or is no longer needed.
     case approvalResolved(approvalID: String)
+    /// The character sent a helper off to do part of its work.
+    case subagentStarted(Subagent)
+    /// The helper reported back to the character, or was stopped.
+    case subagentFinished(subagentID: String)
     /// An event type this version doesn't know. It is skipped.
     case unknown(type: String)
 
@@ -27,6 +31,8 @@ public enum SessionEvent: Equatable, Sendable {
         case .message: return "message"
         case .approvalRequested: return "approval.requested"
         case .approvalResolved: return "approval.resolved"
+        case .subagentStarted: return "subagent.started"
+        case .subagentFinished: return "subagent.finished"
         case .unknown(let type): return type
         }
     }
@@ -34,10 +40,11 @@ public enum SessionEvent: Equatable, Sendable {
 
 extension SessionEvent: Codable {
     enum CodingKeys: String, CodingKey {
-        case type, status, activity, message, approval
+        case type, status, activity, message, approval, subagent
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case approvalID = "approval_id"
+        case subagentID = "subagent_id"
     }
 
     public init(from decoder: Decoder) throws {
@@ -59,6 +66,10 @@ extension SessionEvent: Codable {
             self = .approvalRequested(try container.decode(Approval.self, forKey: .approval))
         case "approval.resolved":
             self = .approvalResolved(approvalID: try container.decode(String.self, forKey: .approvalID))
+        case "subagent.started":
+            self = .subagentStarted(try container.decode(Subagent.self, forKey: .subagent))
+        case "subagent.finished":
+            self = .subagentFinished(subagentID: try container.decode(String.self, forKey: .subagentID))
         default:
             self = .unknown(type: type)
         }
@@ -81,6 +92,10 @@ extension SessionEvent: Codable {
             try container.encode(approval, forKey: .approval)
         case .approvalResolved(let approvalID):
             try container.encode(approvalID, forKey: .approvalID)
+        case .subagentStarted(let subagent):
+            try container.encode(subagent, forKey: .subagent)
+        case .subagentFinished(let subagentID):
+            try container.encode(subagentID, forKey: .subagentID)
         case .unknown:
             break
         }
@@ -120,6 +135,9 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     public var activity: String?
     public var messages: [Message] = []
     public var approvals: [Approval] = []
+    /// The helpers out working for the character right now. One that has
+    /// reported back is no longer listed.
+    public var subagents: [Subagent] = []
     /// Sequence number of the last event applied.
     public var lastSeq = 0
 
@@ -149,6 +167,12 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
             }
         case .approvalResolved(let approvalID):
             approvals.removeAll { $0.id == approvalID }
+        case .subagentStarted(let subagent):
+            if !subagents.contains(where: { $0.id == subagent.id }) {
+                subagents.append(subagent)
+            }
+        case .subagentFinished(let subagentID):
+            subagents.removeAll { $0.id == subagentID }
         case .unknown:
             break
         }
@@ -156,9 +180,24 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, status, activity, messages, approvals
+        case id, name, status, activity, messages, approvals, subagents
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case lastSeq = "last_seq"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
+        status = try container.decode(RunStatus.self, forKey: .status)
+        stopReason = try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
+        activity = try container.decodeIfPresent(String.self, forKey: .activity)
+        messages = try container.decode([Message].self, forKey: .messages)
+        approvals = try container.decode([Approval].self, forKey: .approvals)
+        // Servers from before there were helpers don't send any.
+        subagents = try container.decodeIfPresent([Subagent].self, forKey: .subagents) ?? []
+        lastSeq = try container.decode(Int.self, forKey: .lastSeq)
     }
 }

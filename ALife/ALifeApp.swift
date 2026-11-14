@@ -12,8 +12,11 @@ struct ALifeApp: App {
         _server = State(initialValue: ServerConnection())
 
         TileComponent.registerComponent()
+        LotComponent.registerComponent()
         WalkComponent.registerComponent()
+        SheepComponent.registerComponent()
         WalkSystem.registerSystem()
+        SheepSystem.registerSystem()
     }
 
     // Spelled out because RealityKit has a `Scene` type too.
