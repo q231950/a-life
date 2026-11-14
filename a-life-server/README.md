@@ -69,7 +69,6 @@ All optional, as environment variables:
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
-| `ALIFE_DUMMY_STEP_MS` | How long each step of a dummy's script takes. |
 
 ```sh
 ALIFE_CLAUDE_MODEL=haiku ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
@@ -214,10 +213,10 @@ Each helper is out for a few steps (the Gardener's for four and six, the Builder
 
 Both can be talked to while they work: something said mid-task is answered at the next step ("Still on … Right now I'm …") and the work carries on. Something said after the last step becomes the next instruction. While the Builder waits for an approval, messages to it are refused with `409` until the approval is answered.
 
-Each step takes 1.5 seconds. Set `ALIFE_DUMMY_STEP_MS` to change that:
+Each step takes 1.5 seconds.
 
 ```sh
-ALIFE_BACKEND=dummy ALIFE_DUMMY_STEP_MS=300 swift run ALifeServer
+ALIFE_BACKEND=dummy swift run ALifeServer
 ```
 
 An interrupt stops one character and leaves the others be, and calls back any helpers it has out.

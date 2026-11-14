@@ -17,14 +17,11 @@ enum Players: Sendable {
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
-    /// - `ALIFE_DUMMY_STEP_MS`: how long each step of a dummy's script takes,
-    ///   1500 unless set.
     static func fromEnvironment(logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
         case "dummy", "dummies":
-            let step = environment["ALIFE_DUMMY_STEP_MS"].flatMap(Int.init).map(Duration.milliseconds)
-            return .dummies(step: step ?? .milliseconds(1500))
+            return .dummies(step: .milliseconds(1500))
         case "claude":
             guard let executable = ClaudeCode.findExecutable(in: environment) else {
                 throw ConfigurationError(
