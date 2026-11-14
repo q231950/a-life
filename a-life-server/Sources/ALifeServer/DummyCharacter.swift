@@ -21,16 +21,7 @@ import Vapor
 /// approval is refused: answer the approval first. Anything said after the
 /// last step becomes the next instruction.
 actor DummyCharacter: SessionBackend {
-    struct Profile: Sendable {
-        /// Used in the session's URLs, such as `gardener`.
-        let id: String
-        let name: String
-        /// Whether the character changes things, and so asks before it runs
-        /// a command.
-        let changesThings: Bool
-    }
-
-    private let profile: Profile
+    private let profile: Character
     private let hub: SessionHub
     private let step: Duration
 
@@ -43,7 +34,7 @@ actor DummyCharacter: SessionBackend {
     /// The helpers that are out and haven't reported back yet, by id.
     private var helpersOut: [String] = []
 
-    init(_ profile: Profile, hub: SessionHub, step: Duration) {
+    init(_ profile: Character, hub: SessionHub, step: Duration) {
         self.profile = profile
         self.hub = hub
         self.step = step
