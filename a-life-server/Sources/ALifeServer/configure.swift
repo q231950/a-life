@@ -9,15 +9,18 @@ enum Players: Sendable {
     /// step of the script takes `step`.
     case dummies(step: Duration)
 
-    /// From the environment:
+    /// From the environment, for `cast`:
     ///
     /// - `ALIFE_BACKEND`: `claude` (the default) or `dummy`.
     /// - `ALIFE_LOT_DIR`: the directory the characters work in, `~/a-life-lot`
     ///   unless set. It is made if it isn't there.
+    /// - `ALIFE_REPO_DIR`: the a*life checkout the characters who work on
+    ///   a*life work in, such as the Engineer. The checkout the server was
+    ///   built from unless set.
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
-    static func fromEnvironment(logger: Logger) throws -> Players {
+    static func fromEnvironment(for cast: [Character], logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
         case "dummy", "dummies":
@@ -32,9 +35,18 @@ enum Players: Sendable {
             let lot = environment["ALIFE_LOT_DIR"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
                 ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-lot")
             try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
+            let repository = try ClaudeCode.findRepository(in: environment)
             let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             logger.notice("The characters are Claude Code sessions (\(executable.path)), working on the lot in \(lot.path)")
-            return .claudeCode(ClaudeCode(executable: executable, lot: lot, model: model))
+            let onALife = cast.filter { $0.workspace == .aLife }.map(\.name).joined(separator: ", ")
+            if !onALife.isEmpty {
+                if let repository {
+                    logger.notice("Working on a*life, in \(repository.path): \(onALife)")
+                } else {
+                    logger.warning("There's no a*life checkout for \(onALife) to work in. Set ALIFE_REPO_DIR to one.")
+                }
+            }
+            return .claudeCode(ClaudeCode(executable: executable, lot: lot, repository: repository, model: model))
         case let other:
             throw ConfigurationError("ALIFE_BACKEND is \(other); it can be claude or dummy.")
         }
@@ -54,10 +66,7 @@ struct ConfigurationError: Error, CustomStringConvertible {
 /// from the agents file, `ALIFE_AGENTS_FILE` or the shipped `agents.yaml`.
 func configure(_ app: Application, players: Players? = nil, cast: [Character]? = nil) async throws {
     let cast = try cast ?? loadCast(logger: app.logger)
-    let players = try players ?? Players.fromEnvironment(logger: app.logger)
-    if case .claudeCode = players {
-        reportCloudSession(for: cast, logger: app.logger)
-    }
+    let players = try players ?? Players.fromEnvironment(for: cast, logger: app.logger)
 
     var sessions: [HostedSession] = []
     for character in cast {
@@ -85,22 +94,6 @@ private func loadCast(logger: Logger) throws -> [Character] {
     let cast = try Cast.load(contentsOf: file)
     logger.notice("On the lot: \(cast.map(\.name).joined(separator: ", ")), from \(file.path)")
     return cast
-}
-
-/// Says where the cloud jobs go, if any character's instructions use
-/// `ALIFE_CLOUD_SESSION`, such as the Engineer's. The characters' shells
-/// inherit it from the server.
-private func reportCloudSession(for cast: [Character], logger: Logger) {
-    let names = cast
-        .filter { $0.role.contains("ALIFE_CLOUD_SESSION") || $0.helper.prompt.contains("ALIFE_CLOUD_SESSION") }
-        .map(\.name)
-        .joined(separator: ", ")
-    guard !names.isEmpty else { return }
-    if let session = ProcessInfo.processInfo.environment["ALIFE_CLOUD_SESSION"], !session.isEmpty {
-        logger.notice("Cloud jobs from \(names) go to the cloud session \(session)")
-    } else {
-        logger.warning("ALIFE_CLOUD_SESSION isn't set, so \(names) can't send jobs to the cloud. Set it to a session in the a*life cloud environment.")
-    }
 }
 
 /// When the server stops, ends the open event streams, so shutdown doesn't

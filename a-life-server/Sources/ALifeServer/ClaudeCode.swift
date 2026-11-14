@@ -3,8 +3,9 @@ import Foundation
 /// Starts Claude Code sessions. `ClaudeCode` runs the real CLI; the tests
 /// put a stand-in here.
 protocol ClaudeCodeLauncher: Sendable {
-    /// Starts a Claude Code CLI with these arguments, talking stream-json.
-    func launch(_ arguments: [String]) throws -> any ClaudeCodeConnection
+    /// Starts a Claude Code CLI with these arguments, talking stream-json,
+    /// working in `workspace`.
+    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection
 }
 
 /// One running Claude Code CLI, as the Agent SDK talks to it: messages go
@@ -21,16 +22,33 @@ protocol ClaudeCodeConnection: AnyObject, Sendable {
 }
 
 /// The Claude Code installed on this machine: the `claude` command, run in
-/// the lot's directory, with whatever login and settings it already has.
+/// the directory its character works in, with whatever login and settings
+/// it already has.
 struct ClaudeCode: ClaudeCodeLauncher {
     /// The `claude` command.
     let executable: URL
-    /// The working directory of every session: the lot the characters share.
+    /// The working directory of the characters who work on the lot, which
+    /// they share.
     let lot: URL
+    /// The working directory of the characters who work on a*life itself,
+    /// such as the Engineer: a checkout of the a*life repository. `nil` if
+    /// there is none, and then they can't start.
+    var repository: URL?
     /// The model for every character, or `nil` for Claude Code's default.
     var model: String?
 
-    func launch(_ arguments: [String]) throws -> any ClaudeCodeConnection {
+    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
+        let directory: URL
+        switch workspace {
+        case .lot:
+            directory = lot
+        case .aLife:
+            guard let repository else {
+                throw ConfigurationError("There's no a*life checkout to work in. Set ALIFE_REPO_DIR to one and restart the server.")
+            }
+            directory = repository
+        }
+
         var environment = ProcessInfo.processInfo.environment
         // A server started from inside a Claude Code session inherits these;
         // they'd make the character think it runs inside that session.
@@ -39,21 +57,43 @@ struct ClaudeCode: ClaudeCodeLauncher {
         // Helpers run in the foreground: the character waits for each one to
         // report back before it carries on, the way the lot shows it.
         environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
-        // `claude` in a character's shell is this one, even when the server
-        // found it off the `PATH`. The Engineer's technician runs it to hand
-        // work to the cloud.
-        let directory = executable.deletingLastPathComponent().path
-        let path = environment["PATH"] ?? ""
-        environment["PATH"] = path.isEmpty ? directory : "\(directory):\(path)"
 
         var arguments = arguments
         if let model { arguments += ["--model", model] }
         return try ClaudeCodeProcess(
             executable: executable,
             arguments: arguments,
-            workingDirectory: lot,
+            workingDirectory: directory,
             environment: environment
         )
+    }
+
+    /// The a*life checkout the characters who work on a*life work in:
+    /// `ALIFE_REPO_DIR` if it is set, otherwise the checkout this server was
+    /// built from, if it is still there. Throws if `ALIFE_REPO_DIR` isn't a
+    /// directory.
+    static func findRepository(in environment: [String: String] = ProcessInfo.processInfo.environment) throws -> URL? {
+        if let path = environment["ALIFE_REPO_DIR"], !path.isEmpty {
+            let repository = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: repository.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                throw ConfigurationError("ALIFE_REPO_DIR is \(path), which isn't a directory. Set it to a checkout of a*life.")
+            }
+            return repository
+        }
+        return builtFrom
+    }
+
+    /// The a*life checkout this server was built from, if it is still there:
+    /// the one this file is in, at `a-life-server/Sources/ALifeServer/`.
+    static var builtFrom: URL? {
+        let checkout = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // ALifeServer
+            .deletingLastPathComponent() // Sources
+            .deletingLastPathComponent() // a-life-server
+            .deletingLastPathComponent()
+        let server = checkout.appendingPathComponent("a-life-server/Package.swift").path
+        return FileManager.default.fileExists(atPath: server) ? checkout : nil
     }
 
     /// The `claude` command: `ALIFE_CLAUDE_PATH` if it is set, otherwise the

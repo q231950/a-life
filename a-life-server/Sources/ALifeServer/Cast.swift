@@ -18,11 +18,24 @@ struct Character: Equatable, Sendable {
     /// Claude Code's permission mode for the character's session, which
     /// decides what it asks you about before it goes ahead.
     let permissionMode: String
+    /// Where the character's session works: on the lot, or on a*life itself.
+    let workspace: Workspace
     /// Who the character is, added to Claude Code's own system prompt.
     let role: String
     /// The helper the character sends off to do its work: a Claude Code
     /// subagent, and a sheep on the lot while it is out.
     let helper: Helper
+}
+
+/// Where a character's Claude Code session works, as the agents file's
+/// `works_in` says.
+enum Workspace: String, Sendable {
+    /// The lot: the directory the characters share, with the Builder's
+    /// buildings and the Gardener's beds.
+    case lot
+    /// A checkout of the a*life repository, the app and server that run the
+    /// sim, such as the Engineer works in.
+    case aLife = "a-life"
 }
 
 /// A subagent a character can send off, defined for its session with
@@ -209,6 +222,7 @@ private struct AgentEntry: Decodable {
     enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, color
         case permissionMode = "permission_mode"
+        case worksIn = "works_in"
         case changesThings = "changes_things"
         case role, helper
     }
@@ -233,12 +247,21 @@ private struct AgentEntry: Decodable {
             )
         }
 
+        let worksIn = try container.optional(String.self, .worksIn) ?? Workspace.lot.rawValue
+        guard let workspace = Workspace(rawValue: worksIn) else {
+            throw FieldError(
+                container.codingPath + [CodingKeys.worksIn],
+                "\"\(worksIn)\" isn't somewhere a character can work. It can be lot, the lot the characters share, or a-life, a checkout of the a*life repository."
+            )
+        }
+
         character = Character(
             id: id,
             name: try container.text(.name),
             color: color,
             changesThings: try container.optional(Bool.self, .changesThings) ?? false,
             permissionMode: permissionMode,
+            workspace: workspace,
             role: try container.text(.role),
             helper: try container.decode(HelperEntry.self, forKey: .helper).helper
         )

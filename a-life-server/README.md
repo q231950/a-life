@@ -4,7 +4,7 @@ The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) 
 
 It holds one session per character on the lot. **Each character is a Claude Code session of its own**, run by the Claude Code installed on your Mac: its conversation, what it is doing, the helpers (subagents) it has sent off, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
 
-The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it. The Engineer works on a\*life itself instead, by handing jobs to a Claude Code session in the a\*life cloud environment. See [The characters](#the-characters).
+The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it. The Engineer works on a\*life itself instead, in your a\*life checkout. See [The characters](#the-characters).
 
 If you'd rather not spend tokens, the server can also run dummy characters that play a short script. See [The dummy characters](#the-dummy-characters).
 
@@ -66,11 +66,11 @@ All optional, as environment variables:
 | Variable | What it does |
 |---|---|
 | `ALIFE_LOT_DIR` | The directory the characters work in. `~/a-life-lot` unless set; it is made if it isn't there. |
+| `ALIFE_REPO_DIR` | The a\*life checkout the Engineer works in. The checkout the server was built from unless set. See [The Engineer and the a\*life checkout](#the-engineer-and-the-alife-checkout). |
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters. The shipped [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) unless set. See [The agents file](#the-agents-file). |
-| `ALIFE_CLOUD_SESSION` | The cloud session the Engineer sends its jobs to: its ID (`session_...`) or its claude.ai/code link. See [The Engineer and the a\*life cloud environment](#the-engineer-and-the-alife-cloud-environment). |
 
 ```sh
 ALIFE_CLAUDE_MODEL=haiku ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
@@ -175,43 +175,17 @@ Clients skip event types they don't know, so new ones can be added.
 
 ## The characters
 
-The characters are listed in the [agents file](#the-agents-file). Each character is one Claude Code session, started the way the Agent SDK starts one: the `claude` CLI in print mode, with stream-json going in on its stdin and coming out of its stdout, in the lot's directory. Each character is told who it is (`--append-system-prompt`), and has one helper of its own, a subagent defined for its session with `--agents`:
+The characters are listed in the [agents file](#the-agents-file). Each character is one Claude Code session, started the way the Agent SDK starts one: the `claude` CLI in print mode, with stream-json going in on its stdin and coming out of its stdout, in the lot's directory (the Engineer's in your a\*life checkout). Each character is told who it is (`--append-system-prompt`), and has one helper of its own, a subagent defined for its session with `--agents`:
 
 | Character | Its helper | What the helper does | Asks you before |
 |---|---|---|---|
 | **Builder** | `construction-worker` | Builds buildings: writes `buildings/<name>.md` with where on the lot it stands, its rooms and a floor plan, or edits one that's there. | every change (Claude Code's `default` permission mode) |
 | **Gardener** | `planter` | Plants plants: writes `garden/<bed>.md` with what grows where, how many and how far apart, or edits a bed that's there. | anything but changes to files on the lot (`acceptEdits`) |
-| **Engineer** | `technician` | Takes a job on a\*life itself (the app and server in `q231950/a-life`) to a Claude Code session in the a\*life cloud environment, with `claude -p --cloud`. | every command (`default`) |
+| **Engineer** | `a-life-expert` | Changes a\*life itself, the app, `ALifeKit` and this server, in your a\*life checkout: knows its way around all of it, makes the change, keeps the tests and READMEs in step, and runs the tests. | every change and command (`default`) |
 
 Each character has a colour of its own, which the front ends dress it in: the Gardener's shirt is red, the Builder's orange and the Engineer's purple. Its helpers' sheep wear the same colour.
 
-Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Gardener works the same way with its planter, but its changes to files on the lot go ahead without asking. Their helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them. The Engineer's technician has only Bash, for the one command that hands a job to the cloud.
-
-### The Engineer and the a\*life cloud environment
-
-The Engineer doesn't work on the lot. It works on a\*life itself, the app and this server, in your **a\*life** cloud environment: the [cloud environment](https://code.claude.com/docs/en/cloud-environments) on claude.ai that has the `q231950/a-life` repository. Tell it "make the sheep jump when they take off" and it writes the job up so that it stands on its own, and sends its technician off. The technician runs
-
-```sh
-claude -p --cloud "${ALIFE_CLOUD_SESSION:?not set}" <<'ALIFE_JOB'
-<the job>
-ALIFE_JOB
-```
-
-which asks you first, like every command the Engineer's session runs (`technician: claude -p --cloud …`). Once allowed, the job is [queued in the cloud session](https://code.claude.com/docs/en/claude-code-on-the-web#send-follow-ups-from-the-cli), and Claude Code takes it up there with the repository checked out: changing the code, running the tests and pushing a branch, as the job says. The Engineer tells you what it sent, with a link to the session on claude.ai/code. Follow the work there or in the Claude app; what the cloud session does doesn't come back to the lot.
-
-Claude Code can only start a new cloud session from an interactive terminal, so the Engineer sends every job to one session you start yourself:
-
-1. Start a session in the a\*life environment: at [claude.ai/code](https://claude.ai/code) or in the Claude app, pick the **a\*life** environment and the `q231950/a-life` repository and say something like "You're the a\*life Engineer's workshop. Jobs will come in as messages; do each one on a branch of its own and push it." Or, in a terminal in your a\*life checkout, run `/remote-env` once to pick **a\*life**, then `claude --cloud "..."`.
-2. Copy its ID (`session_...`) or its link.
-3. Start the server with it:
-
-   ```sh
-   ALIFE_CLOUD_SESSION=session_... swift run ALifeServer
-   ```
-
-   The server says which session the Engineer sends its jobs to when it starts, or warns that it has none. Without one, the technician's command fails and the Engineer tells you so.
-
-`claude -p --cloud` needs the CLI to be signed in with your claude.ai account (`claude auth login`), not an API key, and cloud sessions to be allowed for your account. The jobs count towards your usage like any other cloud session. The characters' shells find `claude` where the server found it.
+Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Gardener works the same way with its planter, but its changes to files on the lot go ahead without asking. Their helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them.
 
 How a session maps onto the events:
 
@@ -229,11 +203,25 @@ How a session maps onto the events:
 - **Starting over** stops the character's Claude Code session; the next thing you say starts a new one. What was built stays on the lot.
 - **If Claude Code stops by itself**, the error is shown in the conversation and the next thing you say resumes the same session (`--resume`).
 - Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
-- Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the lot's directory picks the conversation up in a terminal. The server itself keeps nothing: after a restart, every character starts a new session.
+- Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the directory the character works in (the lot, or the Engineer's a\*life checkout) picks the conversation up in a terminal. The server itself keeps nothing: after a restart, every character starts a new session.
+
+### The Engineer and the a\*life checkout
+
+The Engineer doesn't work on the lot. It works on a\*life itself, the app, `ALifeKit` and this server, as an ordinary Claude Code session in your a\*life checkout (`works_in: a-life` in the [agents file](#the-agents-file)). That is the checkout the server was built from, the one you ran `swift run` in, unless you point `ALIFE_REPO_DIR` at another, such as a second clone or a worktree that you'd rather it changed:
+
+```sh
+ALIFE_REPO_DIR=~/code/a-life-workshop swift run ALifeServer
+```
+
+The server says where the Engineer works when it starts, or warns that it can't find a checkout; the Engineer can't start until it has one.
+
+Tell it "make the sheep jump when they take off" and it works out what's wanted and sends its a\*life expert off: the `a-life-expert` subagent, which knows a\*life inside out, from what each file of the app, the package and the server does to how the code and its READMEs are written and which tests cover what. The Engineer sends it for anything that changes a\*life, and answers questions about how a\*life works itself, by reading the code. The a\*life expert has Read, Glob, Grep, Write, Edit and Bash. It looks at `git status` first, so it doesn't undo changes of your own, makes the change with its tests, runs `swift test` for the packages it touched, and reports back what it changed and how the tests went. The Engineer's session runs in the `default` permission mode, so its changes and commands ask you first, labelled with who is asking (`a-life-expert: swift test --package-path a-life-server`).
+
+It leaves its changes in the working tree for you to look over, and doesn't commit, push or switch branches unless you ask it to. A change to the server takes effect once you restart it, and a change to the app once you build it again.
 
 ### The agents file
 
-The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder and the Engineer above. Edit it and restart the server to change what a character is told, its colour, its helper or its permission mode, or to add or take away a character. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
+The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder and the Engineer above. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode or where it works, or to add or take away a character. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
 
 ```sh
 ALIFE_AGENTS_FILE=~/my-agents.yaml swift run ALifeServer
@@ -247,6 +235,7 @@ agents:
     name: Painter           # what the front ends call it
     color: "#3366CC"        # optional: its shirt, which its helper's sheep wear too
     permission_mode: acceptEdits  # optional: what Claude Code asks you before doing; default unless set
+    works_in: lot           # optional: lot, or a-life for your a*life checkout; lot unless set
     changes_things: true    # optional: the dummy's script; false unless set
     role: |                 # who it is, added to Claude Code's system prompt
       You are the Painter, a character in a*life, a little life sim. ...
@@ -265,6 +254,7 @@ agents:
 | `name` | required | What the front ends call the character. |
 | `color` | optional | Its shirt on the lot, which its helper's sheep wear too, as `"#RRGGBB"`. Quote it: in YAML, `#` starts a comment. Without one, the front ends choose. |
 | `permission_mode` | optional | [Claude Code's permission mode](https://code.claude.com/docs/en/permission-modes) for the session, which decides what it asks you before doing: `default` (or `manual`) asks before every change, `acceptEdits` lets changes to files go ahead, and `plan`, `auto`, `dontAsk` and `bypassPermissions` are also taken. `default` unless set. |
+| `works_in` | optional | Where the character's session works: `lot`, the directory the characters share, or `a-life`, your a\*life checkout, as the [Engineer](#the-engineer-and-the-alife-checkout) does. `lot` unless set. |
 | `changes_things` | optional | Only for the [dummy characters](#the-dummy-characters): `true` plays the script that asks for approval, like the Builder's. `false` unless set. |
 | `role` | required | Who the character is, added to Claude Code's own system prompt (`--append-system-prompt`). |
 | `helper.name` | required | The subagent's name, which the character uses to send it off: lowercase letters, digits and hyphens. |
@@ -272,17 +262,17 @@ agents:
 | `helper.description` | required | When to send the helper. Claude Code reads it to decide. |
 | `helper.prompt` | required | The helper's own system prompt. It runs on its character's model. |
 
-Text is passed on as written, without the line break a `|` block ends with. Write each paragraph on one line, as the shipped file does: a line break inside a `|` block reaches Claude Code as a line break. The model and the lot are the same for every character; set them with `ALIFE_CLAUDE_MODEL` and `ALIFE_LOT_DIR`.
+Text is passed on as written, without the line break a `|` block ends with. Write each paragraph on one line, as the shipped file does: a line break inside a `|` block reaches Claude Code as a line break. The model, the lot and the a\*life checkout are the same for every character; set them with `ALIFE_CLAUDE_MODEL`, `ALIFE_LOT_DIR` and `ALIFE_REPO_DIR`.
 
 The server checks the whole file when it starts and won't start if anything is wrong, saying what and where:
 
 ```
 agents.yaml: agents[2].color should be a colour like "#8050C8", not "purple".
-agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, changes_things, role and helper.
+agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, changes_things, role and helper.
 agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an id of its own.
 ```
 
-A field it doesn't know is refused rather than ignored, so a typo doesn't quietly leave a character with a default. If a character's instructions use `ALIFE_CLOUD_SESSION`, as the Engineer's technician's do, the server says at startup where those jobs go, or warns that it isn't set.
+A field it doesn't know is refused rather than ignored, so a typo doesn't quietly leave a character with a default.
 
 ## The dummy characters
 
@@ -324,7 +314,7 @@ The routes know nothing about what plays a character. For each session they talk
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
 | `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
-| `ClaudeCode.swift` | Finds and starts the `claude` CLI, and reads and writes its stream-json, one message per line. |
+| `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, starts the CLI where its character works, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in. |
 
@@ -336,7 +326,7 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, and finding the a\*life checkout.
 
 `CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
 
