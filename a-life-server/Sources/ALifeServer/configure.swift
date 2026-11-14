@@ -17,9 +17,6 @@ enum Players: Sendable {
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
-    /// - `ALIFE_CLOUD_SESSION`: the cloud session, in the a*life cloud
-    ///   environment, that the Engineer sends its work to. Its technician
-    ///   reads it from the environment it inherits.
     static func fromEnvironment(logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
@@ -37,11 +34,6 @@ enum Players: Sendable {
             try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
             let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             logger.notice("The characters are Claude Code sessions (\(executable.path)), working on the lot in \(lot.path)")
-            if let cloudSession = environment["ALIFE_CLOUD_SESSION"], !cloudSession.isEmpty {
-                logger.notice("The Engineer sends its work to the cloud session \(cloudSession)")
-            } else {
-                logger.warning("The Engineer has no cloud session to send its work to. Set ALIFE_CLOUD_SESSION to one in the a*life cloud environment.")
-            }
             return .claudeCode(ClaudeCode(executable: executable, lot: lot, model: model))
         case let other:
             throw ConfigurationError("ALIFE_BACKEND is \(other); it can be claude or dummy.")
@@ -57,10 +49,15 @@ struct ConfigurationError: Error, CustomStringConvertible {
     }
 }
 
-/// Sets the server up with a session per character, played by `players`,
-/// or as the environment says if `nil`.
-func configure(_ app: Application, players: Players? = nil) async throws {
+/// Sets the server up with a session per character in `cast`, played by
+/// `players`. Each is as the environment says if `nil`: the cast is read
+/// from the agents file, `ALIFE_AGENTS_FILE` or the shipped `agents.yaml`.
+func configure(_ app: Application, players: Players? = nil, cast: [Character]? = nil) async throws {
+    let cast = try cast ?? loadCast(logger: app.logger)
     let players = try players ?? Players.fromEnvironment(logger: app.logger)
+    if case .claudeCode = players {
+        reportCloudSession(for: cast, logger: app.logger)
+    }
 
     var sessions: [HostedSession] = []
     for character in cast {
@@ -79,6 +76,31 @@ func configure(_ app: Application, players: Players? = nil) async throws {
 
     app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions))
     routes(app, sessions: sessions)
+}
+
+/// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
+/// shipped one.
+private func loadCast(logger: Logger) throws -> [Character] {
+    let file = Cast.file(in: ProcessInfo.processInfo.environment)
+    let cast = try Cast.load(contentsOf: file)
+    logger.notice("On the lot: \(cast.map(\.name).joined(separator: ", ")), from \(file.path)")
+    return cast
+}
+
+/// Says where the cloud jobs go, if any character's instructions use
+/// `ALIFE_CLOUD_SESSION`, such as the Engineer's. The characters' shells
+/// inherit it from the server.
+private func reportCloudSession(for cast: [Character], logger: Logger) {
+    let names = cast
+        .filter { $0.role.contains("ALIFE_CLOUD_SESSION") || $0.helper.prompt.contains("ALIFE_CLOUD_SESSION") }
+        .map(\.name)
+        .joined(separator: ", ")
+    guard !names.isEmpty else { return }
+    if let session = ProcessInfo.processInfo.environment["ALIFE_CLOUD_SESSION"], !session.isEmpty {
+        logger.notice("Cloud jobs from \(names) go to the cloud session \(session)")
+    } else {
+        logger.warning("ALIFE_CLOUD_SESSION isn't set, so \(names) can't send jobs to the cloud. Set it to a session in the a*life cloud environment.")
+    }
 }
 
 /// When the server stops, ends the open event streams, so shutdown doesn't

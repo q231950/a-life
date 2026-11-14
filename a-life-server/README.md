@@ -69,6 +69,7 @@ All optional, as environment variables:
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
+| `ALIFE_AGENTS_FILE` | The agents file, which lists the characters. The shipped [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) unless set. See [The agents file](#the-agents-file). |
 | `ALIFE_CLOUD_SESSION` | The cloud session the Engineer sends its jobs to: its ID (`session_...`) or its claude.ai/code link. See [The Engineer and the a\*life cloud environment](#the-engineer-and-the-alife-cloud-environment). |
 
 ```sh
@@ -174,7 +175,7 @@ Clients skip event types they don't know, so new ones can be added.
 
 ## The characters
 
-`Cast.swift` sets up the cast. Each character is one Claude Code session, started the way the Agent SDK starts one: the `claude` CLI in print mode, with stream-json going in on its stdin and coming out of its stdout, in the lot's directory. Each character is told who it is (`--append-system-prompt`), and has one helper of its own, a subagent defined for its session with `--agents`:
+The characters are listed in the [agents file](#the-agents-file). Each character is one Claude Code session, started the way the Agent SDK starts one: the `claude` CLI in print mode, with stream-json going in on its stdin and coming out of its stdout, in the lot's directory. Each character is told who it is (`--append-system-prompt`), and has one helper of its own, a subagent defined for its session with `--agents`:
 
 | Character | Its helper | What the helper does | Asks you before |
 |---|---|---|---|
@@ -230,7 +231,58 @@ How a session maps onto the events:
 - Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
 - Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the lot's directory picks the conversation up in a terminal. The server itself keeps nothing: after a restart, every character starts a new session.
 
-To change what a character is told, its colour, its helper, or its permission mode, edit `Cast.swift`. To add a character, add one there and to `cast`. The front ends pick it up when they next connect.
+### The agents file
+
+The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder and the Engineer above. Edit it and restart the server to change what a character is told, its colour, its helper or its permission mode, or to add or take away a character. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
+
+```sh
+ALIFE_AGENTS_FILE=~/my-agents.yaml swift run ALifeServer
+```
+
+The front ends pick the cast up when they next connect. Each character is one entry under `agents`, in the order the front ends list them:
+
+```yaml
+agents:
+  - id: painter             # the session's id, used in its URLs
+    name: Painter           # what the front ends call it
+    color: "#3366CC"        # optional: its shirt, which its helper's sheep wear too
+    permission_mode: acceptEdits  # optional: what Claude Code asks you before doing; default unless set
+    changes_things: true    # optional: the dummy's script; false unless set
+    role: |                 # who it is, added to Claude Code's system prompt
+      You are the Painter, a character in a*life, a little life sim. ...
+    helper:                 # the subagent it sends off to do its work
+      name: brush
+      tools: [Read, Glob, Grep, Write, Edit]
+      description: |        # when to send it; Claude Code reads this to decide
+        The Painter's brush. Paints the walls of buildings on the lot.
+      prompt: |             # the helper's own system prompt
+        You are the Painter's brush in a*life, a little life sim. ...
+```
+
+| Field | | What it is |
+|---|---|---|
+| `id` | required | The session's id, which its URLs use, such as `/v1/sessions/painter`: lowercase letters, digits and hyphens. No two agents can share one. |
+| `name` | required | What the front ends call the character. |
+| `color` | optional | Its shirt on the lot, which its helper's sheep wear too, as `"#RRGGBB"`. Quote it: in YAML, `#` starts a comment. Without one, the front ends choose. |
+| `permission_mode` | optional | [Claude Code's permission mode](https://code.claude.com/docs/en/permission-modes) for the session, which decides what it asks you before doing: `default` (or `manual`) asks before every change, `acceptEdits` lets changes to files go ahead, and `plan`, `auto`, `dontAsk` and `bypassPermissions` are also taken. `default` unless set. |
+| `changes_things` | optional | Only for the [dummy characters](#the-dummy-characters): `true` plays the script that asks for approval, like the Builder's. `false` unless set. |
+| `role` | required | Who the character is, added to Claude Code's own system prompt (`--append-system-prompt`). |
+| `helper.name` | required | The subagent's name, which the character uses to send it off: lowercase letters, digits and hyphens. |
+| `helper.tools` | required | The Claude Code tools the helper may use, such as `[Read, Write]`. At least one. |
+| `helper.description` | required | When to send the helper. Claude Code reads it to decide. |
+| `helper.prompt` | required | The helper's own system prompt. It runs on its character's model. |
+
+Text is passed on as written, without the line break a `|` block ends with. Write each paragraph on one line, as the shipped file does: a line break inside a `|` block reaches Claude Code as a line break. The model and the lot are the same for every character; set them with `ALIFE_CLAUDE_MODEL` and `ALIFE_LOT_DIR`.
+
+The server checks the whole file when it starts and won't start if anything is wrong, saying what and where:
+
+```
+agents.yaml: agents[2].color should be a colour like "#8050C8", not "purple".
+agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, changes_things, role and helper.
+agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an id of its own.
+```
+
+A field it doesn't know is refused rather than ignored, so a typo doesn't quietly leave a character with a default. If a character's instructions use `ALIFE_CLOUD_SESSION`, as the Engineer's technician's do, the server says at startup where those jobs go, or warns that it isn't set.
 
 ## The dummy characters
 
@@ -266,7 +318,8 @@ The routes know nothing about what plays a character. For each session they talk
 |---|---|
 | `entrypoint.swift` | Starts Vapor. |
 | `configure.swift` | Reads the settings, sets up a hub and a backend per character, and the routes. |
-| `Cast.swift` | The characters: who each one is, its colour, its permission mode, and its helper's definition. |
+| `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode and its helper. See [The agents file](#the-agents-file). |
+| `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper`. |
 | `routes.swift` | The HTTP API, including the event streams. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
@@ -284,6 +337,8 @@ swift test
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
 `ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process.
+
+`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
 
 One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It costs a little, so it only runs when asked:
 
