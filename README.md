@@ -2,7 +2,7 @@
 
 A minimal life-sim sandbox for iOS and macOS, built with SwiftUI and RealityKit. A little character walks around a 16×16 lot. Tap a tile and the character finds its way there with A* pathfinding, around the walls of a small house and some bushes.
 
-The lot also shows your agents: one character per session. Each character is a session of its own, like a separate Claude Code session: you talk to it directly, it asks you before it does anything risky, and what you tell one never reaches the others. A character walks into the house while it works, stays at its desk with a "!" over its head while it waits for your answer, and waits on the lawn otherwise. When a character sends a helper off to do part of its work (a subagent, in Claude Code terms), a little sheep in the character's colour pops up beside it and wanders the lot. Once the helper has reported back, the sheep walks back to its character, stays a moment, then spins and flies up into the sky until it's out of sight. The sessions live on a small server you run yourself, [`a-life-server`](a-life-server), which the apps reach over Tailscale. For now every character is a dummy that plays a short script.
+The lot also shows your agents: one character per session. Each character is a Claude Code session of its own, run by the Claude Code on your Mac: you talk to it directly, it asks you before it does anything risky, and what you tell one never reaches the others. A character walks into the house while it works, stays at its desk with a "!" over its head while it waits for your answer, and waits on the lawn otherwise. When a character sends a helper off to do part of its work (a subagent, in Claude Code terms), a little sheep in the character's colour pops up beside it and wanders the lot. Once the helper has reported back, the sheep walks back to its character, stays a moment, then spins and flies up into the sky until it's out of sight. The sessions live on a small server you run yourself, [`a-life-server`](a-life-server), which the apps reach over Tailscale.
 
 ## Run it
 
@@ -20,11 +20,11 @@ Requires iOS 18 / macOS 15, the first releases where `RealityView` and entity-ta
 
 The front ends don't run agents themselves. They follow each character's session on the server and send it what you say.
 
-1. Start the server on your Mac: `cd a-life-server && swift run ALifeServer`.
+1. Start the server on your Mac: `cd a-life-server && swift run ALifeServer`. It needs [Claude Code](https://code.claude.com) installed and logged in; the characters use your login and count towards your usage. (`ALIFE_BACKEND=dummy` runs scripted stand-ins instead, which cost nothing.)
 2. Run the app, open the settings (the gear at the top) and set the server's address. On the same Mac or in the simulator, press **Use this machine**. From another device, enter the HTTPS address `tailscale serve` gives you; [`a-life-server/README.md`](a-life-server/README.md) walks through that.
-3. Tap a character, or its name in the panel at the bottom, and tell it what to do. The **Gardener** looks around, sends two helpers off to search and reports back once both have; it never needs permission. The **Builder** sends a helper off to measure, then asks for approval of a command (Allow or Deny), and can't be told anything else until you answer. You can talk to a character while it works, too: it answers at its next step and carries on.
+3. Tap a character, or its name in the panel at the bottom, and tell it what to do. Tell the **Builder** "build me an office" and it sends its construction worker off, a helper that builds the office as a file in the lot's `buildings/` directory; the construction worker asks before it writes (Allow or Deny), and the Builder can't be told anything else until you answer. Ask the **Gardener** to plant something and it sends its planter off, which plants it in `garden/`; changes to the lot go ahead without asking. You can talk to a character while it works, too: Claude Code takes it up at its next step and carries on.
 
-There is no team lead: you are the one handing out work and carrying news between characters. Your own character, the one labelled "You", is the one that walks where you tap.
+The characters share the lot, a directory on your Mac (`~/a-life-lot` unless you set `ALIFE_LOT_DIR`), so the Gardener can see where the Builder has built. There is no team lead: you are the one handing out work and carrying news between characters. Your own character, the one labelled "You", is the one that walks where you tap.
 
 Every front end connected to the same server sees the same sessions. If the connection drops, the app reconnects and the server sends what it missed.
 
@@ -55,7 +55,7 @@ Every floor tile is its own entity with a `CollisionComponent` and an `InputTarg
 
 ### The server
 
-[`a-life-server/`](a-life-server) is a separate Swift package (Vapor). Its README covers running it, Tailscale, the API and where real sessions would plug in.
+[`a-life-server/`](a-life-server) is a separate Swift package (Vapor). Its README covers running it, Tailscale, the API, and how each character's Claude Code session and its helper are set up.
 
 ### Tests
 

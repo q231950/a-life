@@ -15,7 +15,7 @@ final class ALifeServerTests: XCTestCase {
 
     override func setUp() async throws {
         app = try await Application.make(.testing)
-        try await configure(app, dummyStep: .milliseconds(20))
+        try await configure(app, players: .dummies(step: .milliseconds(20)))
         app.http.server.configuration.hostname = "127.0.0.1"
         app.http.server.configuration.port = 0 // any free port
         try await app.startup()
@@ -149,7 +149,7 @@ final class ALifeServerTests: XCTestCase {
 
     /// Plays a dummy's script for `instruction` and returns its events, up
     /// to where the dummy stops for `stopReason`.
-    private func play(_ profile: DummyCharacter.Profile, _ instruction: String, until stopReason: StopReason) async throws -> [SessionEvent] {
+    private func play(_ profile: Character, _ instruction: String, until stopReason: StopReason) async throws -> [SessionEvent] {
         let hub = SessionHub(id: profile.id, name: profile.name)
         let character = DummyCharacter(profile, hub: hub, step: .milliseconds(10))
         await character.reset()

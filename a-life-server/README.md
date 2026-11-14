@@ -2,18 +2,22 @@
 
 The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) server meant to run on your own Mac and be reached over [Tailscale](https://tailscale.com).
 
-It holds one session per character on the lot. Each session is the character's own, like a separate Claude Code session: its conversation, what it is doing, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
+It holds one session per character on the lot. **Each character is a Claude Code session of its own**, run by the Claude Code installed on your Mac: its conversation, what it is doing, the helpers (subagents) it has sent off, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
 
-**The characters are dummies for now.** Each one plays a short script for whatever it is told, so the front ends can be run end to end. No model is called and nothing real happens. See [The dummy characters](#the-dummy-characters).
+The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it. See [The characters](#the-characters).
+
+If you'd rather not spend tokens, the server can also run dummy characters that play a short script. See [The dummy characters](#the-dummy-characters).
 
 ## Run it
 
-You need Swift 6 (Xcode 16 or later) on macOS 14 or later.
+You need Swift 6 (Xcode 16 or later) on macOS 14 or later, and [Claude Code](https://code.claude.com) installed and logged in: `claude` in a terminal should start a session. The characters use that login, its settings and its model, and what they do counts towards your usage like any other Claude Code session.
 
 ```sh
 cd a-life-server
 swift run ALifeServer
 ```
+
+The server finds the `claude` command on your `PATH`, or where its installer puts it, and says which one it uses and where the lot is when it starts. It starts a character's session with the first thing you say to it.
 
 The server listens on `http://127.0.0.1:8080`, which only this Mac can reach. Check it:
 
@@ -42,9 +46,10 @@ In another, tell the Builder what to do, then answer the approval it asks for:
 
 ```sh
 curl -X POST http://127.0.0.1:8080/v1/sessions/builder/messages \
-  -H 'Content-Type: application/json' -d '{"text":"Tidy the lot"}'
+  -H 'Content-Type: application/json' -d '{"text":"Build me an office"}'
 
-# a few seconds later, look up the approval's id ...
+# the Builder sends its construction worker off (subagent.started), which
+# asks before it writes buildings/office.md; look up the approval's id ...
 curl http://127.0.0.1:8080/v1/sessions/builder
 
 # ... and allow it
@@ -52,7 +57,22 @@ curl -X POST http://127.0.0.1:8080/v1/sessions/builder/approvals/<id> \
   -H 'Content-Type: application/json' -d '{"allow":true}'
 ```
 
-The Gardener's session is at `/v1/sessions/gardener`, and carries on independently.
+The Gardener's session is at `/v1/sessions/gardener`, and carries on independently. Ask it to plant something and it sends its planter off.
+
+### Settings
+
+All optional, as environment variables:
+
+| Variable | What it does |
+|---|---|
+| `ALIFE_LOT_DIR` | The directory the characters work in. `~/a-life-lot` unless set; it is made if it isn't there. |
+| `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
+| `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
+| `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
+
+```sh
+ALIFE_CLAUDE_MODEL=haiku ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
+```
 
 ## Make it reachable over Tailscale
 
@@ -82,7 +102,7 @@ Notes:
 
 - If the `tailscale` command isn't found, the Mac app ships it at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`; the app's settings can also install the command for you.
 - These commands are for current Tailscale versions. If yours differs, `tailscale serve --help` shows the syntax.
-- **There is no login on this server.** Anyone who can reach the address can instruct the characters and answer approvals. With `tailscale serve` that means the devices in your tailnet, subject to its access rules. Don't use `tailscale funnel` for it: that publishes the address to the whole internet.
+- **There is no login on this server.** Anyone who can reach the address can instruct the characters and answer their approvals, and the characters are Claude Code sessions on your Mac, using your login: whoever can reach the server can have them run commands there. With `tailscale serve` that means the devices in your tailnet, subject to its access rules. Don't use `tailscale funnel` for it: that publishes the address to the whole internet.
 
 ### Without HTTPS
 
@@ -151,45 +171,78 @@ A front end follows every session at once: it reads `GET /v1/sessions` to learn 
 
 Clients skip event types they don't know, so new ones can be added.
 
+## The characters
+
+`Cast.swift` sets up the cast. Each character is one Claude Code session, started the way the Agent SDK starts one: the `claude` CLI in print mode, with stream-json going in on its stdin and coming out of its stdout, in the lot's directory. Each character is told who it is (`--append-system-prompt`), and has one helper of its own, a subagent defined for its session with `--agents`:
+
+| Character | Its helper | What the helper does | Asks you before |
+|---|---|---|---|
+| **Builder** | `construction-worker` | Builds buildings: writes `buildings/<name>.md` with where on the lot it stands, its rooms and a floor plan, or edits one that's there. | every change (Claude Code's `default` permission mode) |
+| **Gardener** | `planter` | Plants plants: writes `garden/<bed>.md` with what grows where, how many and how far apart, or edits a bed that's there. | anything but changes to files on the lot (`acceptEdits`) |
+
+Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Gardener works the same way with its planter, but its changes to files on the lot go ahead without asking. The helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them.
+
+How a session maps onto the events:
+
+| Claude Code | Event |
+|---|---|
+| Something you say | `message` from `You`, sent to the CLI as a user message. Said mid-turn, Claude Code takes it up at its next step. |
+| A text reply from the character | `message` from the character. Its helpers' own replies stay with the character. |
+| A tool call | `session.activity`: the tool's name, such as `bash`, or `agent` while a helper is out |
+| A call to the `Agent` tool, or `Task` in older versions | `subagent.started`, until the call returns or Claude Code reports the task done: `subagent.finished` |
+| A permission request (`can_use_tool`) | `approval.requested`, and the session is idle with `requires_action` until you answer. Allowing or denying goes back to Claude Code as the answer. |
+| The end of a turn (`result`) | `session.status` idle with `end_turn`. If it ended in an error, such as not being logged in, the error is a `message` of kind `error`. |
+
+- **Talking to a character** while it works is fine: Claude Code takes what you say up at its next step. While it waits for an approval, messages to it are refused with `409` until the approval is answered.
+- **Interrupting** stops the character's turn, withdraws a pending approval and calls its helpers back. The others carry on.
+- **Starting over** stops the character's Claude Code session; the next thing you say starts a new one. What was built stays on the lot.
+- **If Claude Code stops by itself**, the error is shown in the conversation and the next thing you say resumes the same session (`--resume`).
+- Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
+- Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the lot's directory picks the conversation up in a terminal. The server itself keeps nothing: after a restart, every character starts a new session.
+
+To change what a character is told, its helper, or its permission mode, edit `Cast.swift`. To add a character, add one there and to `cast`. The front ends pick it up when they next connect.
+
 ## The dummy characters
 
-`configure.swift` sets up the cast: a `DummyCharacter` for each, with a session of its own.
+With `ALIFE_BACKEND=dummy`, each character is a `DummyCharacter` instead, which plays a short script for whatever it is told. No model is called and nothing real happens, so the front ends can be worked on without spending tokens.
 
-- The **Gardener** only looks. It reads, then sends two helpers off at once, one to search the flower beds and one to check the hedges, and reports back once both have reported back to it. It never asks for permission, like a Claude Code session in plan mode.
+- The **Gardener** only looks. It reads, then sends two helpers off at once, one to search the flower beds and one to check the hedges, and reports back once both have reported back to it. It never asks for permission.
 - The **Builder** changes things. It reads, sends a helper off to measure the north corner and waits for it, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back.
 
-The helpers stand in for a Claude Code session's subagents. Each one is out for a few steps (the Gardener's for four and six, the Builder's for four) and takes no messages of its own; while they are out, the character's activity is `agent`.
+Each helper is out for a few steps (the Gardener's for four and six, the Builder's for four); while they are out, the character's activity is `agent`.
 
 Both can be talked to while they work: something said mid-task is answered at the next step ("Still on … Right now I'm …") and the work carries on. Something said after the last step becomes the next instruction. While the Builder waits for an approval, messages to it are refused with `409` until the approval is answered.
 
-Each step takes 1.5 seconds. Set `ALIFE_DUMMY_STEP_MS` to change that:
+Each step takes 1.5 seconds.
 
 ```sh
-ALIFE_DUMMY_STEP_MS=300 swift run ALifeServer
+ALIFE_BACKEND=dummy swift run ALifeServer
 ```
 
-An interrupt stops one character and leaves the others be, and calls back any helpers it has out. Nothing is saved: restarting the server starts every session afresh.
+An interrupt stops one character and leaves the others be, and calls back any helpers it has out.
 
-To add a character, add a line to `cast` in `configure.swift`. The front ends pick it up when they next connect.
+## How it fits together
 
-## Putting real sessions behind it
-
-The routes know nothing about the dummies. For each session they talk to two things:
+The routes know nothing about what plays a character. For each session they talk to two things:
 
 - `SessionHub` keeps the session's event log and its open streams. Whatever drives the session calls `hub.emit(_:)` for each thing that happens.
-- `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `reset`.
+- `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `reset`, and `shutdown` when the server stops.
 
-A real session, such as one Claude Code session per character, is another type that conforms to `SessionBackend` and emits the same events. `configure.swift` is the one place that chooses what each character runs.
+`ClaudeCharacter` and `DummyCharacter` both conform to `SessionBackend` and emit the same events. `configure.swift` is the one place that chooses which plays the characters.
 
 ## Layout
 
 | File | What it does |
 |---|---|
 | `entrypoint.swift` | Starts Vapor. |
-| `configure.swift` | The cast, a hub and a backend per character, and the routes. |
+| `configure.swift` | Reads the settings, sets up a hub and a backend per character, and the routes. |
+| `Cast.swift` | The characters: who each one is, its permission mode, and its helper's definition. |
 | `routes.swift` | The HTTP API, including the event streams. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
+| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
+| `ClaudeCode.swift` | Finds and starts the `claude` CLI, and reads and writes its stream-json, one message per line. |
+| `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in. |
 
 ## Tests
@@ -198,4 +251,12 @@ A real session, such as one Claude Code session per character, is another type t
 swift test
 ```
 
-The tests start the server on a free local port and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
+The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
+
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process.
+
+One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It costs a little, so it only runs when asked:
+
+```sh
+ALIFE_LIVE_CLAUDE=1 ALIFE_CLAUDE_MODEL=haiku swift test --filter LiveClaudeCodeTests
+```

@@ -3,9 +3,8 @@ import ALifeAPI
 /// What does the work in one session, when a front end asks for it. It
 /// reports what happens by emitting events to the session's `SessionHub`.
 ///
-/// `DummyCharacter` is the only implementation for now. A real one would run
-/// an agent here, such as a Claude Code session, and translate what it does
-/// into the same events.
+/// `ClaudeCharacter` runs a Claude Code session and translates what it does
+/// into events. `DummyCharacter` plays a script instead, without a model.
 protocol SessionBackend: Sendable {
     /// Something said to the character. Must not wait for the work to
     /// finish. Throws if the session can't take a message right now, such as
@@ -18,6 +17,12 @@ protocol SessionBackend: Sendable {
     func decide(approvalID: String, allow: Bool) async throws
     /// Drops the conversation and begins an empty one.
     func reset() async
+    /// The server is stopping: stops anything the session runs.
+    func shutdown() async
+}
+
+extension SessionBackend {
+    func shutdown() async {}
 }
 
 /// One session the server hosts: a character's event log, and what does
