@@ -72,7 +72,8 @@ struct WorldView: View {
                 id: session.id,
                 name: session.name,
                 isAtWork: session.status == .running || session.isWaitingForYou,
-                isWaitingForYou: session.isWaitingForYou
+                isWaitingForYou: session.isWaitingForYou,
+                subagents: session.subagents.map(\.id)
             )
         }
     }

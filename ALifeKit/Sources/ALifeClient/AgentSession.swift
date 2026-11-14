@@ -24,6 +24,9 @@ public final class AgentSession {
     public var activity: String? { state.activity }
     public var transcript: [Message] { state.messages }
     public var pendingApprovals: [Approval] { state.approvals }
+    /// The helpers out working for the character right now. Each one leaves
+    /// the list once it has reported back.
+    public var subagents: [Subagent] { state.subagents }
     /// A tool call is waiting for your yes or no. Until it has one, the
     /// character can't be told anything else.
     public var isWaitingForYou: Bool { !state.approvals.isEmpty }

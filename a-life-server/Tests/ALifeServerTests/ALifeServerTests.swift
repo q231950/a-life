@@ -63,6 +63,7 @@ final class ALifeServerTests: XCTestCase {
         XCTAssertEqual(gardener.transcript.first?.text, "Look for snails")
         XCTAssertTrue(gardener.transcript.last?.text.hasPrefix("Had a look around for “Look for snails”.") == true)
         XCTAssertNil(gardener.activity)
+        XCTAssertTrue(gardener.subagents.isEmpty) // every helper reported back
 
         // None of that happened in the Builder's session.
         XCTAssertTrue(builder.transcript.isEmpty)
@@ -132,7 +133,7 @@ final class ALifeServerTests: XCTestCase {
 
         try await gardener.handleMessage("Look for snails")
         try await gardener.handleMessage("What are you doing?")
-        for _ in 0..<300 where await hub.state.stopReason != .endTurn {
+        for _ in 0..<600 where await hub.state.stopReason != .endTurn {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
@@ -144,6 +145,78 @@ final class ALifeServerTests: XCTestCase {
             "Gardener: Still on “Look for snails”. Right now I'm looking around the lot.",
         ])
         XCTAssertTrue(lines.last?.hasPrefix("Gardener: Had a look around") == true)
+    }
+
+    /// Plays a dummy's script for `instruction` and returns its events, up
+    /// to where the dummy stops for `stopReason`.
+    private func play(_ profile: DummyCharacter.Profile, _ instruction: String, until stopReason: StopReason) async throws -> [SessionEvent] {
+        let hub = SessionHub(id: profile.id, name: profile.name)
+        let character = DummyCharacter(profile, hub: hub, step: .milliseconds(10))
+        await character.reset()
+        let stream = await hub.subscribe(conversationID: nil, after: 0)
+        try await character.handleMessage(instruction)
+        var events: [SessionEvent] = []
+        for await envelope in stream {
+            events.append(envelope.event)
+            if envelope.event == .statusChanged(.idle, stopReason: stopReason) { break }
+        }
+        return events
+    }
+
+    func testTheGardenerWaitsForItsHelpersToReportBack() async throws {
+        let events = try await play(cast[0], "Look for snails", until: .endTurn)
+
+        var sent: [Subagent] = []
+        var reported: [String] = []
+        for event in events {
+            if case .subagentStarted(let helper) = event { sent.append(helper) }
+            if case .subagentFinished(let id) = event { reported.append(id) }
+        }
+        XCTAssertEqual(sent.map(\.task), ["Search the flower beds", "Check the hedges"])
+        // The quicker errand comes back first, and nobody is left out.
+        XCTAssertEqual(reported, sent.map(\.id))
+
+        // It answers only once both have reported back.
+        let lastReport = try XCTUnwrap(events.lastIndex { $0.type == "subagent.finished" })
+        let answer = try XCTUnwrap(events.firstIndex { event in
+            guard case .message(let message) = event else { return false }
+            return message.kind == .agent
+        })
+        XCTAssertLessThan(lastReport, answer)
+    }
+
+    func testTheBuildersHelperIsBackBeforeItAsks() async throws {
+        let events = try await play(cast[1], "Tidy the lot", until: .requiresAction)
+        let types = events.map(\.type).filter { $0.hasPrefix("subagent.") || $0.hasPrefix("approval.") }
+        XCTAssertEqual(types, ["subagent.started", "subagent.finished", "approval.requested"])
+        guard case .subagentStarted(let helper) = events.first(where: { $0.type == "subagent.started" }) else {
+            return XCTFail("no helper was sent")
+        }
+        XCTAssertEqual(helper.task, "Measure the north corner")
+    }
+
+    func testInterruptingCallsTheHelpersBack() async throws {
+        // Slow steps, so the helpers are surely still out.
+        let hub = SessionHub(id: "gardener", name: "Gardener")
+        let gardener = DummyCharacter(cast[0], hub: hub, step: .milliseconds(300))
+        await gardener.reset()
+        try await gardener.handleMessage("Look for snails")
+        for _ in 0..<300 where await hub.state.subagents.count < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        var state = await hub.state
+        XCTAssertEqual(state.subagents.count, 2)
+
+        await gardener.interrupt()
+        state = await hub.state
+        XCTAssertTrue(state.subagents.isEmpty)
+        XCTAssertEqual(state.stopReason, .interrupted)
+
+        // Nobody reports back afterwards, or is sent off again.
+        let seq = state.lastSeq
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        state = await hub.state
+        XCTAssertEqual(state.lastSeq, seq)
     }
 
     func testAReconnectingClientIsSentOnlyWhatItMissed() async throws {

@@ -67,15 +67,22 @@ final class ServerConnectionTests: XCTestCase {
         StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
         StubServer.push(EventEnvelope(seq: 2, event: .approvalRequested(approval)), to: "builder")
         StubServer.push(EventEnvelope(seq: 3, event: .statusChanged(.idle, stopReason: .requiresAction)), to: "builder")
-        await wait(for: "events") { gardener.activity == "read" && builder.stopReason == .requiresAction }
+        let helper = Subagent(id: "s1", task: "Search the flower beds")
+        StubServer.push(EventEnvelope(seq: 4, event: .subagentStarted(helper)), to: "gardener")
+        await wait(for: "events") { gardener.subagents == [helper] && builder.stopReason == .requiresAction }
 
         // Each session has only its own events.
         XCTAssertEqual(gardener.status, .running)
+        XCTAssertEqual(gardener.activity, "read")
         XCTAssertFalse(gardener.isWaitingForYou)
         XCTAssertTrue(gardener.pendingApprovals.isEmpty)
         XCTAssertTrue(builder.isWaitingForYou)
         XCTAssertEqual(builder.pendingApprovals, [approval])
         XCTAssertNil(builder.activity)
+        XCTAssertTrue(builder.subagents.isEmpty)
+
+        StubServer.push(EventEnvelope(seq: 5, event: .subagentFinished(subagentID: "s1")), to: "gardener")
+        await wait(for: "the helper to report back") { gardener.subagents.isEmpty }
 
         await gardener.send("  What are you doing? ")
         await builder.respond(to: approval, allow: true)

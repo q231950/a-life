@@ -5,11 +5,15 @@ import Vapor
 /// so a front end can be exercised end to end without any real agents. What
 /// the script does depends on the character:
 ///
-/// - One that only looks around (the Gardener) reads and searches, then
-///   reports. It never needs permission, like a Claude Code session in plan
-///   mode.
-/// - One that changes things (the Builder) looks first, then asks before it
-///   runs a shell command, and waits as long as it takes for the answer.
+/// - One that only looks around (the Gardener) reads, then sends two helpers
+///   off to search, and reports once both have reported back to it. It never
+///   needs permission, like a Claude Code session in plan mode.
+/// - One that changes things (the Builder) looks first and sends a helper off
+///   to measure, then asks before it runs a shell command, and waits as long
+///   as it takes for the answer.
+///
+/// The helpers stand in for a Claude Code session's subagents: each works on
+/// its own for a few steps, then reports back to the character that sent it.
 ///
 /// Like a real session, it can be talked to while it works. Something said
 /// mid-task is answered at the character's next step, with what it is
@@ -36,6 +40,8 @@ actor DummyCharacter: SessionBackend {
     /// Goes up whenever the current worker is abandoned, so it can tell.
     private var generation = 0
     private var pendingApproval: (id: String, answer: AsyncStream<Bool>.Continuation)?
+    /// The helpers that are out and haven't reported back yet, by id.
+    private var helpersOut: [String] = []
 
     init(_ profile: Profile, hub: SessionHub, step: Duration) {
         self.profile = profile
@@ -99,11 +105,15 @@ actor DummyCharacter: SessionBackend {
         try await work("read", doing: "looking around the lot", on: instruction)
 
         guard profile.changesThings else {
-            try await work("grep", doing: "searching the flower beds", on: instruction)
-            try await finish("Had a look around for “\(instruction)”. Nothing is in the way.")
+            try await sendHelpers([
+                Errand(task: "Search the flower beds", steps: 4),
+                Errand(task: "Check the hedges", steps: 6),
+            ], on: instruction)
+            try await finish("Had a look around for “\(instruction)”. My helpers searched the flower beds and checked the hedges, and nothing is in the way.")
             return
         }
 
+        try await sendHelpers([Errand(task: "Measure the north corner", steps: 4)], on: instruction)
         let allowed = try await ask(Approval(toolName: "bash", input: "mv ./shed ./lot/north-corner"))
         if allowed {
             try await work("bash", doing: "moving the shed", on: instruction)
@@ -119,6 +129,46 @@ actor DummyCharacter: SessionBackend {
     private func work(_ activity: String, doing description: String, on instruction: String) async throws {
         try await post(.activityChanged(activity))
         try await Task.sleep(for: step)
+        try await answerWhatWasSaid(doing: description, on: instruction)
+    }
+
+    /// Something a helper is sent off to do, and how many steps it takes.
+    private struct Errand {
+        let task: String
+        let steps: Int
+    }
+
+    /// Sends a helper off for each errand, all at once, and waits until every
+    /// one has reported back. Answers whatever is said meanwhile at each step.
+    private func sendHelpers(_ errands: [Errand], on instruction: String) async throws {
+        var out: [(helper: Subagent, stepsLeft: Int)] = []
+        for errand in errands {
+            let helper = Subagent(task: errand.task)
+            // Counted as out before it is announced, so stopping the work
+            // meanwhile calls it back. A stopped worker sends no one.
+            try Task.checkCancellation()
+            helpersOut.append(helper.id)
+            await hub.emit(.subagentStarted(helper))
+            out.append((helper, errand.steps))
+        }
+        try await post(.activityChanged("agent"))
+
+        while !out.isEmpty {
+            try await Task.sleep(for: step)
+            for index in out.indices {
+                out[index].stepsLeft -= 1
+            }
+            for (helper, stepsLeft) in out where stepsLeft <= 0 {
+                try Task.checkCancellation() // if stopped, it was called back already
+                helpersOut.removeAll { $0 == helper.id }
+                await hub.emit(.subagentFinished(subagentID: helper.id))
+            }
+            out.removeAll { $0.stepsLeft <= 0 }
+            try await answerWhatWasSaid(doing: "waiting for my helpers to report back", on: instruction)
+        }
+    }
+
+    private func answerWhatWasSaid(doing description: String, on instruction: String) async throws {
         // A worker that was stopped mustn't take what was said to the next one.
         while !Task.isCancelled, !inbox.isEmpty {
             inbox.removeFirst()
@@ -157,16 +207,22 @@ actor DummyCharacter: SessionBackend {
     }
 
     /// Cancels the script and forgets what was said and not yet taken up.
-    /// Emits only what must not be left dangling: a pending approval.
+    /// Emits only what must not be left dangling: a pending approval, and
+    /// helpers that are still out, which are called back.
     private func stopWorking() async {
         generation += 1
         worker?.cancel()
         worker = nil
         inbox = []
+        let calledBack = helpersOut
+        helpersOut = []
         if let pending = pendingApproval {
             pendingApproval = nil
             pending.answer.finish()
             await hub.emit(.approvalResolved(approvalID: pending.id))
+        }
+        for id in calledBack {
+            await hub.emit(.subagentFinished(subagentID: id))
         }
     }
 }

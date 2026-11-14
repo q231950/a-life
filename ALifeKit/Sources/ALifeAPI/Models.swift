@@ -68,6 +68,20 @@ public struct Approval: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// A helper a character sent off to do part of its work, like a subagent of
+/// a Claude Code session. It works on its own until it reports back to the
+/// character that sent it.
+public struct Subagent: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    /// What it was sent to do.
+    public let task: String
+
+    public init(id: String = UUID().uuidString, task: String) {
+        self.id = id
+        self.task = task
+    }
+}
+
 // MARK: Request bodies
 
 /// `POST /v1/sessions/{id}/messages`

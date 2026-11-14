@@ -6,6 +6,45 @@ struct TileComponent: Component {
     let tile: Tile
 }
 
+/// The lot's floor plan: which tiles there are, which are free, and where
+/// each one is. It sits on the lot's root entity, so systems can find their
+/// way around the lot, too. Positions are in the root's space.
+struct LotComponent: Component {
+    var grid: TileGrid
+    let tileSize: Float
+
+    /// The centre of `tile`, on the floor.
+    func position(of tile: Tile) -> SIMD3<Float> {
+        [
+            (Float(tile.x) - Float(grid.width - 1) / 2) * tileSize,
+            0,
+            (Float(tile.z) - Float(grid.depth - 1) / 2) * tileSize,
+        ]
+    }
+
+    /// The tile `position` is on.
+    func tile(at position: SIMD3<Float>) -> Tile {
+        Tile(
+            x: Int((position.x / tileSize + Float(grid.width - 1) / 2).rounded()),
+            z: Int((position.z / tileSize + Float(grid.depth - 1) / 2).rounded())
+        )
+    }
+
+    /// Waypoints for a `WalkComponent`, from `origin` to the centre of `goal`.
+    /// `nil` if there is no way there.
+    func route(from origin: SIMD3<Float>, to goal: Tile) -> [SIMD3<Float>]? {
+        let start = tile(at: origin)
+        guard let path = grid.path(from: start, to: goal) else { return nil }
+
+        var waypoints = path.map { position(of: $0) }
+        // When re-routing mid-step, first get back onto the centre of a tile.
+        if simd_distance(origin, position(of: start)) > 0.05 {
+            waypoints.insert(position(of: start), at: 0)
+        }
+        return waypoints
+    }
+}
+
 /// Waypoints an entity is currently walking along, in its parent's space.
 struct WalkComponent: Component {
     var waypoints: [SIMD3<Float>] = []
