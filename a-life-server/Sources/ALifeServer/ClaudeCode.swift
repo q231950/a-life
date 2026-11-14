@@ -39,6 +39,12 @@ struct ClaudeCode: ClaudeCodeLauncher {
         // Helpers run in the foreground: the character waits for each one to
         // report back before it carries on, the way the lot shows it.
         environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        // `claude` in a character's shell is this one, even when the server
+        // found it off the `PATH`. The Engineer's technician runs it to hand
+        // work to the cloud.
+        let directory = executable.deletingLastPathComponent().path
+        let path = environment["PATH"] ?? ""
+        environment["PATH"] = path.isEmpty ? directory : "\(directory):\(path)"
 
         var arguments = arguments
         if let model { arguments += ["--model", model] }

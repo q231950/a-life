@@ -75,6 +75,8 @@ final class World {
     struct Resident: Equatable {
         let id: String
         let name: String
+        /// Its shirt's colour as `#RRGGBB`, if the server gives it one.
+        let color: String?
         /// Working, or waiting for you in the middle of its work.
         let isAtWork: Bool
         /// A tool call is waiting for your yes or no.
@@ -202,7 +204,7 @@ final class World {
             PlatformColor(red: 0.8, green: 0.45, blue: 0.75, alpha: 1),
             PlatformColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1),
         ]
-        let shirt = shirts[slot % shirts.count]
+        let shirt = resident.color.flatMap { Self.color(hex: $0) } ?? shirts[slot % shirts.count]
         let entity = Self.makeCharacter(shirt: shirt)
         entity.name = resident.id
         entity.position = lot.position(of: home)
@@ -225,6 +227,18 @@ final class World {
 
         root.addChild(entity)
         return AgentCharacter(entity: entity, slot: slot, shirt: shirt, name: resident.name, destination: home)
+    }
+
+    /// A colour written as `#RRGGBB`, or `nil` if it isn't one.
+    private static func color(hex: String) -> PlatformColor? {
+        let digits = hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex)
+        guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
+        return PlatformColor(
+            red: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
     }
 
     /// A "!" over the character's head while it waits for your answer.

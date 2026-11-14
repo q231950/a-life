@@ -126,6 +126,9 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     /// The character's name, such as `Gardener`.
     public var name: String
+    /// The character's colour, as `#RRGGBB`: the shirt it wears on the lot,
+    /// which its helpers wear too. `nil` leaves it to the front end.
+    public var color: String?
     /// The conversation going on in the session. Starting the session over
     /// begins a new one.
     public var conversationID: String?
@@ -141,15 +144,16 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     /// Sequence number of the last event applied.
     public var lastSeq = 0
 
-    public init(id: String, name: String) {
+    public init(id: String, name: String, color: String? = nil) {
         self.id = id
         self.name = name
+        self.color = color
     }
 
     public mutating func apply(_ envelope: EventEnvelope) {
         switch envelope.event {
         case .conversationStarted(let conversationID):
-            self = SessionState(id: id, name: name)
+            self = SessionState(id: id, name: name, color: color)
             self.conversationID = conversationID
             status = .idle
         case .statusChanged(let status, let stopReason):
@@ -180,7 +184,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, status, activity, messages, approvals, subagents
+        case id, name, color, status, activity, messages, approvals, subagents
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case lastSeq = "last_seq"
@@ -190,6 +194,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
+        // Servers from before characters had colours don't send one.
+        color = try container.decodeIfPresent(String.self, forKey: .color)
         conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
         status = try container.decode(RunStatus.self, forKey: .status)
         stopReason = try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
