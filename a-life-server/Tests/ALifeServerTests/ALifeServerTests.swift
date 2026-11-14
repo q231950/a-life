@@ -52,7 +52,9 @@ final class ALifeServerTests: XCTestCase {
 
     func testEveryCharacterHasASessionOfItsOwn() async throws {
         let (server, gardener, builder) = try await connect()
-        XCTAssertEqual(server.sessions.map(\.name), ["Gardener", "Builder"])
+        XCTAssertEqual(server.sessions.map(\.name), ["Gardener", "Builder", "Engineer"])
+        // Each wears its own colour; the Engineer's shirt is purple.
+        XCTAssertEqual(server.sessions.map(\.color), ["#D9594D", "#F2A633", "#8050C8"])
         XCTAssertEqual(gardener.status, .idle)
 
         // The Gardener only looks, so it never asks for anything.
@@ -223,7 +225,7 @@ final class ALifeServerTests: XCTestCase {
         let client = makeClient()
         try await client.sendMessage("Plant a tree", to: "builder")
 
-        var state = SessionState(id: "builder", name: "Builder")
+        var state = SessionState(id: "builder", name: "Builder", color: "#F2A633")
         for try await envelope in try await client.events(of: "builder") {
             state.apply(envelope)
             if state.stopReason == .requiresAction { break }
@@ -242,8 +244,8 @@ final class ALifeServerTests: XCTestCase {
         let snapshot = try await client.state(of: "builder")
         XCTAssertEqual(snapshot, state)
         let listed = try await client.sessions()
-        XCTAssertEqual(listed.map(\.id), ["gardener", "builder"])
-        XCTAssertEqual(listed.last, state)
+        XCTAssertEqual(listed.map(\.id), ["gardener", "builder", "engineer"])
+        XCTAssertEqual(listed[1], state)
 
         // Naming a conversation the server doesn't have replays the current one in full.
         for try await envelope in try await client.events(of: "builder", conversationID: "gone", after: 999) {

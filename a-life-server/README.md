@@ -4,7 +4,7 @@ The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) 
 
 It holds one session per character on the lot. **Each character is a Claude Code session of its own**, run by the Claude Code installed on your Mac: its conversation, what it is doing, the helpers (subagents) it has sent off, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
 
-The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it. See [The characters](#the-characters).
+The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it. The Engineer works on a\*life itself instead, by handing jobs to a Claude Code session in the a\*life cloud environment. See [The characters](#the-characters).
 
 If you'd rather not spend tokens, the server can also run dummy characters that play a short script. See [The dummy characters](#the-dummy-characters).
 
@@ -69,6 +69,7 @@ All optional, as environment variables:
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
+| `ALIFE_CLOUD_SESSION` | The cloud session the Engineer sends its jobs to: its ID (`session_...`) or its claude.ai/code link. See [The Engineer and the a\*life cloud environment](#the-engineer-and-the-alife-cloud-environment). |
 
 ```sh
 ALIFE_CLAUDE_MODEL=haiku ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
@@ -128,7 +129,7 @@ A session's `{id}` is its character's, such as `gardener` or `builder`, and neve
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, status, what it is doing, messages, pending approvals, helpers out, last sequence number. |
+| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, helpers out, last sequence number. |
 | `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
 | `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
 | `POST` | `/v1/sessions/{id}/messages` | `{"text": "…"}` | Says something to the character. Works while it is busy: it answers at its next step. `409` while it waits for an approval. |
@@ -179,8 +180,37 @@ Clients skip event types they don't know, so new ones can be added.
 |---|---|---|---|
 | **Builder** | `construction-worker` | Builds buildings: writes `buildings/<name>.md` with where on the lot it stands, its rooms and a floor plan, or edits one that's there. | every change (Claude Code's `default` permission mode) |
 | **Gardener** | `planter` | Plants plants: writes `garden/<bed>.md` with what grows where, how many and how far apart, or edits a bed that's there. | anything but changes to files on the lot (`acceptEdits`) |
+| **Engineer** | `technician` | Takes a job on a\*life itself (the app and server in `q231950/a-life`) to a Claude Code session in the a\*life cloud environment, with `claude -p --cloud`. | every command (`default`) |
 
-Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Gardener works the same way with its planter, but its changes to files on the lot go ahead without asking. The helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them.
+Each character has a colour of its own, which the front ends dress it in: the Gardener's shirt is red, the Builder's orange and the Engineer's purple. Its helpers' sheep wear the same colour.
+
+Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Gardener works the same way with its planter, but its changes to files on the lot go ahead without asking. Their helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them. The Engineer's technician has only Bash, for the one command that hands a job to the cloud.
+
+### The Engineer and the a\*life cloud environment
+
+The Engineer doesn't work on the lot. It works on a\*life itself, the app and this server, in your **a\*life** cloud environment: the [cloud environment](https://code.claude.com/docs/en/cloud-environments) on claude.ai that has the `q231950/a-life` repository. Tell it "make the sheep jump when they take off" and it writes the job up so that it stands on its own, and sends its technician off. The technician runs
+
+```sh
+claude -p --cloud "${ALIFE_CLOUD_SESSION:?not set}" <<'ALIFE_JOB'
+<the job>
+ALIFE_JOB
+```
+
+which asks you first, like every command the Engineer's session runs (`technician: claude -p --cloud …`). Once allowed, the job is [queued in the cloud session](https://code.claude.com/docs/en/claude-code-on-the-web#send-follow-ups-from-the-cli), and Claude Code takes it up there with the repository checked out: changing the code, running the tests and pushing a branch, as the job says. The Engineer tells you what it sent, with a link to the session on claude.ai/code. Follow the work there or in the Claude app; what the cloud session does doesn't come back to the lot.
+
+Claude Code can only start a new cloud session from an interactive terminal, so the Engineer sends every job to one session you start yourself:
+
+1. Start a session in the a\*life environment: at [claude.ai/code](https://claude.ai/code) or in the Claude app, pick the **a\*life** environment and the `q231950/a-life` repository and say something like "You're the a\*life Engineer's workshop. Jobs will come in as messages; do each one on a branch of its own and push it." Or, in a terminal in your a\*life checkout, run `/remote-env` once to pick **a\*life**, then `claude --cloud "..."`.
+2. Copy its ID (`session_...`) or its link.
+3. Start the server with it:
+
+   ```sh
+   ALIFE_CLOUD_SESSION=session_... swift run ALifeServer
+   ```
+
+   The server says which session the Engineer sends its jobs to when it starts, or warns that it has none. Without one, the technician's command fails and the Engineer tells you so.
+
+`claude -p --cloud` needs the CLI to be signed in with your claude.ai account (`claude auth login`), not an API key, and cloud sessions to be allowed for your account. The jobs count towards your usage like any other cloud session. The characters' shells find `claude` where the server found it.
 
 How a session maps onto the events:
 
@@ -200,14 +230,14 @@ How a session maps onto the events:
 - Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
 - Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the lot's directory picks the conversation up in a terminal. The server itself keeps nothing: after a restart, every character starts a new session.
 
-To change what a character is told, its helper, or its permission mode, edit `Cast.swift`. To add a character, add one there and to `cast`. The front ends pick it up when they next connect.
+To change what a character is told, its colour, its helper, or its permission mode, edit `Cast.swift`. To add a character, add one there and to `cast`. The front ends pick it up when they next connect.
 
 ## The dummy characters
 
 With `ALIFE_BACKEND=dummy`, each character is a `DummyCharacter` instead, which plays a short script for whatever it is told. No model is called and nothing real happens, so the front ends can be worked on without spending tokens.
 
 - The **Gardener** only looks. It reads, then sends two helpers off at once, one to search the flower beds and one to check the hedges, and reports back once both have reported back to it. It never asks for permission.
-- The **Builder** changes things. It reads, sends a helper off to measure the north corner and waits for it, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back.
+- The **Builder** changes things. It reads, sends a helper off to measure the north corner and waits for it, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back. The **Engineer** plays the same script.
 
 Each helper is out for a few steps (the Gardener's for four and six, the Builder's for four); while they are out, the character's activity is `agent`.
 
@@ -236,7 +266,7 @@ The routes know nothing about what plays a character. For each session they talk
 |---|---|
 | `entrypoint.swift` | Starts Vapor. |
 | `configure.swift` | Reads the settings, sets up a hub and a backend per character, and the routes. |
-| `Cast.swift` | The characters: who each one is, its permission mode, and its helper's definition. |
+| `Cast.swift` | The characters: who each one is, its colour, its permission mode, and its helper's definition. |
 | `routes.swift` | The HTTP API, including the event streams. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |

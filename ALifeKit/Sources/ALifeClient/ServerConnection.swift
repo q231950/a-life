@@ -156,7 +156,7 @@ public final class ServerConnection {
     /// known about the sessions that are still there.
     private func adopt(_ listed: [SessionState]) {
         sessions = listed.map { entry in
-            let kept = session(entry.id) ?? AgentSession(SessionState(id: entry.id, name: entry.name))
+            let kept = session(entry.id) ?? AgentSession(SessionState(id: entry.id, name: entry.name, color: entry.color))
             kept.update(from: entry)
             kept.client = client
             return kept

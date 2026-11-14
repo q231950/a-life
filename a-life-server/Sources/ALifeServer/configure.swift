@@ -17,6 +17,9 @@ enum Players: Sendable {
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
+    /// - `ALIFE_CLOUD_SESSION`: the cloud session, in the a*life cloud
+    ///   environment, that the Engineer sends its work to. Its technician
+    ///   reads it from the environment it inherits.
     static func fromEnvironment(logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
@@ -34,6 +37,11 @@ enum Players: Sendable {
             try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
             let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             logger.notice("The characters are Claude Code sessions (\(executable.path)), working on the lot in \(lot.path)")
+            if let cloudSession = environment["ALIFE_CLOUD_SESSION"], !cloudSession.isEmpty {
+                logger.notice("The Engineer sends its work to the cloud session \(cloudSession)")
+            } else {
+                logger.warning("The Engineer has no cloud session to send its work to. Set ALIFE_CLOUD_SESSION to one in the a*life cloud environment.")
+            }
             return .claudeCode(ClaudeCode(executable: executable, lot: lot, model: model))
         case let other:
             throw ConfigurationError("ALIFE_BACKEND is \(other); it can be claude or dummy.")
@@ -56,7 +64,7 @@ func configure(_ app: Application, players: Players? = nil) async throws {
 
     var sessions: [HostedSession] = []
     for character in cast {
-        let hub = SessionHub(id: character.id, name: character.name)
+        let hub = SessionHub(id: character.id, name: character.name, color: character.color)
         // The one place that chooses what plays each character.
         let backend: any SessionBackend
         switch players {

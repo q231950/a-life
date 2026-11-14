@@ -14,8 +14,8 @@ actor SessionHub {
     private var nextSeq = 1
     private var streams: [UUID: AsyncStream<EventEnvelope>.Continuation] = [:]
 
-    init(id: String, name: String) {
-        state = SessionState(id: id, name: name)
+    init(id: String, name: String, color: String? = nil) {
+        state = SessionState(id: id, name: name, color: color)
     }
 
     /// Ends the current conversation and begins an empty one.

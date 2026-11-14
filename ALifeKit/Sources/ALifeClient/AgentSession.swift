@@ -17,6 +17,9 @@ public final class AgentSession {
     public private(set) var lastError: String?
 
     public var name: String { state.name }
+    /// The character's colour, as `#RRGGBB`, or `nil` if the server leaves
+    /// it to the front end.
+    public var color: String? { state.color }
     /// Whether the character is working.
     public var status: RunStatus { state.status }
     public var stopReason: StopReason? { state.stopReason }
@@ -86,5 +89,6 @@ public final class AgentSession {
     /// Takes on what the server's list of sessions says about this one.
     func update(from listed: SessionState) {
         if state.name != listed.name { state.name = listed.name }
+        if state.color != listed.color { state.color = listed.color }
     }
 }

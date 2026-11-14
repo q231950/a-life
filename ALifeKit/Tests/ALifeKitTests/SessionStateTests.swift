@@ -37,12 +37,13 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(finished?["type"] as? String, "subagent.finished")
         XCTAssertEqual(finished?["subagent_id"] as? String, "s1")
 
-        var state = SessionState(id: "builder", name: "Builder")
+        var state = SessionState(id: "builder", name: "Builder", color: "#F2A633")
         state.apply(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "c1")))
         state.apply(EventEnvelope(seq: 2, event: .statusChanged(.idle, stopReason: .endTurn)))
         let snapshot = try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any]
         XCTAssertEqual(snapshot?["id"] as? String, "builder")
         XCTAssertEqual(snapshot?["name"] as? String, "Builder")
+        XCTAssertEqual(snapshot?["color"] as? String, "#F2A633")
         XCTAssertEqual(snapshot?["conversation_id"] as? String, "c1")
         XCTAssertEqual(snapshot?["stop_reason"] as? String, "end_turn")
         XCTAssertEqual(snapshot?["last_seq"] as? Int, 2)
@@ -60,6 +61,17 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(state.id, "gardener")
         XCTAssertEqual(state.lastSeq, 3)
         XCTAssertTrue(state.subagents.isEmpty)
+        XCTAssertNil(state.color) // nor colours
+    }
+
+    func testTheColourOutlastsTheConversation() {
+        var state = SessionState(id: "engineer", name: "Engineer", color: "#8050C8")
+        state.apply(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "c1")))
+        state.apply(EventEnvelope(seq: 2, event: .message(Message(kind: .user, speaker: "You", text: "Fix the build"))))
+        state.apply(EventEnvelope(seq: 3, event: .conversationStarted(conversationID: "c2")))
+        XCTAssertEqual(state.color, "#8050C8")
+        XCTAssertEqual(state.name, "Engineer")
+        XCTAssertTrue(state.messages.isEmpty)
     }
 
     func testHelpersComeAndGo() {
