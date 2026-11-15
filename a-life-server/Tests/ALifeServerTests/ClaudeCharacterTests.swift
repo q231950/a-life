@@ -116,7 +116,7 @@ final class ClaudeCharacterTests: XCTestCase {
         cli.say(helperWrites)
         cli.say(helperAsksToWrite)
         state = await until(hub, "the approval") { !$0.approvals.isEmpty }
-        XCTAssertEqual(state.approvals, [Approval(id: "request-write", toolName: "Write", input: "construction-worker: buildings/office.md")])
+        XCTAssertEqual(state.approvals, [Approval(id: "request-write", toolName: "Write", input: "construction-worker: buildings/office.md", toolUseID: "toolu_write")])
         XCTAssertEqual(state.status, .idle)
         XCTAssertEqual(state.stopReason, .requiresAction)
         do {
@@ -149,6 +149,15 @@ final class ClaudeCharacterTests: XCTestCase {
         cli.say(result(text: "The office is up in the north corner."))
         state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
         XCTAssertEqual(transcript(state), ["You: Build me an office", "Builder: The office is up in the north corner."])
+        // The whole conversation keeps the Builder sending its helper off,
+        // and its helper's request with your answer, in order. The helper's
+        // own tools aren't in it.
+        XCTAssertEqual(state.conversation, [
+            .message(state.messages[0]),
+            .toolUse(ToolUse(id: "toolu_agent", toolName: "Agent", input: "Build an office")),
+            .approval(Approval(id: "request-write", toolName: "Write", input: "construction-worker: buildings/office.md", toolUseID: "toolu_write"), outcome: .allowed),
+            .message(state.messages[1]),
+        ])
         XCTAssertNil(state.activity)
         XCTAssertEqual(state.status, .idle)
     }
@@ -203,7 +212,7 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertEqual(state.subagents, [Subagent(id: "toolu_agent", task: "Make the sheep jump")])
         cli.say(#"{"type":"control_request","request_id":"request-test","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"swift test --package-path ALifeKit"},"tool_use_id":"toolu_test","agent_id":"task-1"}}"#)
         state = await until(hub, "the approval") { !$0.approvals.isEmpty }
-        XCTAssertEqual(state.approvals, [Approval(id: "request-test", toolName: "Bash", input: "a-life-expert: swift test --package-path ALifeKit")])
+        XCTAssertEqual(state.approvals, [Approval(id: "request-test", toolName: "Bash", input: "a-life-expert: swift test --package-path ALifeKit", toolUseID: "toolu_test")])
 
         try await engineer.decide(approvalID: "request-test", allow: true)
         cli.say(taskNotification("completed"))
@@ -220,17 +229,62 @@ final class ClaudeCharacterTests: XCTestCase {
         try await builder.handleMessage("Knock down the shed")
         let cli = try XCTUnwrap(claudeCode.clis.first)
         cli.say(#"{"type":"control_request","request_id":"request-rm","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -r buildings/shed.md","description":"Remove the shed"},"tool_use_id":"toolu_rm"}}"#)
-        let state = await until(hub, "the approval") { !$0.approvals.isEmpty }
-        XCTAssertEqual(state.approvals, [Approval(id: "request-rm", toolName: "Bash", input: "rm -r buildings/shed.md")])
+        var state = await until(hub, "the approval") { !$0.approvals.isEmpty }
+        let approval = Approval(id: "request-rm", toolName: "Bash", input: "rm -r buildings/shed.md", toolUseID: "toolu_rm")
+        XCTAssertEqual(state.approvals, [approval])
 
         try await builder.decide(approvalID: "request-rm", allow: false)
         XCTAssertEqual(cli.sent.last?["response"]?["response"]?["behavior"], "deny")
+        // It stays in the conversation, saying you said no.
+        state = await hub.state
+        XCTAssertTrue(state.approvals.isEmpty)
+        XCTAssertEqual(state.conversation.last, .approval(approval, outcome: .denied))
         do {
             try await builder.decide(approvalID: "request-rm", allow: true)
             XCTFail("expected a 404")
         } catch let abort as Abort {
             XCTAssertEqual(abort.status, .notFound)
         }
+    }
+
+    func testEverythingTheCharacterSaysAndDoesIsInTheConversation() async throws {
+        let (builder, hub, claudeCode) = await make(.builder)
+        try await builder.handleMessage("What's on the lot?")
+        let cli = try XCTUnwrap(claudeCode.clis.first)
+
+        // It says something, looks, says something more, then asks before it
+        // runs a command, which takes the place of that tool use.
+        cli.say(says("Let me look."))
+        cli.say(#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/lot/lot.md"}}]},"parent_tool_use_id":null,"session_id":"session-1"}"#)
+        cli.say(#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read","content":"Nothing yet."}]},"parent_tool_use_id":null,"session_id":"session-1"}"#)
+        cli.say(says("The lot is empty. I'll count the tiles."))
+        cli.say(#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_ls","name":"Bash","input":{"command":"ls buildings"}}]},"parent_tool_use_id":null,"session_id":"session-1"}"#)
+        cli.say(#"{"type":"control_request","request_id":"request-ls","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls buildings"},"tool_use_id":"toolu_ls"}}"#)
+        await until(hub, "the approval") { !$0.approvals.isEmpty }
+        try await builder.decide(approvalID: "request-ls", allow: true)
+        cli.say(says("There's nothing on it yet."))
+        cli.say(result(text: "There's nothing on it yet."))
+        let state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
+
+        XCTAssertEqual(transcript(state), [
+            "You: What's on the lot?",
+            "Builder: Let me look.",
+            "Builder: The lot is empty. I'll count the tiles.",
+            "Builder: There's nothing on it yet.",
+        ])
+        XCTAssertEqual(state.conversation.map(\.id), [
+            "message-" + state.messages[0].id,
+            "message-" + state.messages[1].id,
+            "tool-toolu_read",
+            "message-" + state.messages[2].id,
+            "approval-request-ls",
+            "message-" + state.messages[3].id,
+        ])
+        XCTAssertEqual(state.conversation[2], .toolUse(ToolUse(id: "toolu_read", toolName: "Read", input: "/lot/lot.md")))
+        XCTAssertEqual(
+            state.conversation[4],
+            .approval(Approval(id: "request-ls", toolName: "Bash", input: "ls buildings", toolUseID: "toolu_ls"), outcome: .allowed)
+        )
     }
 
     func testInterruptingStopsTheTurnAndCallsTheHelperBack() async throws {
@@ -246,6 +300,10 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertEqual(cli.sent.last?["request"]?["subtype"], "interrupt")
         var state = await hub.state
         XCTAssertTrue(state.approvals.isEmpty)
+        XCTAssertEqual(state.conversation.last?.id, "approval-request-write")
+        if case .approval(_, let outcome) = state.conversation.last {
+            XCTAssertEqual(outcome, .withdrawn) // nobody answered it
+        }
         XCTAssertTrue(state.subagents.isEmpty)
         XCTAssertNil(state.activity)
         XCTAssertEqual(state.status, .idle)

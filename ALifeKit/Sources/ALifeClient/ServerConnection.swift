@@ -28,6 +28,10 @@ public final class ServerConnection {
     public private(set) var serverURL: URL?
     /// One per character, in the order the server lists them.
     public private(set) var sessions: [AgentSession] = []
+    /// What the characters have built and planted on the lot. Empty until
+    /// the server says, and for servers from before there was anything to
+    /// build.
+    public private(set) var lot = Lot()
 
     @ObservationIgnored private let serverURLStore: any ServerURLStoring
     @ObservationIgnored private let urlSession: URLSession
@@ -87,6 +91,7 @@ public final class ServerConnection {
         serverURL = url
         disconnect()
         sessions = []
+        lot = Lot()
         connect()
         return true
     }
@@ -122,6 +127,7 @@ public final class ServerConnection {
                     )
                     streams.append((session, stream))
                 }
+                let lotChanges = try await followLot(client)
                 if streams.isEmpty {
                     reason = "The server has no sessions."
                 } else {
@@ -132,6 +138,13 @@ public final class ServerConnection {
                             group.addTask { @MainActor in
                                 for try await envelope in stream {
                                     session.apply(envelope)
+                                }
+                            }
+                        }
+                        if let lotChanges {
+                            group.addTask { @MainActor [weak self] in
+                                for try await lot in lotChanges where lot != self?.lot {
+                                    self?.lot = lot
                                 }
                             }
                         }
@@ -149,6 +162,16 @@ public final class ServerConnection {
             if let connectedAt, Date().timeIntervalSince(connectedAt) > 10 { delay = 1 }
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             delay = min(delay * 2, 10)
+        }
+    }
+
+    /// The lot's changes, starting with what is on it now, or `nil` if the
+    /// server is from before there was anything to build.
+    private func followLot(_ client: ALifeServerClient) async throws -> AsyncThrowingStream<Lot, Error>? {
+        do {
+            return try await client.lotChanges()
+        } catch ALifeClientError.server(status: 404, reason: _) {
+            return nil
         }
     }
 

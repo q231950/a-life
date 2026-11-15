@@ -12,9 +12,13 @@ public enum SessionEvent: Equatable, Sendable {
     /// `nil` when it isn't doing anything in particular.
     case activityChanged(String?)
     case message(Message)
+    /// The character used a tool. Tools that ask first are followed by an
+    /// `approvalRequested` for the same call.
+    case toolUsed(ToolUse)
     case approvalRequested(Approval)
-    /// The approval was answered or is no longer needed.
-    case approvalResolved(approvalID: String)
+    /// The approval was answered or is no longer needed. `outcome` says
+    /// which; servers from before it did leave it out.
+    case approvalResolved(approvalID: String, outcome: ApprovalOutcome? = nil)
     /// The character sent a helper off to do part of its work.
     case subagentStarted(Subagent)
     /// The helper reported back to the character, or was stopped.
@@ -29,6 +33,7 @@ public enum SessionEvent: Equatable, Sendable {
         case .statusChanged: return "session.status"
         case .activityChanged: return "session.activity"
         case .message: return "message"
+        case .toolUsed: return "tool.used"
         case .approvalRequested: return "approval.requested"
         case .approvalResolved: return "approval.resolved"
         case .subagentStarted: return "subagent.started"
@@ -40,7 +45,8 @@ public enum SessionEvent: Equatable, Sendable {
 
 extension SessionEvent: Codable {
     enum CodingKeys: String, CodingKey {
-        case type, status, activity, message, approval, subagent
+        case type, status, activity, message, approval, subagent, outcome
+        case toolUse = "tool_use"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case approvalID = "approval_id"
@@ -62,10 +68,15 @@ extension SessionEvent: Codable {
             self = .activityChanged(try container.decodeIfPresent(String.self, forKey: .activity))
         case "message":
             self = .message(try container.decode(Message.self, forKey: .message))
+        case "tool.used":
+            self = .toolUsed(try container.decode(ToolUse.self, forKey: .toolUse))
         case "approval.requested":
             self = .approvalRequested(try container.decode(Approval.self, forKey: .approval))
         case "approval.resolved":
-            self = .approvalResolved(approvalID: try container.decode(String.self, forKey: .approvalID))
+            self = .approvalResolved(
+                approvalID: try container.decode(String.self, forKey: .approvalID),
+                outcome: try container.decodeIfPresent(ApprovalOutcome.self, forKey: .outcome)
+            )
         case "subagent.started":
             self = .subagentStarted(try container.decode(Subagent.self, forKey: .subagent))
         case "subagent.finished":
@@ -88,10 +99,13 @@ extension SessionEvent: Codable {
             try container.encodeIfPresent(activity, forKey: .activity)
         case .message(let message):
             try container.encode(message, forKey: .message)
+        case .toolUsed(let toolUse):
+            try container.encode(toolUse, forKey: .toolUse)
         case .approvalRequested(let approval):
             try container.encode(approval, forKey: .approval)
-        case .approvalResolved(let approvalID):
+        case .approvalResolved(let approvalID, let outcome):
             try container.encode(approvalID, forKey: .approvalID)
+            try container.encodeIfPresent(outcome, forKey: .outcome)
         case .subagentStarted(let subagent):
             try container.encode(subagent, forKey: .subagent)
         case .subagentFinished(let subagentID):
@@ -136,8 +150,15 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     public var stopReason: StopReason?
     /// What the character is doing right now, such as the name of a tool.
     public var activity: String?
+    /// What was said in the conversation, by you and the character.
     public var messages: [Message] = []
+    /// The tool calls waiting for a yes or no right now. One that has been
+    /// settled is no longer listed here, but stays in `conversation`.
     public var approvals: [Approval] = []
+    /// The whole conversation in the order it happened: the messages, the
+    /// tools the character used, and every tool call that asked for a yes or
+    /// no, with how it was settled.
+    public var conversation: [ConversationEntry] = []
     /// The helpers out working for the character right now. One that has
     /// reported back is no longer listed.
     public var subagents: [Subagent] = []
@@ -164,13 +185,37 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         case .message(let message):
             if !messages.contains(where: { $0.id == message.id }) {
                 messages.append(message)
+                conversation.append(.message(message))
+            }
+        case .toolUsed(let toolUse):
+            let entry = ConversationEntry.toolUse(toolUse)
+            if !conversation.contains(where: { $0.id == entry.id }) {
+                conversation.append(entry)
             }
         case .approvalRequested(let approval):
-            if !approvals.contains(where: { $0.id == approval.id }) {
-                approvals.append(approval)
+            let entry = ConversationEntry.approval(approval, outcome: nil)
+            guard !conversation.contains(where: { $0.id == entry.id }) else { break }
+            approvals.append(approval)
+            // It asks about a tool use that's shown already, so it takes
+            // that one's place rather than saying the same thing twice.
+            let asksAbout = conversation.firstIndex { entry in
+                guard case .toolUse(let toolUse) = entry else { return false }
+                return toolUse.id == approval.toolUseID
             }
-        case .approvalResolved(let approvalID):
+            if let index = asksAbout {
+                conversation[index] = entry
+            } else {
+                conversation.append(entry)
+            }
+        case .approvalResolved(let approvalID, let outcome):
             approvals.removeAll { $0.id == approvalID }
+            let settled = conversation.firstIndex { entry in
+                guard case .approval(let approval, nil) = entry else { return false }
+                return approval.id == approvalID
+            }
+            if let index = settled, case .approval(let approval, _) = conversation[index] {
+                conversation[index] = .approval(approval, outcome: outcome ?? .unknown)
+            }
         case .subagentStarted(let subagent):
             if !subagents.contains(where: { $0.id == subagent.id }) {
                 subagents.append(subagent)
@@ -184,7 +229,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, color, status, activity, messages, approvals, subagents
+        case id, name, color, status, activity, messages, approvals, conversation, subagents
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case lastSeq = "last_seq"
@@ -202,8 +247,27 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         activity = try container.decodeIfPresent(String.self, forKey: .activity)
         messages = try container.decode([Message].self, forKey: .messages)
         approvals = try container.decode([Approval].self, forKey: .approvals)
+        // Servers from before the whole conversation was kept send only the
+        // messages and the approvals waiting.
+        if container.contains(.conversation) {
+            var entries = try container.nestedUnkeyedContainer(forKey: .conversation)
+            while !entries.isAtEnd {
+                if let entry = try? entries.decode(ConversationEntry.self) {
+                    conversation.append(entry)
+                } else {
+                    _ = try entries.decode(Skipped.self) // one this version doesn't know
+                }
+            }
+        } else {
+            conversation = messages.map { .message($0) } + approvals.map { .approval($0, outcome: nil) }
+        }
         // Servers from before there were helpers don't send any.
         subagents = try container.decodeIfPresent([Subagent].self, forKey: .subagents) ?? []
         lastSeq = try container.decode(Int.self, forKey: .lastSeq)
     }
+}
+
+/// Anything at all, decoded only to move past it.
+private struct Skipped: Decodable {
+    init(from decoder: Decoder) throws {}
 }

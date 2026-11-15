@@ -18,6 +18,7 @@ struct WorldView: View {
     var body: some View {
         RealityView { content in
             let world = World()
+            world.show(server.lot, popsUp: false)
             world.show(residents, selectedID: selected?.id)
             content.add(world.root)
             self.world = world
@@ -31,6 +32,11 @@ struct WorldView: View {
         }
         .onChange(of: selected?.id) { _, id in
             world?.show(residents, selectedID: id)
+        }
+        .onChange(of: server.lot) { old, new in
+            // Only news from the server this app has heard from already
+            // pops up, not what was on the lot when it connected.
+            world?.show(new, popsUp: old.revision > 0 && new.revision > old.revision)
         }
         .overlay(alignment: .top) {
             SessionStatusBar(showsSettings: $showsSettings)

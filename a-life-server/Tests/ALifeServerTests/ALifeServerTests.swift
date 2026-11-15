@@ -94,6 +94,11 @@ final class ALifeServerTests: XCTestCase {
         await wait(for: "the end of the turn") { builder.stopReason == .endTurn }
         XCTAssertFalse(builder.isWaitingForYou)
         XCTAssertTrue(builder.transcript.last?.text.hasPrefix("Left the shed where it is") == true)
+        // The request stays in the conversation, with your answer.
+        XCTAssertTrue(builder.conversation.contains {
+            if case .approval(let approval, .denied) = $0 { return approval.toolName == "bash" }
+            return false
+        })
 
         // A second front end joining late sees the same sessions.
         let (latecomer, lateGardener, lateBuilder) = try await connect()
@@ -120,6 +125,10 @@ final class ALifeServerTests: XCTestCase {
         await wait(for: "the interrupt") { builder.stopReason == .interrupted }
         XCTAssertFalse(builder.isWaitingForYou)
         XCTAssertEqual(builder.status, .idle)
+        XCTAssertTrue(builder.conversation.contains {
+            if case .approval(_, .withdrawn) = $0 { return true }
+            return false
+        })
 
         await wait(for: "the Gardener to finish anyway") { gardener.stopReason == .endTurn }
         XCTAssertEqual(builder.stopReason, .interrupted)
