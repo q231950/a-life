@@ -74,8 +74,16 @@ struct AgentPanel: View {
                 HStack(spacing: 6) {
                     if server.sessions.count > 1 {
                         CharacterPicker(selectedID: session.id) { id in
-                            selectedID = id
-                            isExpanded = true
+                            // Switch at once. On iOS a button's tap can carry
+                            // an animation, which would swap the conversation
+                            // with its slide and send the buttons flying as
+                            // the panel changes height.
+                            var transaction = Transaction(animation: nil)
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                selectedID = id
+                                isExpanded = true
+                            }
                         }
                     } else if !isExpanded {
                         CharacterStatus(session: session)
