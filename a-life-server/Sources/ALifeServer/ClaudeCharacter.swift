@@ -19,8 +19,9 @@ import Vapor
 ///   helper out, until the subagent reports back. Each character has one
 ///   subagent of its own, defined with `--agents`: see `Character.helper`.
 ///
-/// The CLI runs where the character works: on the lot, or in the a*life
-/// checkout for the Engineer (`Character.workspace`). It starts with the
+/// The CLI runs where the character works: on the lot, in the a*life
+/// checkout for the Engineer, or in a project of its own
+/// (`Character.workspace`). It starts with the
 /// first message of a conversation and keeps running, so the character
 /// remembers what was said. Starting over stops
 /// it; the next message starts a fresh session. If the CLI stops on its own,

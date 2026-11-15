@@ -18,7 +18,8 @@ struct Character: Equatable, Sendable {
     /// Claude Code's permission mode for the character's session, which
     /// decides what it asks you about before it goes ahead.
     let permissionMode: String
-    /// Where the character's session works: on the lot, or on a*life itself.
+    /// Where the character's session works: on the lot, on a*life itself, or
+    /// on a project of your own.
     let workspace: Workspace
     /// Who the character is, added to Claude Code's own system prompt.
     let role: String
@@ -28,14 +29,33 @@ struct Character: Equatable, Sendable {
 }
 
 /// Where a character's Claude Code session works, as the agents file's
-/// `works_in` says.
-enum Workspace: String, Sendable {
+/// `works_in` or `project` says.
+enum Workspace: Equatable, Sendable {
     /// The lot: the directory the characters share, with the Builder's
     /// buildings and the Gardener's beds.
     case lot
     /// A checkout of the a*life repository, the app and server that run the
     /// sim, such as the Engineer works in.
-    case aLife = "a-life"
+    case aLife
+    /// A project of your own, somewhere other than the lot or a*life, such
+    /// as an engineer you hand the work on another app to.
+    case project(Project)
+}
+
+/// A project a character works on, as the agents file's `project` says: a
+/// directory on this machine, or a git repository the server clones.
+struct Project: Equatable, Sendable {
+    /// The id of the character who works on it, which names its clone.
+    let id: String
+    let source: Source
+
+    enum Source: Equatable, Sendable {
+        /// A directory that is already on this machine, used as it is.
+        case directory(URL)
+        /// A git repository, cloned once into a directory the server keeps
+        /// for the character, at `branch` or the repository's default.
+        case repository(String, branch: String?)
+    }
 }
 
 /// A subagent a character can send off, defined for its session with
@@ -223,6 +243,7 @@ private struct AgentEntry: Decodable {
         case id, name, color
         case permissionMode = "permission_mode"
         case worksIn = "works_in"
+        case project
         case changesThings = "changes_things"
         case role, helper
     }
@@ -247,12 +268,25 @@ private struct AgentEntry: Decodable {
             )
         }
 
-        let worksIn = try container.optional(String.self, .worksIn) ?? Workspace.lot.rawValue
-        guard let workspace = Workspace(rawValue: worksIn) else {
+        let worksIn = try container.optional(String.self, .worksIn)
+        var workspace: Workspace
+        switch worksIn ?? "lot" {
+        case "lot": workspace = .lot
+        case "a-life": workspace = .aLife
+        case let other:
             throw FieldError(
                 container.codingPath + [CodingKeys.worksIn],
-                "\"\(worksIn)\" isn't somewhere a character can work. It can be lot, the lot the characters share, or a-life, a checkout of the a*life repository."
+                "\"\(other)\" isn't somewhere a character can work. It can be lot, the lot the characters share, or a-life, a checkout of the a*life repository. For a project of your own, use project instead."
             )
+        }
+        if let project = try container.optional(ProjectEntry.self, .project) {
+            guard worksIn == nil else {
+                throw FieldError(
+                    container.codingPath + [CodingKeys.project],
+                    "can't go with works_in. A character works on the lot, on a*life or on a project of its own, so leave one of them out."
+                )
+            }
+            workspace = .project(Project(id: id, source: project.source))
         }
 
         character = Character(
@@ -269,6 +303,89 @@ private struct AgentEntry: Decodable {
 
     private static func isColor(_ text: String) -> Bool {
         text.count == 7 && text.first == "#" && text.dropFirst().allSatisfy(\.isHexDigit)
+    }
+}
+
+/// An agent's `project`: a `path` on this machine, or a `repo` to clone,
+/// with its `branch` if need be.
+private struct ProjectEntry: Decodable {
+    let source: Project.Source
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case path, repo, branch
+    }
+
+    init(from decoder: any Decoder) throws {
+        try rejectUnknownFields(in: decoder, CodingKeys.self, of: "a project")
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let path = try container.optional(String.self, .path)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let repo = try container.optional(String.self, .repo)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let branch = try container.optional(String.self, .branch)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch (path, repo) {
+        case (nil, nil):
+            throw FieldError(
+                container.codingPath,
+                "needs a path, a directory on this machine, or a repo, a git repository for the server to clone."
+            )
+        case (.some, .some):
+            throw FieldError(
+                container.codingPath + [CodingKeys.repo],
+                "can't go with path. A project is either a directory on this machine or a git repository to clone, so leave one of them out."
+            )
+        case (let path?, nil):
+            if branch != nil {
+                throw FieldError(
+                    container.codingPath + [CodingKeys.branch],
+                    "is only for a repo. A project's path is used as it is, at whatever branch it is on."
+                )
+            }
+            source = .directory(try Self.directory(path, at: container.codingPath + [CodingKeys.path]))
+        case (nil, let repo?):
+            guard Self.isGitAddress(repo) else {
+                throw FieldError(
+                    container.codingPath + [CodingKeys.repo],
+                    "\"\(repo)\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+                )
+            }
+            if let branch, branch.isEmpty || branch.hasPrefix("-") || branch.contains(where: \.isWhitespace) {
+                throw FieldError(
+                    container.codingPath + [CodingKeys.branch],
+                    "\"\(branch)\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
+                )
+            }
+            source = .repository(repo, branch: branch)
+        }
+    }
+
+    /// The directory `path` names, with `~` expanded, once it is checked to
+    /// be a full path to a directory that is there.
+    private static func directory(_ path: String, at codingPath: [any CodingKey]) throws -> URL {
+        let expanded = (path as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else {
+            throw FieldError(codingPath, "\"\(path)\" should be a full path, such as ~/Development/my-app.")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw FieldError(
+                codingPath,
+                "\(expanded) isn't a directory on this machine. A project's path has to be there already; for one that isn't, give its repo instead."
+            )
+        }
+        return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
+    }
+
+    /// Whether `text` looks like an address `git clone` takes: a URL with a
+    /// scheme git knows, or the `user@host:path` form ssh uses.
+    static func isGitAddress(_ text: String) -> Bool {
+        guard !text.isEmpty, !text.hasPrefix("-"), !text.contains(where: \.isWhitespace) else { return false }
+        for scheme in ["https://", "http://", "ssh://", "git://", "file://"] where text.hasPrefix(scheme) {
+            return text.count > scheme.count
+        }
+        // user@host:path, such as git@github.com:you/app.git
+        guard let at = text.firstIndex(of: "@"), let colon = text[at...].firstIndex(of: ":") else { return false }
+        let user = text[..<at], host = text[text.index(after: at)..<colon], path = text[text.index(after: colon)...]
+        return !user.isEmpty && !host.isEmpty && !host.contains("/") && !path.isEmpty
     }
 }
 

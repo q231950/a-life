@@ -499,6 +499,127 @@ final class ClaudeCodeProcessTests: XCTestCase {
         XCTAssertNoThrow(try withoutCheckout.launch(["-c", "true"], in: .lot).close())
     }
 
+    func testCharactersWhoWorkOnAProjectWorkInIt() async throws {
+        let directory = try lot(), clone = try lot()
+        var claudeCode = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: try lot())
+        claudeCode.clones = [
+            "ada": .success(clone),
+            "bob": .failure(ConfigurationError("Couldn't clone https://example.com/app.git")),
+        ]
+        /// The directory a stand-in for `claude` finds itself in.
+        func workingDirectory(of workspace: Workspace) async throws -> String {
+            let connection = try claudeCode.launch(["-c", #"printf '{"directory":"%s"}\n' "$(pwd -P)""#], in: workspace)
+            var said: JSONValue?
+            for await message in connection.messages {
+                said = message
+            }
+            return URL(fileURLWithPath: try XCTUnwrap(said?["directory"]?.string)).resolvingSymlinksInPath().path
+        }
+
+        let onADirectory = Project(id: "cy", source: .directory(directory))
+        let workedIn = try await workingDirectory(of: .project(onADirectory))
+        XCTAssertEqual(workedIn, directory.resolvingSymlinksInPath().path)
+        let onARepository = Project(id: "ada", source: .repository("https://example.com/app.git", branch: nil))
+        let clonedIn = try await workingDirectory(of: .project(onARepository))
+        XCTAssertEqual(clonedIn, clone.resolvingSymlinksInPath().path)
+
+        // A project that couldn't be cloned says why; one never cloned, too.
+        let failed = Project(id: "bob", source: .repository("https://example.com/app.git", branch: nil))
+        XCTAssertThrowsError(try claudeCode.launch(["-c", "true"], in: .project(failed))) { error in
+            XCTAssertEqual("\(error)", "Couldn't clone https://example.com/app.git")
+        }
+        let never = Project(id: "dee", source: .repository("https://example.com/other.git", branch: nil))
+        XCTAssertThrowsError(try claudeCode.launch(["-c", "true"], in: .project(never))) { error in
+            XCTAssertEqual("\(error)", "https://example.com/other.git hasn't been cloned. Restart the server to clone it.")
+        }
+    }
+
+    func testProjectsAreClonedIntoALIFE_PROJECTS_DIR() {
+        XCTAssertEqual(
+            ClaudeCode.projectsDirectory(in: [:]).path,
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-projects").path
+        )
+        XCTAssertEqual(ClaudeCode.projectsDirectory(in: ["ALIFE_PROJECTS_DIR": ""]).lastPathComponent, "a-life-projects")
+        XCTAssertEqual(
+            ClaudeCode.projectsDirectory(in: ["ALIFE_PROJECTS_DIR": "~/elsewhere"]).path,
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("elsewhere").path
+        )
+    }
+
+    /// Runs git in `directory`, and returns what it printed.
+    @discardableResult
+    private func git(_ arguments: [String], in directory: URL) throws -> String {
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        git.arguments = ["git", "-c", "user.name=a*life", "-c", "user.email=a-life@example.com", "-c", "commit.gpgsign=false"] + arguments
+        git.currentDirectoryURL = directory
+        let output = Pipe(), errors = Pipe()
+        git.standardOutput = output
+        git.standardError = errors
+        try git.run()
+        let printed = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let complaint = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        git.waitUntilExit()
+        XCTAssertEqual(git.terminationStatus, 0, "git \(arguments.joined(separator: " ")): \(complaint)")
+        return printed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func testAProjectsRepositoryIsClonedOnceAndThenReusedAsItIs() throws {
+        // A repository with a main and a feature branch, on this machine.
+        let place = try lot()
+        defer { try? FileManager.default.removeItem(at: place) }
+        let bare = place.appendingPathComponent("app.git")
+        let work = place.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try git(["init", "--quiet", "--bare", "-b", "main", bare.path], in: place)
+        try git(["init", "--quiet", "-b", "main"], in: work)
+        try "# App\n".write(to: work.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        try git(["add", "README.md"], in: work)
+        try git(["commit", "--quiet", "-m", "First"], in: work)
+        try git(["branch", "feature"], in: work)
+        try git(["push", "--quiet", bare.path, "main", "feature"], in: work)
+        let address = bare.absoluteString // file:///…/app.git
+        let projects = place.appendingPathComponent("projects")
+
+        // The first start clones it, into a directory named after its character.
+        let first = try ClaudeCode.checkOut(address, branch: nil, for: "ada", in: projects)
+        let clone = projects.appendingPathComponent("ada", isDirectory: true)
+        XCTAssertEqual(first, .cloned(clone))
+        XCTAssertEqual(try String(contentsOf: clone.appendingPathComponent("README.md"), encoding: .utf8), "# App\n")
+        XCTAssertEqual(try git(["rev-parse", "--abbrev-ref", "HEAD"], in: clone), "main")
+
+        // Later starts use it as it is, with whatever was done in it.
+        try "Half done".write(to: clone.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        try git(["checkout", "--quiet", "feature"], in: clone)
+        XCTAssertEqual(try ClaudeCode.checkOut(address, branch: nil, for: "ada", in: projects), .reused(clone))
+        XCTAssertEqual(try String(contentsOf: clone.appendingPathComponent("notes.txt"), encoding: .utf8), "Half done")
+        XCTAssertEqual(try git(["rev-parse", "--abbrev-ref", "HEAD"], in: clone), "feature")
+
+        // A branch is checked out when it is cloned.
+        let onFeature = try ClaudeCode.checkOut(address, branch: "feature", for: "bob", in: projects)
+        XCTAssertEqual(try git(["rev-parse", "--abbrev-ref", "HEAD"], in: onFeature.directory), "feature")
+
+        // A repository that isn't there says so, and leaves nothing behind
+        // to stop the next start trying again.
+        let nowhere = place.appendingPathComponent("nowhere.git").absoluteString
+        XCTAssertThrowsError(try ClaudeCode.checkOut(nowhere, branch: nil, for: "cy", in: projects)) { error in
+            XCTAssertTrue("\(error)".hasPrefix("Couldn't clone \(nowhere) into \(projects.appendingPathComponent("cy").path): "), "\(error)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: projects.appendingPathComponent("cy").path))
+        XCTAssertThrowsError(try ClaudeCode.checkOut(address, branch: "no-such-branch", for: "cy", in: projects)) { error in
+            XCTAssertTrue("\(error)".hasPrefix("Couldn't clone \(address) at no-such-branch into "), "\(error)")
+        }
+
+        // Something else in the clone's place isn't cloned over.
+        let taken = projects.appendingPathComponent("dee")
+        try FileManager.default.createDirectory(at: taken, withIntermediateDirectories: true)
+        try "Mine".write(to: taken.appendingPathComponent("mine.txt"), atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try ClaudeCode.checkOut(address, branch: nil, for: "dee", in: projects)) { error in
+            XCTAssertEqual("\(error)", "\(taken.path) is there, but isn't a git checkout, so \(address) won't be cloned over it. Move it out of the way and restart the server.")
+        }
+        XCTAssertEqual(try String(contentsOf: taken.appendingPathComponent("mine.txt"), encoding: .utf8), "Mine")
+    }
+
     func testTheCheckoutIsALIFE_REPO_DIROrTheOneTheServerWasBuiltFrom() throws {
         // These tests are built from an a*life checkout, too.
         let builtFrom = try XCTUnwrap(ClaudeCode.builtFrom)

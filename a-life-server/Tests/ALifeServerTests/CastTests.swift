@@ -146,7 +146,7 @@ final class CastTests: XCTestCase {
             ),
             (
                 amended(replacing: "color:", with: "colour:"),
-                "agents.yaml: agents[0].colour isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, changes_things, role and helper."
+                "agents.yaml: agents[0].colour isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, project, changes_things, role and helper."
             ),
             (
                 amended(replacing: "\"#3366CC\"", with: "purple"),
@@ -170,7 +170,7 @@ final class CastTests: XCTestCase {
             ),
             (
                 amended(replacing: "works_in: a-life", with: "works_in: garden"),
-                "agents.yaml: agents[0].works_in \"garden\" isn't somewhere a character can work. It can be lot, the lot the characters share, or a-life, a checkout of the a*life repository."
+                "agents.yaml: agents[0].works_in \"garden\" isn't somewhere a character can work. It can be lot, the lot the characters share, or a-life, a checkout of the a*life repository. For a project of your own, use project instead."
             ),
             (
                 amended(replacing: "changes_things: true", with: "changes_things: sometimes"),
@@ -203,6 +203,125 @@ final class CastTests: XCTestCase {
             (
                 amended(replacing: "description: Paints walls.", with: "descripton: Paints walls."),
                 "agents.yaml: agents[0].helper.descripton isn't a field of a helper. The fields are name, tools, description and prompt."
+            ),
+        ]
+        for mistake in mistakes {
+            XCTAssertThrowsError(try Cast.decode(mistake.file, from: "agents.yaml"), mistake.error) { error in
+                XCTAssertEqual("\(error)", mistake.error)
+            }
+        }
+    }
+
+    // MARK: Projects
+
+    /// The painter, working on `project` instead of a*life.
+    private func painter(onProject project: String) -> String {
+        amended(replacing: "works_in: a-life", with: "project: \(project)")
+    }
+
+    func testAProjectCanBeADirectoryOnThisMachine() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("project-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let character = try XCTUnwrap(Cast.decode(painter(onProject: "{path: \(directory.path)}"), from: "agents.yaml").first)
+        XCTAssertEqual(character.workspace, .project(Project(id: "painter", source: .directory(directory.standardizedFileURL))))
+
+        // ~ is your home directory.
+        let home = try XCTUnwrap(Cast.decode(painter(onProject: "{path: \"~\"}"), from: "agents.yaml").first)
+        guard case .project(let project) = home.workspace, case .directory(let path) = project.source else {
+            return XCTFail("\(home.workspace)")
+        }
+        XCTAssertEqual(path.path, FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path)
+    }
+
+    func testAProjectCanBeAGitRepositoryWithABranch() throws {
+        let repositories: [(project: String, source: Project.Source)] = [
+            ("{repo: https://github.com/someone/app.git}", .repository("https://github.com/someone/app.git", branch: nil)),
+            ("{repo: \"git@github.com:someone/app.git\", branch: develop}", .repository("git@github.com:someone/app.git", branch: "develop")),
+            ("{repo: \"ssh://git@example.com/app.git\"}", .repository("ssh://git@example.com/app.git", branch: nil)),
+            ("{repo: \"file:///tmp/app.git\", branch: release/1.0}", .repository("file:///tmp/app.git", branch: "release/1.0")),
+        ]
+        for (yaml, source) in repositories {
+            let character = try XCTUnwrap(Cast.decode(painter(onProject: yaml), from: "agents.yaml").first, yaml)
+            XCTAssertEqual(character.workspace, .project(Project(id: "painter", source: source)), yaml)
+        }
+    }
+
+    func testTheShippedFilesProjectEngineerWorksOnceItsCommentsAreTakenOff() throws {
+        // The example at the end of the shipped file, without its #s.
+        let shipped = try String(contentsOf: Cast.shippedFile, encoding: .utf8)
+        let start = try XCTUnwrap(shipped.range(of: "  # - id: app-engineer"))
+        let example = shipped[start.lowerBound...]
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.hasPrefix("  #") ? String($0.dropFirst(3)) : String($0) }
+            .joined(separator: "\n")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("my-app-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let onAPath = "agents:\n" + example.replacingOccurrences(of: "~/Development/my-app", with: directory.path)
+        let engineer = try XCTUnwrap(Cast.decode(onAPath, from: "agents.yaml").first)
+        XCTAssertEqual(engineer.name, "App Engineer")
+        XCTAssertEqual(engineer.helper.name, "app-expert")
+        XCTAssertEqual(engineer.workspace, .project(Project(id: "app-engineer", source: .directory(directory.standardizedFileURL))))
+
+        let onARepository = onAPath
+            .replacingOccurrences(of: "    path: \(directory.path)\n", with: "")
+            .replacingOccurrences(of: "    # repo:", with: "    repo:")
+            .replacingOccurrences(of: "    # branch:", with: "    branch:")
+        XCTAssertEqual(
+            try Cast.decode(onARepository, from: "agents.yaml").first?.workspace,
+            .project(Project(id: "app-engineer", source: .repository("git@github.com:you/my-app.git", branch: "main")))
+        )
+    }
+
+    func testMistakesInAProjectAreRefusedSayingWhereTheyAre() throws {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("nowhere-\(UUID().uuidString)").path
+        let mistakes: [(file: String, error: String)] = [
+            (
+                painter(onProject: "{path: \(missing)}"),
+                "agents.yaml: agents[0].project.path \(missing) isn't a directory on this machine. A project's path has to be there already; for one that isn't, give its repo instead."
+            ),
+            (
+                painter(onProject: "{path: Development/app}"),
+                "agents.yaml: agents[0].project.path \"Development/app\" should be a full path, such as ~/Development/my-app."
+            ),
+            (
+                painter(onProject: "{repo: github.com/someone/app}"),
+                "agents.yaml: agents[0].project.repo \"github.com/someone/app\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+            ),
+            (
+                painter(onProject: "{repo: \"--upload-pack=touch /tmp/x\"}"),
+                "agents.yaml: agents[0].project.repo \"--upload-pack=touch /tmp/x\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+            ),
+            (
+                painter(onProject: "{repo: \"https://github.com/someone/app.git\", branch: \"-x\"}"),
+                "agents.yaml: agents[0].project.branch \"-x\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
+            ),
+            (
+                painter(onProject: "{path: /tmp, branch: main}"),
+                "agents.yaml: agents[0].project.branch is only for a repo. A project's path is used as it is, at whatever branch it is on."
+            ),
+            (
+                painter(onProject: "{path: /tmp, repo: \"https://github.com/someone/app.git\"}"),
+                "agents.yaml: agents[0].project.repo can't go with path. A project is either a directory on this machine or a git repository to clone, so leave one of them out."
+            ),
+            (
+                painter(onProject: "{branch: main}"),
+                "agents.yaml: agents[0].project needs a path, a directory on this machine, or a repo, a git repository for the server to clone."
+            ),
+            (
+                painter(onProject: "{url: \"https://github.com/someone/app.git\"}"),
+                "agents.yaml: agents[0].project.url isn't a field of a project. The fields are path, repo and branch."
+            ),
+            (
+                painter(onProject: "/tmp"),
+                "agents.yaml: agents[0].project should be a set of fields."
+            ),
+            (
+                amended(replacing: "works_in: a-life", with: "works_in: a-life\n    project: {path: /tmp}"),
+                "agents.yaml: agents[0].project can't go with works_in. A character works on the lot, on a*life or on a project of its own, so leave one of them out."
             ),
         ]
         for mistake in mistakes {
