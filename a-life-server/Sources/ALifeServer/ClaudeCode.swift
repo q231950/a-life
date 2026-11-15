@@ -36,6 +36,9 @@ struct ClaudeCode: ClaudeCodeLauncher {
     var repository: URL?
     /// The model for every character, or `nil` for Claude Code's default.
     var model: String?
+    /// The clone of each project that is a git repository, by the id of the
+    /// character who works on it, or why there isn't one: see `checkOut`.
+    var clones: [String: Result<URL, ConfigurationError>] = [:]
 
     func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
         let directory: URL
@@ -47,6 +50,17 @@ struct ClaudeCode: ClaudeCodeLauncher {
                 throw ConfigurationError("There's no a*life checkout to work in. Set ALIFE_REPO_DIR to one and restart the server.")
             }
             directory = repository
+        case .project(let project):
+            switch project.source {
+            case .directory(let path):
+                directory = path
+            case .repository(let address, _):
+                switch clones[project.id] {
+                case .success(let clone): directory = clone
+                case .failure(let problem): throw problem
+                case nil: throw ConfigurationError("\(address) hasn't been cloned. Restart the server to clone it.")
+                }
+            }
         }
 
         var environment = ProcessInfo.processInfo.environment
@@ -94,6 +108,73 @@ struct ClaudeCode: ClaudeCodeLauncher {
             .deletingLastPathComponent()
         let server = checkout.appendingPathComponent("a-life-server/Package.swift").path
         return FileManager.default.fileExists(atPath: server) ? checkout : nil
+    }
+
+    /// Where the server clones the projects that are git repositories, one
+    /// directory per character: `ALIFE_PROJECTS_DIR`, or `~/a-life-projects`
+    /// unless it is set.
+    static func projectsDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let path = environment["ALIFE_PROJECTS_DIR"], !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-projects", isDirectory: true)
+    }
+
+    /// What became of a project's clone when the server started.
+    enum Checkout: Equatable {
+        /// Cloned just now.
+        case cloned(URL)
+        /// Cloned on an earlier start, and used as it is: it isn't fetched,
+        /// pulled or switched to another branch, so work in it is kept.
+        case reused(URL)
+
+        var directory: URL {
+            switch self {
+            case .cloned(let directory), .reused(let directory): return directory
+            }
+        }
+    }
+
+    /// The clone of `repository` for the character `id`, in a directory of
+    /// its own in `projects`: cloned with `git` the first time, at `branch`
+    /// if one is given, and reused after that. Throws, saying why, if it
+    /// can't be cloned or something else is in its place.
+    static func checkOut(_ repository: String, branch: String?, for id: String, in projects: URL) throws -> Checkout {
+        let clone = projects.appendingPathComponent(id, isDirectory: true)
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: clone.path) {
+            guard fileManager.fileExists(atPath: clone.appendingPathComponent(".git").path) else {
+                throw ConfigurationError("\(clone.path) is there, but isn't a git checkout, so \(repository) won't be cloned over it. Move it out of the way and restart the server.")
+            }
+            return .reused(clone)
+        }
+        try fileManager.createDirectory(at: projects, withIntermediateDirectories: true)
+
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        git.arguments = ["git", "clone", "--quiet"] + (branch.map { ["--branch", $0] } ?? []) + ["--", repository, clone.path]
+        var environment = ProcessInfo.processInfo.environment
+        // Fail rather than wait at startup for a password nobody is there to type.
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        if environment["GIT_SSH_COMMAND"] == nil { environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes" }
+        git.environment = environment
+        git.standardInput = FileHandle.nullDevice
+        git.standardOutput = FileHandle.nullDevice
+        let errors = Pipe()
+        git.standardError = errors
+        do {
+            try git.run()
+        } catch {
+            throw ConfigurationError("Couldn't run git to clone \(repository): \(error.localizedDescription)")
+        }
+        let said = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        git.waitUntilExit()
+        guard git.terminationStatus == 0 else {
+            try? fileManager.removeItem(at: clone) // so the next start tries again
+            let reason = said.split(whereSeparator: \.isNewline).suffix(3).joined(separator: " ")
+            throw ConfigurationError("Couldn't clone \(repository)\(branch.map { " at \($0)" } ?? "") into \(clone.path): \(reason.isEmpty ? "git stopped with \(git.terminationStatus)" : reason)")
+        }
+        return .cloned(clone)
     }
 
     /// The `claude` command: `ALIFE_CLAUDE_PATH` if it is set, otherwise the

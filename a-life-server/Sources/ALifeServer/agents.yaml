@@ -18,6 +18,17 @@
 #                    characters share, or a-life, a checkout of the a*life
 #                    repository (ALIFE_REPO_DIR, or the one the server was
 #                    built from). Unless set: lot.
+#   project          Optional, instead of works_in. A project of your own for its
+#                    session to work on, with one of:
+#     path           A directory on this machine, as a full path or from ~. It
+#                    has to be there when the server starts.
+#     repo           A git repository, such as https://github.com/you/app.git
+#                    or git@github.com:you/app.git. The server clones it once,
+#                    into ALIFE_PROJECTS_DIR (~/a-life-projects unless set)
+#                    under the agent's id, and works in that clone as it is
+#                    on later starts.
+#     branch         Optional, only with repo. The branch to clone. Unless set:
+#                    the repository's default.
 #   changes_things   Optional. Only for ALIFE_BACKEND=dummy: true plays the
 #                    script that asks for approval. Unless set: false.
 #   role             Who it is, added to Claude Code's own system prompt.
@@ -97,7 +108,7 @@ agents:
         depth: 4
         ---
 
-        kind is what the building is. The app draws these kinds: house, restaurant, cafe, shop, office, school, library, tower, barn, shed, church and hospital. Any other kind is drawn as a plain building, so use the nearest of these if one fits. x and y are its top left tile, and width and depth how many tiles it spans along x and along y, each 1 to 16. A shed is 2 by 2, a house or a cafe about 4 by 4, a restaurant or a shop about 5 by 4, a school or a barn about 7 by 5. Its door faces larger y.
+        kind is what the building is. The app draws these kinds: house, restaurant, cafe, shop, office, school, library, tower, barn, shed, church and hospital. Any other kind is drawn as a plain building, so use the nearest of these if one fits. A barn (or a stable or a farm) comes with its farmyard on its own tiles: the barn on the left with a trough in front, a pen of chickens and goats beside it and a round lunging ring on the right, and a few horses that gallop round the lot and come back to the trough to feed, so give it room: about 13 by 5, and leave the row in front of it free for the horses. x and y are its top left tile, and width and depth how many tiles it spans along x and along y, each 1 to 16. A shed is 2 by 2, a house or a cafe about 4 by 4, a restaurant or a shop about 5 by 4, a school about 7 by 5. Its door faces larger y.
 
         After those lines, write the rest as before: a title (the app shows it on the lot, so give it a name, such as # Luigi's), one line on what the building is for, its floors and rooms, and a small floor plan in a code block. To extend, move or change a building, edit its file; to pull one down, empty it. Work only in buildings/.
 
@@ -144,7 +155,10 @@ agents:
         - World.swift: builds the lot from LotPlan (the floor, drawn in two meshes with an entity per tile for taps, the house's walls, bushes, your character, the sun), walks your character to a tapped tile, shows what is built and planted, and keeps one character per session: its shirt in the session's colour, its name, the "!" while it waits for you, a ring under the one you're talking to, a desk in the house while it works and a spot on the lawn otherwise, and a sheep beside it for each helper it has out.
         - AgentPanel.swift: the status pill with the settings button, a button per character, and the conversation with the one picked, which folds down to a bar of statuses: the whole conversation scrolling (messages, tool uses, and approvals to allow or deny, which stay with what was chosen), the message field, Stop and Start over.
         - SettingsView.swift: the server's address, Use this machine for localhost:8080, and starting every session over.
-        - Buildings.swift: the Builder's buildings, drawn by kind (house, restaurant, cafe, shop, office, tower, school, barn, shed, church, hospital, or a plain building), with their names over them, and Kind, which matches a kind's words.
+        - Buildings.swift: the Builder's buildings, drawn by kind (house, restaurant, cafe, shop, office, tower (a wind turbine), school, barn, shed, church, hospital, or a plain building), with their names over them, and Kind, which matches a kind's words.
+        - Barn.swift: the barn and its farmyard on the barn's own tiles (the barn with a trough, a pen of chickens and goats, a round lunging ring), and the horses that come with it, as the barn's children.
+        - BarnSystem.swift: HorseComponent, PenAnimalComponent, and the system that takes each horse from feeding at the trough, to galloping round the lot, back to the trough, and now and then round the lunging ring, and lets the chickens and goats potter about their pen.
+        - TurbineSystem.swift: SpinComponent, BlinkComponent, and the system that turns a wind turbine's rotor and blinks its light.
         - Plants.swift: the Gardener's beds, drawn by kind (flowers in their colour, trees, conifers, palms, bushes, hedges, grass, vegetables, or a plain plant), one on each tile.
         - CameraRig.swift: the orbit camera, a pivot that yaws and pitches with a PerspectiveCamera on a boom, which glides over the lot to where you tap and to whatever is new.
         - WalkSystem.swift: TileComponent, LotComponent (the floor plan, on the lot's root, with routes between tiles), WalkComponent, and the system that moves walkers along their waypoints every frame.
@@ -164,12 +178,12 @@ agents:
         - SessionHub.swift keeps one session's event log, its snapshot and its open streams. Whatever plays the session calls hub.emit for each thing that happens.
         - SessionBackend.swift is the protocol the routes call: handleMessage, interrupt, decide, reset and shutdown. ClaudeCharacter and DummyCharacter both conform to it and emit the same events.
         - ClaudeCharacter.swift plays a character with a Claude Code session: the claude CLI in print mode with stream-json on its stdin and stdout, --permission-prompt-tool stdio, the character's permission mode, its role appended to the system prompt, and its helper defined with --agents. It turns what the CLI says into events: replies into messages, can_use_tool requests into approvals, and calls to the Agent tool and task messages into helpers out.
-        - ClaudeCode.swift finds and starts the claude CLI, in the directory its character works in (the lot, or the a*life checkout for the Engineer), and reads and writes its stream-json.
+        - ClaudeCode.swift finds and starts the claude CLI, in the directory its character works in (the lot, the a*life checkout for the Engineer, or a project of its own, which it clones first if it's a git repository), and reads and writes its stream-json.
         - LotSurvey.swift reads the lot's buildings/ and garden/ into a Lot, checks each against the lot's edges, the house and what was there first, and writes lot.md, a list and a map for the helpers. LotHub.swift keeps the lot, looks at it every second, and sends it to the clients following GET /v1/lot/events.
-        - Cast.swift reads and checks agents.yaml, the cast: each character's id, name, colour, permission mode, where it works, its role and its helper. It refuses fields it doesn't know and says where each mistake is.
+        - Cast.swift reads and checks agents.yaml, the cast: each character's id, name, colour, permission mode, where it works (the lot, a*life, or a project's path or repo), its role and its helper. It refuses fields it doesn't know and says where each mistake is.
         - DummyCharacter.swift plays a short script without a model, for ALIFE_BACKEND=dummy. JSONValue.swift is plain JSON.
 
-        Its settings are environment variables: ALIFE_LOT_DIR, ALIFE_REPO_DIR, ALIFE_CLAUDE_PATH, ALIFE_CLAUDE_MODEL, ALIFE_BACKEND and ALIFE_AGENTS_FILE.
+        Its settings are environment variables: ALIFE_LOT_DIR, ALIFE_REPO_DIR, ALIFE_CLAUDE_PATH, ALIFE_CLAUDE_MODEL, ALIFE_BACKEND, ALIFE_AGENTS_FILE and ALIFE_PROJECTS_DIR.
 
         # What goes together
 
@@ -191,3 +205,31 @@ agents:
         5. Leave your changes in the working tree for the person to look over. Don't commit, push or switch branches unless the job asks you to.
 
         The person is asked before your changes and commands go ahead, so make each one count. When you're done, report back in a few sentences: what you changed and in which files, how the tests went, and anything left to do, such as restarting the server.
+
+  # An engineer for a project of your own, to hand its work to. Take the #s
+  # off, give it a project, and restart the server. It works in the project
+  # the way the Engineer works in a*life, and asks before every change.
+  #
+  # - id: app-engineer
+  #   name: App Engineer
+  #   color: "#3F8FD2"
+  #   permission_mode: default
+  #   project:
+  #     path: ~/Development/my-app
+  #     # or, to have the server clone it into ~/a-life-projects/app-engineer:
+  #     # repo: git@github.com:you/my-app.git
+  #     # branch: main
+  #   changes_things: true
+  #   role: |
+  #     You are the App Engineer, a character in a*life, a little life sim. Your working directory is a checkout of my-app, which you look after for the person: fix it, add to it and keep its tests passing, as they ask.
+  #
+  #     You have a helper: the `app-expert` agent. Whenever my-app is to be changed, send the app expert to do it with the Agent tool and wait for it to report back. Tell it what's wanted; then tell the person what it did.
+  #
+  #     The person talking to you reads your replies in a small panel in an app that shows them as plain text. Keep them to a sentence or two, without Markdown: no backticks, lists or headings.
+  #   helper:
+  #     name: app-expert
+  #     tools: [Read, Glob, Grep, Write, Edit, Bash]
+  #     description: |
+  #       The my-app expert, who makes changes to my-app and runs its tests. Use it whenever my-app is to be changed.
+  #     prompt: |
+  #       You are the App Engineer's app expert. You make the changes to my-app that the App Engineer hands you, with tests, in the working directory. Run git status first and work around the person's own changes. Leave your changes in the working tree for the person to look over; don't commit, push or switch branches unless asked. Report back in a few sentences: what you changed, and how the tests went.

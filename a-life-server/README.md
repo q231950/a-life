@@ -78,6 +78,7 @@ All optional, as environment variables:
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters. The shipped [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) unless set. See [The agents file](#the-agents-file). |
+| `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id. `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
 
 ```sh
 ALIFE_CLAUDE_MODEL=haiku ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
@@ -260,9 +261,35 @@ Tell it "make the sheep jump when they take off" and it works out what's wanted 
 
 It leaves its changes in the working tree for you to look over, and doesn't commit, push or switch branches unless you ask it to. A change to the server takes effect once you restart it, and a change to the app once you build it again.
 
+### A character for another project
+
+A character can work on a project of your own instead of the lot or a\*life, so that you can hand it the work on another app: give it a `project` in the [agents file](#the-agents-file) instead of `works_in`. Its session is an ordinary Claude Code session in the project's directory, as the Engineer's is in the a\*life checkout, with its own helper, and it walks the lot like everyone else. The project is either a directory that is already on your Mac:
+
+```yaml
+  - id: app-engineer
+    name: App Engineer
+    project:
+      path: ~/Development/my-app
+    ...
+```
+
+or a git repository, which the server clones for it:
+
+```yaml
+    project:
+      repo: git@github.com:you/my-app.git   # or https://github.com/you/my-app.git
+      branch: main                          # optional: the repository's default unless set
+```
+
+A `path` is a full path, or one from `~`, and has to be there when the server starts; the server won't start if it isn't. A `repo` is cloned the first time the server starts with it, into `~/a-life-projects/<id>` (or under `ALIFE_PROJECTS_DIR`), at its `branch` if there is one. On later starts the server uses that clone as it is: it doesn't fetch, pull or switch branches, so whatever the character or you did in it is kept. To start afresh, delete the clone and restart the server. If something that isn't a git checkout is in its place, the server leaves it alone. The clone runs `git` with your own credentials, without asking for a password, so a private repository needs an ssh key or a credential helper that works without you.
+
+When it starts, the server says which directory each character works in, and whether it cloned a project just now or found it from before. If a clone fails, it says why and carries on: the others work as usual, and that character says why when you talk to it, until the clone works on a later start.
+
+The shipped [`agents.yaml`](Sources/ALifeServer/agents.yaml) ends with such a character, the App Engineer, commented out: take the `#`s off, point it at your project, and restart the server.
+
 ### The agents file
 
-The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder and the Engineer above. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode or where it works, or to add or take away a character. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
+The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder and the Engineer above. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode or where it works (the lot, a\*life or a project of your own), or to add or take away a character. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
 
 ```sh
 ALIFE_AGENTS_FILE=~/my-agents.yaml swift run ALifeServer
@@ -277,6 +304,7 @@ agents:
     color: "#3366CC"        # optional: its shirt, which its helper's sheep wear too
     permission_mode: acceptEdits  # optional: what Claude Code asks you before doing; default unless set
     works_in: lot           # optional: lot, or a-life for your a*life checkout; lot unless set
+    # project: {path: ~/Development/my-app}  # optional, instead of works_in: a project of your own
     changes_things: true    # optional: the dummy's script; false unless set
     role: |                 # who it is, added to Claude Code's system prompt
       You are the Painter, a character in a*life, a little life sim. ...
@@ -295,7 +323,11 @@ agents:
 | `name` | required | What the front ends call the character. |
 | `color` | optional | Its shirt on the lot, which its helper's sheep wear too, as `"#RRGGBB"`. Quote it: in YAML, `#` starts a comment. Without one, the front ends choose. |
 | `permission_mode` | optional | [Claude Code's permission mode](https://code.claude.com/docs/en/permission-modes) for the session, which decides what it asks you before doing: `default` (or `manual`) asks before every change, `acceptEdits` lets changes to files go ahead, and `plan`, `auto`, `dontAsk` and `bypassPermissions` are also taken. `default` unless set. |
-| `works_in` | optional | Where the character's session works: `lot`, the directory the characters share, or `a-life`, your a\*life checkout, as the [Engineer](#the-engineer-and-the-alife-checkout) does. `lot` unless set. |
+| `works_in` | optional | Where the character's session works: `lot`, the directory the characters share, or `a-life`, your a\*life checkout, as the [Engineer](#the-engineer-and-the-alife-checkout) does. `lot` unless set, or unless it has a `project`. |
+| `project` | optional | Instead of `works_in`: a project of your own for the character to work on. See [A character for another project](#a-character-for-another-project). |
+| `project.path` | | A directory on your Mac, as a full path or from `~`. It has to be there. |
+| `project.repo` | | Instead of `path`: a git repository, such as `https://github.com/you/app.git` or `git@github.com:you/app.git` (`ssh://`, `git://` and `file://` addresses do too), which the server clones into `ALIFE_PROJECTS_DIR`. |
+| `project.branch` | optional | Only with `repo`: the branch to clone. The repository's default unless set. |
 | `changes_things` | optional | Only for the [dummy characters](#the-dummy-characters): `true` plays the script that asks for approval, like the Builder's. `false` unless set. |
 | `role` | required | Who the character is, added to Claude Code's own system prompt (`--append-system-prompt`). |
 | `helper.name` | required | The subagent's name, which the character uses to send it off: lowercase letters, digits and hyphens. |
@@ -309,7 +341,8 @@ The server checks the whole file when it starts and won't start if anything is w
 
 ```
 agents.yaml: agents[2].color should be a colour like "#8050C8", not "purple".
-agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, changes_things, role and helper.
+agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, project, changes_things, role and helper.
+agents.yaml: agents[3].project.path /Users/you/Development/my-app isn't a directory on this machine. A project's path has to be there already; for one that isn't, give its repo instead.
 agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an id of its own.
 ```
 
@@ -346,7 +379,7 @@ The kinds the app draws:
 
 | | Kinds |
 |---|---|
-| Buildings | house, restaurant, cafe, shop, office, tower, school, library, barn, shed, church, hospital, and words like them (a bistro is a restaurant, a bookshop a shop) |
+| Buildings | house, restaurant, cafe, shop, office, tower, school, library, barn, shed, church, hospital, and words like them (a bistro is a restaurant, a bookshop a shop). A barn (or a stable or a farm) comes with a pen of chickens and goats, a lunging ring and horses that gallop round the lot, so it wants room: about 13 by 5, with the row in front of it free. |
 | Plants | flowers (rose, tulip, daisy, sunflower, lavender, poppy, or any other flower), trees (oak, maple, birch, apple, cherry, palm, pine), bush, hedge, grass, and vegetables (carrot, lettuce, cabbage, tomato, pumpkin, potato, or any other vegetable) |
 
 The server looks at `buildings/` and `garden/` every second. A file that runs off the lot, is on the house, is bigger than 16 tiles a side, or is missing its kind, `x` or `y`, stays off the lot. If two things would share a tile, the one that was there first (whose file changed longest ago) stays, and the other stays off. An empty file stands for nothing, so emptying one pulls the building down or digs the bed up. Files without the lines at the top, such as ones written before the lot could be built on, stay off it too, until a character adds them.
@@ -390,14 +423,14 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `entrypoint.swift` | Starts Vapor. |
 | `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, and the routes. |
 | `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode and its helper. See [The agents file](#the-agents-file). |
-| `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper`. |
+| `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`. |
 | `routes.swift` | The HTTP API, including the event streams and the lot's. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house and each other, and writes `lot.md`. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
 | `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
-| `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, starts the CLI where its character works, and reads and writes its stream-json, one message per line. |
+| `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories, starts the CLI where its character works, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in. |
 
@@ -409,11 +442,11 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, and finding the a\*life checkout.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the planter being told where the house is, and a front end seeing a restaurant and an oak appear.
 
-`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
+`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path or in a repository and the mistakes in them, the App Engineer in the shipped file once its comments are taken off, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
 
 One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It costs a little, so it only runs when asked:
 

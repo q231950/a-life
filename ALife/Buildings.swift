@@ -4,8 +4,9 @@ import RealityKit
 
 /// The Builder's buildings, drawn by their kind: a house has a pitched red
 /// roof and a chimney, a restaurant a striped awning, an office bands of
-/// windows, a church a spire, and so on. A kind it doesn't know is a plain
-/// building. Each has its name over it.
+/// windows, a church a spire, a tower is a wind turbine, a barn comes with
+/// its farmyard and horses (see `Barn`), and so on. A kind it doesn't know is
+/// a plain building. Each has its name over it.
 @MainActor
 enum Buildings {
     /// A building standing on `width` by `depth` metres, its front (with the
@@ -14,6 +15,14 @@ enum Buildings {
         let style = Style(kind: item.kind)
         let building = Entity()
         building.name = item.id
+        if style.isWindTurbine {
+            addWindTurbine(to: building, width: width, depth: depth, label: item.name)
+            return building
+        }
+        if style.isBarn {
+            Barn.addFarmyard(to: building, item: item, width: width, depth: depth)
+            return building
+        }
 
         // A little room between neighbours.
         let w = max(width - 0.2, 0.6)
@@ -106,6 +115,10 @@ enum Buildings {
         var hasChimney = false
         var hasSpire = false
         var hasRedCross = false
+        /// Not a building at all but a wind turbine, drawn by `addWindTurbine`.
+        var isWindTurbine = false
+        /// A barn with its farmyard and horses, drawn by `Barn`.
+        var isBarn = false
 
         init(walls: PlatformColor, roof: Roof, height: Float) {
             self.walls = walls
@@ -130,7 +143,10 @@ enum Buildings {
             } else if `is`("shop", "store", "market", "grocer", "boutique", "kiosk", "pharmacy") {
                 self.init(walls: rgb(0.88, 0.88, 0.9), roof: .flat(rgb(0.35, 0.38, 0.45)), height: 1.1)
                 awning = rgb(0.2, 0.45, 0.82)
-            } else if `is`("tower", "skyscraper", "apartment", "flats", "block", "hotel") {
+            } else if `is`("tower", "turbine") {
+                self.init(walls: rgb(0.95, 0.95, 0.96), roof: .flat(rgb(0.95, 0.95, 0.96)), height: 5)
+                isWindTurbine = true
+            } else if `is`("skyscraper", "apartment", "flats", "block", "hotel") {
                 self.init(walls: rgb(0.68, 0.7, 0.74), roof: .flat(rgb(0.3, 0.32, 0.36)), height: 5)
                 hasWindowBands = true
             } else if `is`("office", "bank", "studio", "lab") {
@@ -145,7 +161,10 @@ enum Buildings {
             } else if `is`("school", "library", "town hall", "museum", "university", "college", "station") {
                 self.init(walls: rgb(0.72, 0.36, 0.28), roof: .pitched(rgb(0.33, 0.36, 0.42)), height: 1.4)
                 door = rgb(0.2, 0.3, 0.55)
-            } else if `is`("barn", "stable", "farm", "mill") {
+            } else if `is`("barn", "stable", "farm", "farmyard", "ranch", "paddock") {
+                self.init(walls: rgb(0.7, 0.18, 0.15), roof: .pitched(rgb(0.3, 0.3, 0.33)), height: 1.5)
+                isBarn = true
+            } else if `is`("mill") {
                 self.init(walls: rgb(0.7, 0.18, 0.15), roof: .pitched(rgb(0.3, 0.3, 0.33)), height: 1.5)
                 door = rgb(0.95, 0.93, 0.88)
             } else if `is`("house", "home", "cottage", "bungalow", "villa", "lodge") {
@@ -213,8 +232,102 @@ enum Buildings {
         return towerHeight + 1.2
     }
 
+    /// A wind turbine standing in the middle of `width` by `depth` metres: a
+    /// slender white tower on a concrete pad, with a nacelle on top, a rotor
+    /// of three blades facing the front that turns all the time, and a red
+    /// light on top that blinks. `TurbineSystem` does the turning and blinking.
+    private static func addWindTurbine(to building: Entity, width: Float, depth: Float, label: String) {
+        let white = material(PlatformColor(red: 0.95, green: 0.95, blue: 0.96, alpha: 1), roughness: 0.45)
+        let w = max(width - 0.2, 0.6)
+        let d = max(depth - 0.2, 0.6)
+
+        let pad = ModelEntity(mesh: .generateBox(width: w, height: 0.06, depth: d, cornerRadius: 0.02), materials: [material(PlatformColor(white: 0.72, alpha: 1))])
+        pad.position = [0, 0.03, 0]
+        building.addChild(pad)
+
+        // The tower, narrowing towards the top.
+        let height: Float = 5
+        let foot = min(0.24, min(w, d) / 4)
+        if let mesh = taperedTube(height: height, bottomRadius: foot, topRadius: foot * 0.5) {
+            building.addChild(ModelEntity(mesh: mesh, materials: [white]))
+        } else {
+            let tower = ModelEntity(mesh: .generateCylinder(height: height, radius: foot * 0.75), materials: [white])
+            tower.position = [0, height / 2, 0]
+            building.addChild(tower)
+        }
+
+        let door = ModelEntity(mesh: .generateBox(width: 0.14, height: 0.3, depth: 0.03), materials: [material(PlatformColor(white: 0.55, alpha: 1))])
+        door.position = [0, 0.21, foot * 0.95]
+        building.addChild(door)
+
+        // The nacelle, the housing on top, sticking out further at the back.
+        let head = Entity()
+        head.position = [0, height, 0]
+        building.addChild(head)
+        let nacelle = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.28, depth: 0.8, cornerRadius: 0.07), materials: [white])
+        nacelle.position = [0, 0.12, -0.12]
+        head.addChild(nacelle)
+
+        // The rotor: a rounded hub and three blades, a third of a turn apart,
+        // starting at a random angle so neighbouring turbines aren't in step.
+        let bladeLength: Float = 1.9
+        let rotor = Entity()
+        rotor.position = [0, 0.12, 0.32]
+        rotor.orientation = simd_quatf(angle: .random(in: 0..<(2 * .pi)), axis: [0, 0, 1])
+        rotor.components.set(SpinComponent(axis: [0, 0, 1], speed: 1.4))
+        head.addChild(rotor)
+        let hub = ModelEntity(mesh: .generateSphere(radius: 0.12), materials: [white])
+        hub.scale = [1, 1, 1.4]
+        rotor.addChild(hub)
+        for index in 0..<3 {
+            let arm = Entity()
+            arm.orientation = simd_quatf(angle: Float(index) * 2 * .pi / 3, axis: [0, 0, 1])
+            let blade = ModelEntity(mesh: .generateBox(width: 0.14, height: bladeLength, depth: 0.035, cornerRadius: 0.015), materials: [white])
+            blade.position = [0, bladeLength / 2 + 0.06, 0]
+            blade.orientation = simd_quatf(angle: 0.3, axis: [0, 1, 0]) // pitched into the wind
+            arm.addChild(blade)
+            rotor.addChild(arm)
+        }
+
+        // A small red light on top of the nacelle, unlit so it shines.
+        let beacon = Entity()
+        beacon.position = [0, 0.12 + 0.14 + 0.04, -0.4]
+        beacon.components.set(BlinkComponent(period: 1, onFraction: 0.5))
+        let light = ModelEntity(mesh: .generateSphere(radius: 0.055), materials: [UnlitMaterial(color: PlatformColor(red: 1, green: 0.05, blue: 0.05, alpha: 1))])
+        beacon.addChild(light)
+        head.addChild(beacon)
+
+        addLabel(label, to: building, at: height + 0.12 + bladeLength + 0.5)
+    }
+
+    /// The side of a tube that narrows from `bottomRadius` on the floor to
+    /// `topRadius` at `height`, with no ends: the floor and the nacelle hide them.
+    private static func taperedTube(height: Float, bottomRadius: Float, topRadius: Float, segments: Int = 24) -> MeshResource? {
+        let slope = (bottomRadius - topRadius) / height
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        for index in 0..<segments {
+            let angle = Float(index) / Float(segments) * 2 * .pi
+            let outward = SIMD3<Float>(sin(angle), 0, cos(angle))
+            let normal = simd_normalize(outward + [0, slope, 0])
+            positions += [outward * bottomRadius, outward * topRadius + [0, height, 0]]
+            normals += [normal, normal]
+        }
+        var indices: [UInt32] = []
+        for index in 0..<segments {
+            let bottom = UInt32(index * 2), top = bottom + 1
+            let nextBottom = UInt32((index + 1) % segments * 2), nextTop = nextBottom + 1
+            indices += [bottom, nextBottom, top, top, nextBottom, nextTop]
+        }
+        var descriptor = MeshDescriptor(name: "taperedTube")
+        descriptor.positions = MeshBuffers.Positions(positions)
+        descriptor.normals = MeshBuffers.Normals(normals)
+        descriptor.primitives = .triangles(indices)
+        return try? MeshResource.generate(from: [descriptor])
+    }
+
     /// Its name, floating over it and facing the camera.
-    private static func addLabel(_ name: String, to building: Entity, at height: Float) {
+    static func addLabel(_ name: String, to building: Entity, at height: Float) {
         let mesh = MeshResource.generateText(
             String(name.prefix(30)),
             extrusionDepth: 0.01,
@@ -234,7 +347,7 @@ enum Buildings {
         building.addChild(label)
     }
 
-    private static func material(_ color: PlatformColor, roughness: Float = 0.75) -> SimpleMaterial {
+    static func material(_ color: PlatformColor, roughness: Float = 0.75) -> SimpleMaterial {
         SimpleMaterial(color: color, roughness: .float(roughness), isMetallic: false)
     }
 }

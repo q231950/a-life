@@ -18,6 +18,11 @@ enum Players: Sendable {
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
+    /// - `ALIFE_PROJECTS_DIR`: where the projects that are git repositories
+    ///   are cloned. `~/a-life-projects` unless set.
+    ///
+    /// It clones each such project that isn't cloned yet, and says where
+    /// each character works.
     static func fromEnvironment(for cast: [Character], lot: URL, logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
@@ -32,16 +37,45 @@ enum Players: Sendable {
             }
             let repository = try ClaudeCode.findRepository(in: environment)
             let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
-            logger.notice("The characters are Claude Code sessions (\(executable.path)), working on the lot in \(lot.path)")
-            let onALife = cast.filter { $0.workspace == .aLife }.map(\.name).joined(separator: ", ")
-            if !onALife.isEmpty {
-                if let repository {
-                    logger.notice("Working on a*life, in \(repository.path): \(onALife)")
-                } else {
-                    logger.warning("There's no a*life checkout for \(onALife) to work in. Set ALIFE_REPO_DIR to one.")
+            logger.notice("The characters are Claude Code sessions (\(executable.path))")
+            var claudeCode = ClaudeCode(executable: executable, lot: lot, repository: repository, model: model)
+            let projects = ClaudeCode.projectsDirectory(in: environment)
+            for character in cast {
+                let name = character.name
+                switch character.workspace {
+                case .lot:
+                    logger.notice("\(name) works on the lot, in \(lot.path)")
+                case .aLife:
+                    if let repository {
+                        logger.notice("\(name) works on a*life, in \(repository.path)")
+                    } else {
+                        logger.warning("There's no a*life checkout for \(name) to work in. Set ALIFE_REPO_DIR to one.")
+                    }
+                case .project(let project):
+                    switch project.source {
+                    case .directory(let directory):
+                        logger.notice("\(name) works on a project, in \(directory.path)")
+                    case .repository(let address, let branch):
+                        // A clone that fails only keeps its own character
+                        // from starting, as a missing a*life checkout does.
+                        do {
+                            switch try ClaudeCode.checkOut(address, branch: branch, for: project.id, in: projects) {
+                            case .cloned(let clone):
+                                logger.notice("\(name) works on \(address), cloned just now into \(clone.path)")
+                                claudeCode.clones[project.id] = .success(clone)
+                            case .reused(let clone):
+                                logger.notice("\(name) works on \(address), in its clone from before, \(clone.path), as it is")
+                                claudeCode.clones[project.id] = .success(clone)
+                            }
+                        } catch {
+                            let problem = error as? ConfigurationError ?? ConfigurationError("\(error)")
+                            logger.error("\(name) can't start until this is fixed: \(problem)")
+                            claudeCode.clones[project.id] = .failure(problem)
+                        }
+                    }
                 }
             }
-            return .claudeCode(ClaudeCode(executable: executable, lot: lot, repository: repository, model: model))
+            return .claudeCode(claudeCode)
         case let other:
             throw ConfigurationError("ALIFE_BACKEND is \(other); it can be claude or dummy.")
         }
