@@ -4,7 +4,7 @@ The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) 
 
 It holds one session per character on the lot. **Each character is a Claude Code session of its own**, run by the Claude Code installed on your Mac: its conversation, what it is doing, the helpers (subagents) it has sent off, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
 
-The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it. The Engineer works on a\*life itself instead, in your a\*life checkout. See [The characters](#the-characters).
+The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Gardener's beds are Markdown files in it, and the server sends the front ends what stands where, so a restaurant the Builder builds appears on the lot in the app. See [The lot](#the-lot). The Engineer works on a\*life itself instead, in your a\*life checkout. See [The characters](#the-characters).
 
 If you'd rather not spend tokens, the server can also run dummy characters that play a short script. See [The dummy characters](#the-dummy-characters).
 
@@ -59,13 +59,20 @@ curl -X POST http://127.0.0.1:8080/v1/sessions/builder/approvals/<id> \
 
 The Gardener's session is at `/v1/sessions/gardener`, and carries on independently. Ask it to plant something and it sends its planter off.
 
+See what stands on the lot, and follow it as it changes:
+
+```sh
+curl http://127.0.0.1:8080/v1/lot
+curl -N http://127.0.0.1:8080/v1/lot/events
+```
+
 ### Settings
 
 All optional, as environment variables:
 
 | Variable | What it does |
 |---|---|
-| `ALIFE_LOT_DIR` | The directory the characters work in. `~/a-life-lot` unless set; it is made if it isn't there. |
+| `ALIFE_LOT_DIR` | The directory the characters work in, and whose buildings and beds the front ends show. `~/a-life-lot` unless set; it is made if it isn't there. The dummy characters don't change it, but the front ends still show what's on it. |
 | `ALIFE_REPO_DIR` | The a\*life checkout the Engineer works in. The checkout the server was built from unless set. See [The Engineer and the a\*life checkout](#the-engineer-and-the-alife-checkout). |
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
@@ -130,13 +137,15 @@ A session's `{id}` is its character's, such as `gardener` or `builder`, and neve
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, helpers out, last sequence number. |
+| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, the whole conversation (`conversation`, see below), helpers out, last sequence number. |
 | `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
 | `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
 | `POST` | `/v1/sessions/{id}/messages` | `{"text": "…"}` | Says something to the character. Works while it is busy: it answers at its next step. `409` while it waits for an approval. |
 | `POST` | `/v1/sessions/{id}/interrupt` | | Stops whatever the character is doing, and withdraws a pending approval. |
 | `POST` | `/v1/sessions/{id}/approvals/{approval id}` | `{"allow": true}` | Answers a tool call that is waiting. `404` if there is no such approval. |
 | `POST` | `/v1/sessions/{id}/reset` | | Ends the session's conversation and starts an empty one, for every front end. The other sessions carry on. |
+| `GET` | `/v1/lot` | | Everything built and planted on the lot. See [below](#the-lot-and-its-stream). |
+| `GET` | `/v1/lot/events` | | The lot's stream (server-sent events): the lot as it is now, then again each time it changes. |
 
 An unknown session id gets a `404`. The `POST` routes answer `202 Accepted` as soon as the request is taken; what happens next arrives on the event stream. Errors look like `{"error": true, "reason": "…"}`.
 
@@ -165,13 +174,45 @@ A front end follows every session at once: it reads `GET /v1/sessions` to learn 
 | `conversation.started` | `conversation_id` | A new conversation began in the session. Drop everything known about the old one. |
 | `session.status` | `status`, `stop_reason` | The character is `running` or `idle`. When idle, `stop_reason` is `end_turn`, `requires_action` (an approval is waiting) or `interrupted`. |
 | `session.activity` | `activity` | What the character is doing right now, such as the tool it is using. Absent when it isn't doing anything in particular. |
-| `message` | `message` | A line of the conversation: `id`, `kind` (`user`, `agent`, `error`), `speaker`, `text`. |
-| `approval.requested` | `approval` | A tool call needs a yes or no: `id`, `tool_name`, `input`. |
-| `approval.resolved` | `approval_id` | It was answered, or is no longer needed. |
+| `message` | `message` | A line of the conversation: `id`, `kind` (`user`, `agent`, `error`), `speaker`, `text`. Everything the character says is one, along the way as well as at the end. |
+| `tool.used` | `tool_use` | The character used a tool, so you can follow along: `id`, `tool_name`, `input` (a few words of what it does, such as a command or a file's path). Its helpers' tools aren't sent. |
+| `approval.requested` | `approval` | A tool call needs a yes or no: `id`, `tool_name`, `input`, and `tool_use_id`, the call it asks about. |
+| `approval.resolved` | `approval_id`, `outcome` | It was settled. `outcome` is `allowed` or `denied` when you answered, and `withdrawn` when it no longer needed an answer, such as after Stop or Start over. Older servers leave `outcome` out. |
 | `subagent.started` | `subagent` | The character sent a helper (a subagent) off to do part of its work: `id`, `task`. |
 | `subagent.finished` | `subagent_id` | The helper reported back to the character, or was called back because the character was stopped or started over. |
 
 Clients skip event types they don't know, so new ones can be added.
+
+A session's `conversation` is the whole conversation so far, oldest first, built from these events: each entry has a `type` of `message` (with `message`), `tool_use` (with `tool_use`) or `approval` (with `approval`, and `outcome` once it was settled). An approval takes the place of the `tool_use` with its `tool_use_id`, so a call that asks first is in the conversation once. Answered approvals stay in it; `approvals` lists only the ones still waiting. Clients skip entries they don't know, and make a conversation from `messages` and `approvals` if a server from before it doesn't send one.
+
+### The lot and its stream
+
+`GET /v1/lot` answers with everything built and planted:
+
+```json
+{
+  "revision": 3,
+  "items": [
+    {"id": "buildings/restaurant.md", "category": "building", "kind": "restaurant", "name": "Luigi's",
+     "x": 38, "y": 22, "width": 5, "depth": 4},
+    {"id": "garden/roses.md", "category": "plant", "kind": "rose", "name": "Rose bed",
+     "x": 20, "y": 30, "width": 3, "depth": 1, "color": "#D7263D"}
+  ],
+  "problems": ["buildings/office.md: it isn't on the lot: it doesn't start with the lines that say its kind and where it stands. See lot.md."]
+}
+```
+
+Each item is a file in the lot: its `category` is `building` or `plant`, its `kind` is in lowercase, `x` and `y` are its top left tile and `width` and `depth` how many tiles it covers, and `color` is `#RRGGBB` if it was given one. `problems` says what couldn't be put on the lot, and why. `revision` goes up by one each time anything changes; it is 1 once the server has looked at the lot, and starts again when the server restarts.
+
+`GET /v1/lot/events` sends the whole lot as one `lot` event when it connects, and again each time it changes:
+
+```
+id: 3
+event: lot
+data: {"revision":3,"items":[…],"problems":[]}
+```
+
+There is nothing to catch up on: a client that reconnects is sent the lot as it is. Older front ends don't ask for the lot, and newer ones carry on without it if a server doesn't have one.
 
 ## The characters
 
@@ -179,8 +220,8 @@ The characters are listed in the [agents file](#the-agents-file). Each character
 
 | Character | Its helper | What the helper does | Asks you before |
 |---|---|---|---|
-| **Builder** | `construction-worker` | Builds buildings: writes `buildings/<name>.md` with where on the lot it stands, its rooms and a floor plan, or edits one that's there. | every change (Claude Code's `default` permission mode) |
-| **Gardener** | `planter` | Plants plants: writes `garden/<bed>.md` with what grows where, how many and how far apart, or edits a bed that's there. | anything but changes to files on the lot (`acceptEdits`) |
+| **Builder** | `construction-worker` | Builds buildings: reads `lot.md` for room, then writes `buildings/<name>.md` with its kind and where it stands at the top, so it appears on the lot, and its rooms and a floor plan; or edits one that's there. | every change (Claude Code's `default` permission mode) |
+| **Gardener** | `planter` | Plants plants: reads `lot.md` for room, then writes `garden/<bed>.md` with the kind of plant, its colour and where the bed is at the top, so it grows on the lot, and how many and how to look after them; or edits a bed that's there. | anything but changes to files on the lot (`acceptEdits`) |
 | **Engineer** | `a-life-expert` | Changes a\*life itself, the app, `ALifeKit` and this server, in your a\*life checkout: knows its way around all of it, makes the change, keeps the tests and READMEs in step, and runs the tests. | every change and command (`default`) |
 
 Each character has a colour of its own, which the front ends dress it in: the Gardener's shirt is red, the Builder's orange and the Engineer's purple. Its helpers' sheep wear the same colour.
@@ -192,10 +233,10 @@ How a session maps onto the events:
 | Claude Code | Event |
 |---|---|
 | Something you say | `message` from `You`, sent to the CLI as a user message. Said mid-turn, Claude Code takes it up at its next step. |
-| A text reply from the character | `message` from the character. Its helpers' own replies stay with the character. |
-| A tool call | `session.activity`: the tool's name, such as `bash`, or `agent` while a helper is out |
+| A text reply from the character | `message` from the character, each one in a turn, not only the last. Its helpers' own replies stay with the character. |
+| A tool call | `tool.used`, and `session.activity`: the tool's name, such as `bash`, or `agent` while a helper is out |
 | A call to the `Agent` tool, or `Task` in older versions | `subagent.started`, until the call returns or Claude Code reports the task done: `subagent.finished` |
-| A permission request (`can_use_tool`) | `approval.requested`, and the session is idle with `requires_action` until you answer. Allowing or denying goes back to Claude Code as the answer. |
+| A permission request (`can_use_tool`) | `approval.requested`, and the session is idle with `requires_action` until you answer. Allowing or denying goes back to Claude Code as the answer, and is `approval.resolved` with `allowed` or `denied`; one Claude Code no longer needs is `withdrawn`. |
 | The end of a turn (`result`) | `session.status` idle with `end_turn`. If it ended in an error, such as not being logged in, the error is a `message` of kind `error`. |
 
 - **Talking to a character** while it works is fine: Claude Code takes what you say up at its next step. While it waits for an approval, messages to it are refused with `409` until the approval is answered.
@@ -274,6 +315,44 @@ agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an i
 
 A field it doesn't know is refused rather than ignored, so a typo doesn't quietly leave a character with a default.
 
+## The lot
+
+The lot is 64 by 64 tiles. `x` is the column, from 0 on the left to 63 on the right, and `y` the row, from 0 at the top to 63 at the bottom; in the app, the bottom is the side the house's door faces. The house the characters work in stands in the middle, with the lawn they wait on in front of it, and nothing can be built or planted on it or the path round it: x 28 to 35, y 25 to 36. The front ends and the server share this layout, as `LotPlan` in `ALifeAPI`.
+
+A building is a Markdown file in the lot's `buildings/`, and a bed of plants one in `garden/`. It stands on the lot once it starts with a few lines of YAML that say what it is and where:
+
+```markdown
+---
+kind: restaurant
+x: 38
+y: 22
+width: 5
+depth: 4
+---
+# Luigi's
+
+A little trattoria by the house. …
+```
+
+| Field | | What it is |
+|---|---|---|
+| `kind` | required | What it is, such as `restaurant`, `house`, `rose` or `oak`. The front ends draw the kinds they know, and anything else as a plain building or plant, so any kind will do. |
+| `x`, `y` | required | Its top left tile. |
+| `width`, `depth` | optional | How many tiles it covers along `x` and along `y`, each 1 to 16. A building is 3 by 3 and a plant one tile unless set. A bed has one plant on each tile. |
+| `color` | optional | For plants: a colour by name (`red`, `pink`, `white`, `yellow`, `orange`, `purple`, `blue` and a few more) or as `"#RRGGBB"`. A colour it doesn't know is left to the front end. |
+| `name` | optional | What the front ends call it. The file's first `# ` heading unless set, or else its file name. |
+
+The kinds the app draws:
+
+| | Kinds |
+|---|---|
+| Buildings | house, restaurant, cafe, shop, office, tower, school, library, barn, shed, church, hospital, and words like them (a bistro is a restaurant, a bookshop a shop) |
+| Plants | flowers (rose, tulip, daisy, sunflower, lavender, poppy, or any other flower), trees (oak, maple, birch, apple, cherry, palm, pine), bush, hedge, grass, and vegetables (carrot, lettuce, cabbage, tomato, pumpkin, potato, or any other vegetable) |
+
+The server looks at `buildings/` and `garden/` every second. A file that runs off the lot, is on the house, is bigger than 16 tiles a side, or is missing its kind, `x` or `y`, stays off the lot. If two things would share a tile, the one that was there first (whose file changed longest ago) stays, and the other stays off. An empty file stands for nothing, so emptying one pulls the building down or digs the bed up. Files without the lines at the top, such as ones written before the lot could be built on, stay off it too, until a character adds them.
+
+After each look, the server writes `lot.md` in the lot: what stands where, what couldn't be put on the lot and why, and a map of every tile, with `.` for free ones. The construction worker and the planter read it to find room before they build or plant, and again afterwards to check that what they made is on the lot. Don't edit it: the server writes it again.
+
 ## The dummy characters
 
 With `ALIFE_BACKEND=dummy`, each character is a `DummyCharacter` instead, which plays a short script for whatever it is told. No model is called and nothing real happens, so the front ends can be worked on without spending tokens.
@@ -300,6 +379,8 @@ The routes know nothing about what plays a character. For each session they talk
 - `SessionHub` keeps the session's event log and its open streams. Whatever drives the session calls `hub.emit(_:)` for each thing that happens.
 - `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `reset`, and `shutdown` when the server stops.
 
+The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, looks at the lot's directory every second, and sends the lot to its open streams when it changes.
+
 `ClaudeCharacter` and `DummyCharacter` both conform to `SessionBackend` and emit the same events. `configure.swift` is the one place that chooses which plays the characters.
 
 ## Layout
@@ -307,11 +388,13 @@ The routes know nothing about what plays a character. For each session they talk
 | File | What it does |
 |---|---|
 | `entrypoint.swift` | Starts Vapor. |
-| `configure.swift` | Reads the settings, sets up a hub and a backend per character, and the routes. |
+| `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, and the routes. |
 | `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode and its helper. See [The agents file](#the-agents-file). |
 | `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper`. |
-| `routes.swift` | The HTTP API, including the event streams. |
+| `routes.swift` | The HTTP API, including the event streams and the lot's. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
+| `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house and each other, and writes `lot.md`. |
+| `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
 | `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
 | `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, starts the CLI where its character works, and reads and writes its stream-json, one message per line. |
@@ -327,6 +410,8 @@ swift test
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
 `ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, and finding the a\*life checkout.
+
+`LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the planter being told where the house is, and a front end seeing a restaurant and an oak appear.
 
 `CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
 

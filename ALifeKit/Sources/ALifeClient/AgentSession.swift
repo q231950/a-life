@@ -25,7 +25,13 @@ public final class AgentSession {
     public var stopReason: StopReason? { state.stopReason }
     /// What the character is doing right now, such as the name of a tool.
     public var activity: String? { state.activity }
+    /// What was said, by you and the character.
     public var transcript: [Message] { state.messages }
+    /// The whole conversation in order: what was said, the tools the
+    /// character used, and the tool calls that asked for a yes or no, with
+    /// how each was settled.
+    public var conversation: [ConversationEntry] { state.conversation }
+    /// The tool calls waiting for your yes or no right now.
     public var pendingApprovals: [Approval] { state.approvals }
     /// The helpers out working for the character right now. Each one leaves
     /// the list once it has reported back.

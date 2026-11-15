@@ -1,3 +1,4 @@
+import ALifeClient
 import RealityKit
 #if os(macOS)
 import AppKit
@@ -8,8 +9,9 @@ typealias PlatformColor = UIColor
 #endif
 
 /// Builds the lot (floor tiles, a little house, some bushes, your character),
-/// turns taps on tiles into walks, and shows one character per session on
-/// the server, with a little sheep for each helper it has sent off.
+/// turns taps on tiles into walks, shows one character per session on the
+/// server, with a little sheep for each helper it has sent off, and shows
+/// what the characters have built and planted.
 @MainActor
 final class World {
     let root = Entity()
@@ -17,7 +19,12 @@ final class World {
 
     /// The floor plan. Once the lot is built, it is put on `root` too, for
     /// the systems that walk things around on it.
-    private var lot = LotComponent(grid: TileGrid(width: 16, depth: 16), tileSize: 1)
+    private var lot = LotComponent(grid: TileGrid(width: LotPlan.width, depth: LotPlan.depth), tileSize: 1)
+    /// The floor plan with only the house and the bushes on it, before
+    /// anything is built or planted.
+    private var scenery = TileGrid(width: LotPlan.width, depth: LotPlan.depth)
+    /// The buildings and beds on the lot, by the file each comes from.
+    private var placed: [String: (item: LotItem, entity: Entity)] = [:]
     private let character: Entity
     private let marker: ModelEntity
     private var agentCharacters: [String: AgentCharacter] = [:]
@@ -36,9 +43,12 @@ final class World {
         placeHouse()
         placeBushes()
         placeFloor()
+        scenery = lot.grid
         root.components.set(lot)
 
-        character.position = lot.position(of: Tile(x: 2, z: 2))
+        // On the path beside the lawn.
+        let start = Tile(x: LotPlan.lawn.x - 1, z: LotPlan.lawn.y + 1)
+        character.position = lot.position(of: start)
         character.components.set(WalkComponent())
         Self.setLabel("You", on: character)
         root.addChild(character)
@@ -49,6 +59,7 @@ final class World {
 
         root.addChild(Self.makeSun())
         root.addChild(camera.root)
+        camera.focus(on: lot.position(of: Tile(x: LotPlan.house.x + LotPlan.house.width / 2, z: LotPlan.house.y + LotPlan.house.depth)))
     }
 
     // MARK: Walking
@@ -59,6 +70,7 @@ final class World {
               walk(character, to: goal) else { return }
         marker.position = lot.position(of: goal) + [0, 0.02, 0]
         marker.isEnabled = true
+        camera.focus(on: marker.position)
     }
 
     /// Sends `walker` to `goal`. Returns `false` if there is no way there.
@@ -97,9 +109,11 @@ final class World {
     }
 
     /// The floor inside the house: where agents go while they work.
-    private static let desks = (6...9).flatMap { z in (6...9).map { x in Tile(x: x, z: z) } }
+    private static let desks = LotArea(
+        x: LotPlan.house.x + 1, y: LotPlan.house.y + 1, width: LotPlan.house.width - 2, depth: LotPlan.house.depth - 2
+    ).tiles.map { Tile(x: $0.x, z: $0.y) }
     /// The lawn in front of the door: where agents wait.
-    private static let lawn = (12...14).flatMap { z in (5...10).map { x in Tile(x: x, z: z) } }
+    private static let lawn = LotPlan.lawn.tiles.map { Tile(x: $0.x, z: $0.y) }
 
     /// Makes the scene match the sessions: one character each, inside the
     /// house while it works (or waits for you mid-task) and out on the lawn
@@ -204,7 +218,7 @@ final class World {
             PlatformColor(red: 0.8, green: 0.45, blue: 0.75, alpha: 1),
             PlatformColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1),
         ]
-        let shirt = resident.color.flatMap { Self.color(hex: $0) } ?? shirts[slot % shirts.count]
+        let shirt = resident.color.flatMap { PlatformColor(hex: $0) } ?? shirts[slot % shirts.count]
         let entity = Self.makeCharacter(shirt: shirt)
         entity.name = resident.id
         entity.position = lot.position(of: home)
@@ -227,18 +241,6 @@ final class World {
 
         root.addChild(entity)
         return AgentCharacter(entity: entity, slot: slot, shirt: shirt, name: resident.name, destination: home)
-    }
-
-    /// A colour written as `#RRGGBB`, or `nil` if it isn't one.
-    private static func color(hex: String) -> PlatformColor? {
-        let digits = hex.hasPrefix("#") ? hex.dropFirst() : Substring(hex)
-        guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
-        return PlatformColor(
-            red: CGFloat((value >> 16) & 0xFF) / 255,
-            green: CGFloat((value >> 8) & 0xFF) / 255,
-            blue: CGFloat(value & 0xFF) / 255,
-            alpha: 1
-        )
     }
 
     /// A "!" over the character's head while it waits for your answer.
@@ -288,42 +290,132 @@ final class World {
         character.addChild(label)
     }
 
-    // MARK: Building the lot
+    // MARK: What's built and planted
 
-    private func placeFloor() {
-        let tileSize = lot.tileSize
-        let mesh = MeshResource.generateBox(width: tileSize, height: 0.1, depth: tileSize)
-        let shape = ShapeResource.generateBox(width: tileSize, height: 0.1, depth: tileSize)
-        let light = SimpleMaterial(color: PlatformColor(red: 0.55, green: 0.78, blue: 0.38, alpha: 1), roughness: 0.9, isMetallic: false)
-        let dark = SimpleMaterial(color: PlatformColor(red: 0.48, green: 0.71, blue: 0.33, alpha: 1), roughness: 0.9, isMetallic: false)
+    /// Makes the lot match what the characters have built and planted. If
+    /// `popsUp`, as for something just built rather than there all along,
+    /// new things pop up and the camera glides over to look at the newest.
+    func show(_ things: Lot, popsUp: Bool) {
+        let current = Dictionary(things.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for (id, shown) in placed where current[id] != shown.item {
+            shown.entity.removeFromParent()
+            placed[id] = nil
+        }
 
-        for tile in lot.grid.allTiles {
-            let entity = ModelEntity(mesh: mesh, materials: [(tile.x + tile.z).isMultiple(of: 2) ? light : dark])
-            entity.position = lot.position(of: tile) - [0, 0.05, 0] // top face at y = 0
-            entity.components.set(TileComponent(tile: tile))
-            // Both are needed for an entity to receive targeted gestures.
-            entity.components.set(CollisionComponent(shapes: [shape]))
-            entity.components.set(InputTargetComponent())
+        var newest: Entity?
+        for item in things.items where placed[item.id] == nil && item.category != .unknown {
+            let entity = makeEntity(for: item)
             root.addChild(entity)
+            placed[item.id] = (item, entity)
+            if popsUp {
+                let shown = entity.transform
+                entity.scale = SIMD3(repeating: 0.01) // it pops up from nothing
+                entity.move(to: shown, relativeTo: root, duration: 0.6, timingFunction: .easeOut)
+                newest = entity
+            }
+        }
+
+        // Nobody walks through what is built or planted, except grass.
+        var grid = scenery
+        for (item, _) in placed.values where !(item.category == .plant && Plants.isWalkable(item.kind)) {
+            for tile in item.area.tiles {
+                grid.block(Tile(x: tile.x, z: tile.y))
+            }
+        }
+        lot.grid = grid
+        root.components.set(lot)
+
+        if let newest {
+            camera.focus(on: newest.position)
         }
     }
 
-    /// A 6×6 room with a two-tile doorway, so paths visibly route around walls.
+    /// A building or a bed of plants, standing where it is on the lot.
+    private func makeEntity(for item: LotItem) -> Entity {
+        let area = item.area
+        let first = lot.position(of: Tile(x: area.x, z: area.y))
+        let last = lot.position(of: Tile(x: area.xs.upperBound - 1, z: area.ys.upperBound - 1))
+        let centre = (first + last) / 2
+
+        let entity: Entity
+        switch item.category {
+        case .plant:
+            let tiles = area.tiles.map { (x: $0.x, y: $0.y, position: lot.position(of: Tile(x: $0.x, z: $0.y)) - centre) }
+            entity = Plants.make(item, tiles: tiles, tileSize: lot.tileSize)
+        case .building, .unknown:
+            entity = Buildings.make(item, width: Float(area.width) * lot.tileSize, depth: Float(area.depth) * lot.tileSize)
+        }
+        entity.position = centre
+        return entity
+    }
+
+    // MARK: Building the lot
+
+    /// The grass, in two meshes, one for the light tiles and one for the
+    /// dark, on a slab of earth. Each tile is still an entity of its own, for
+    /// a tap to land on, with nothing to draw.
+    private func placeFloor() {
+        let tileSize = lot.tileSize
+        let half = tileSize / 2
+        let shape = ShapeResource.generateBox(width: tileSize, height: 0.1, depth: tileSize)
+
+        var light = (positions: [SIMD3<Float>](), indices: [UInt32]())
+        var dark = light
+        for tile in lot.grid.allTiles {
+            let centre = lot.position(of: tile) // top face at y = 0
+            let isLight = (tile.x + tile.z).isMultiple(of: 2)
+            var squares = isLight ? light : dark
+            let first = UInt32(squares.positions.count)
+            squares.positions += [centre + [-half, 0, -half], centre + [-half, 0, half], centre + [half, 0, half], centre + [half, 0, -half]]
+            squares.indices += [first, first + 1, first + 2, first, first + 2, first + 3] // facing up
+            if isLight { light = squares } else { dark = squares }
+
+            let target = Entity()
+            target.position = centre - [0, 0.05, 0]
+            target.components.set(TileComponent(tile: tile))
+            // Both are needed for an entity to receive targeted gestures.
+            target.components.set(CollisionComponent(shapes: [shape]))
+            target.components.set(InputTargetComponent())
+            root.addChild(target)
+        }
+
+        for (squares, color) in [
+            (light, PlatformColor(red: 0.55, green: 0.78, blue: 0.38, alpha: 1)),
+            (dark, PlatformColor(red: 0.48, green: 0.71, blue: 0.33, alpha: 1)),
+        ] {
+            var descriptor = MeshDescriptor(name: "Grass")
+            descriptor.positions = MeshBuffers.Positions(squares.positions)
+            descriptor.normals = MeshBuffers.Normals(Array(repeating: [0, 1, 0], count: squares.positions.count))
+            descriptor.primitives = .triangles(squares.indices)
+            guard let mesh = try? MeshResource.generate(from: [descriptor]) else { continue }
+            root.addChild(ModelEntity(mesh: mesh, materials: [SimpleMaterial(color: color, roughness: 0.9, isMetallic: false)]))
+        }
+
+        let width = Float(lot.grid.width) * tileSize
+        let depth = Float(lot.grid.depth) * tileSize
+        let earth = ModelEntity(
+            mesh: .generateBox(width: width, height: 0.3, depth: depth),
+            materials: [SimpleMaterial(color: PlatformColor(red: 0.45, green: 0.34, blue: 0.24, alpha: 1), roughness: 1, isMetallic: false)]
+        )
+        earth.position = [0, -0.153, 0] // just under the grass
+        root.addChild(earth)
+    }
+
+    /// A 6×6 room in the middle of the lot with a two-tile doorway, so paths
+    /// visibly route around walls.
     private func placeHouse() {
         let mesh = MeshResource.generateBox(width: lot.tileSize, height: 0.7, depth: lot.tileSize)
         let material = SimpleMaterial(color: PlatformColor(red: 0.95, green: 0.9, blue: 0.8, alpha: 1), roughness: 0.7, isMetallic: false)
-        let range = 5...10
-        let doorway: Set<Tile> = [Tile(x: 7, z: 10), Tile(x: 8, z: 10)]
+        let house = LotPlan.house
+        let doorway = Set(LotPlan.doorway.map { Tile(x: $0.x, z: $0.y) })
 
-        for x in range {
-            for z in range where x == range.lowerBound || x == range.upperBound || z == range.lowerBound || z == range.upperBound {
-                let tile = Tile(x: x, z: z)
-                guard !doorway.contains(tile) else { continue }
-                lot.grid.block(tile)
-                let wall = ModelEntity(mesh: mesh, materials: [material])
-                wall.position = lot.position(of: tile) + [0, 0.35, 0]
-                root.addChild(wall)
-            }
+        for spot in house.tiles where spot.x == house.xs.first || spot.x == house.xs.last || spot.y == house.ys.first || spot.y == house.ys.last {
+            let tile = Tile(x: spot.x, z: spot.y)
+            guard !doorway.contains(tile) else { continue }
+            lot.grid.block(tile)
+            let wall = ModelEntity(mesh: mesh, materials: [material])
+            wall.position = lot.position(of: tile) + [0, 0.35, 0]
+            root.addChild(wall)
         }
     }
 
@@ -331,7 +423,7 @@ final class World {
         let mesh = MeshResource.generateSphere(radius: 0.4)
         let material = SimpleMaterial(color: PlatformColor(red: 0.2, green: 0.5, blue: 0.25, alpha: 1), roughness: 1.0, isMetallic: false)
 
-        for tile in [Tile(x: 12, z: 3), Tile(x: 13, z: 3), Tile(x: 2, z: 12), Tile(x: 3, z: 13), Tile(x: 13, z: 12)] {
+        for tile in LotPlan.bushes.map({ Tile(x: $0.x, z: $0.y) }) {
             lot.grid.block(tile)
             let bush = ModelEntity(mesh: mesh, materials: [material])
             bush.position = lot.position(of: tile) + [0, 0.35, 0]
@@ -408,7 +500,7 @@ final class World {
     private static func makeSun() -> Entity {
         let sun = DirectionalLight()
         sun.light.intensity = 4000
-        sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 30, depthBias: 2)
+        sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 80, depthBias: 2)
         sun.look(at: .zero, from: [6, 10, 4], relativeTo: nil)
         return sun
     }

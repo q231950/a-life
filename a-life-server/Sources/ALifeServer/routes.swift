@@ -2,8 +2,9 @@ import ALifeAPI
 import Vapor
 
 extension SessionState: @retroactive Content {}
+extension Lot: @retroactive Content {}
 
-func routes(_ app: Application, sessions: [HostedSession]) {
+func routes(_ app: Application, sessions: [HostedSession], lot: LotHub) {
     let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
 
     /// The session a request names in its path.
@@ -45,43 +46,9 @@ func routes(_ app: Application, sessions: [HostedSession]) {
         let after = (try? request.query.get(Int.self, at: "after")) ?? 0
         let conversationID = try? request.query.get(String.self, at: "conversation")
         let events = await hub.subscribe(conversationID: conversationID, after: after)
-
-        let response = Response(status: .ok)
-        response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
-        response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
-        response.body = .init(asyncStream: { writer in
-            // Events and heartbeats are funnelled into one stream of frames,
-            // so there is a single writer.
-            let (frames, sink) = AsyncStream<String>.makeStream()
-            let forwarding = Task {
-                for await envelope in events {
-                    sink.yield(try serverSentEvent(envelope))
-                }
-                sink.finish()
-            }
-            // A comment line every so often keeps proxies from closing an
-            // idle connection, and shows up a client that has gone away.
-            let heartbeat = Task {
-                while !Task.isCancelled {
-                    try await Task.sleep(for: .seconds(15))
-                    sink.yield(": ping\n\n")
-                }
-            }
-            defer {
-                forwarding.cancel()
-                heartbeat.cancel()
-            }
-            do {
-                try await writer.write(.buffer(ByteBuffer(string: ": connected\n\n")))
-                for await frame in frames {
-                    try await writer.write(.buffer(ByteBuffer(string: frame)))
-                }
-                try await writer.write(.end)
-            } catch {
-                try? await writer.write(.error(error)) // the client went away
-            }
-        })
-        return response
+        return eventStream(events) { envelope in
+            try serverSentEvent(id: envelope.seq, type: envelope.event.type, data: envelope)
+        }
     }
 
     one.post("messages") { request -> HTTPStatus in
@@ -110,10 +77,67 @@ func routes(_ app: Application, sessions: [HostedSession]) {
         try await session(request).backend.reset()
         return .accepted
     }
+
+    // Everything the characters have built and planted on the lot.
+    app.get("v1", "lot") { _ in
+        await lot.lot
+    }
+
+    // Server-sent events: the lot as it is now, then the whole lot again
+    // each time something on it changes.
+    app.get("v1", "lot", "events") { _ -> Response in
+        eventStream(await lot.subscribe()) { lot in
+            try serverSentEvent(id: lot.revision, type: "lot", data: lot)
+        }
+    }
+}
+
+/// A `text/event-stream` response with a frame for each of `events`, and a
+/// heartbeat in between, until `events` ends or the client goes away.
+private func eventStream<Event: Sendable>(
+    _ events: AsyncStream<Event>,
+    frame: @escaping @Sendable (Event) throws -> String
+) -> Response {
+    let response = Response(status: .ok)
+    response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
+    response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
+    response.body = .init(asyncStream: { writer in
+        // Events and heartbeats are funnelled into one stream of frames,
+        // so there is a single writer.
+        let (frames, sink) = AsyncStream<String>.makeStream()
+        let forwarding = Task {
+            for await event in events {
+                sink.yield(try frame(event))
+            }
+            sink.finish()
+        }
+        // A comment line every so often keeps proxies from closing an
+        // idle connection, and shows up a client that has gone away.
+        let heartbeat = Task {
+            while !Task.isCancelled {
+                try await Task.sleep(for: .seconds(15))
+                sink.yield(": ping\n\n")
+            }
+        }
+        defer {
+            forwarding.cancel()
+            heartbeat.cancel()
+        }
+        do {
+            try await writer.write(.buffer(ByteBuffer(string: ": connected\n\n")))
+            for await frame in frames {
+                try await writer.write(.buffer(ByteBuffer(string: frame)))
+            }
+            try await writer.write(.end)
+        } catch {
+            try? await writer.write(.error(error)) // the client went away
+        }
+    })
+    return response
 }
 
 /// One event in `text/event-stream` framing.
-private func serverSentEvent(_ envelope: EventEnvelope) throws -> String {
-    let json = String(decoding: try JSONEncoder().encode(envelope), as: UTF8.self)
-    return "id: \(envelope.seq)\nevent: \(envelope.event.type)\ndata: \(json)\n\n"
+private func serverSentEvent(id: Int, type: String, data: some Encodable) throws -> String {
+    let json = String(decoding: try JSONEncoder().encode(data), as: UTF8.self)
+    return "id: \(id)\nevent: \(type)\ndata: \(json)\n\n"
 }

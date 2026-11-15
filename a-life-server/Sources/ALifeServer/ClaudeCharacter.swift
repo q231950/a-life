@@ -8,7 +8,10 @@ import Vapor
 /// what you say goes in on its stdin, and what it does comes out of its
 /// stdout as stream-json, which this turns into the session's events.
 ///
-/// - Its replies become messages.
+/// - Its replies become messages, everything it says along the way as well
+///   as its answer at the end.
+/// - Each tool it uses is a tool use in the conversation, so you can follow
+///   along. Its helpers' tools aren't: they're out working on their own.
 /// - When it wants to use a tool that needs permission, the CLI asks over
 ///   the same pipe (`can_use_tool`), and that becomes an approval that waits
 ///   for a front end to answer.
@@ -136,7 +139,7 @@ actor ClaudeCharacter: SessionBackend {
             ? ["behavior": "allow", "updatedInput": input]
             : ["behavior": "deny", "message": "The person you're working for said no to this."]
         try? connection?.send(Self.controlResponse(to: approvalID, decision))
-        await hub.emit(.approvalResolved(approvalID: approvalID))
+        await hub.emit(.approvalResolved(approvalID: approvalID, outcome: allow ? .allowed : .denied))
         if approvals.isEmpty, turnActive {
             await hub.emit(.statusChanged(.running, stopReason: nil))
         }
@@ -218,6 +221,12 @@ actor ClaudeCharacter: SessionBackend {
                 await hub.emit(.message(Message(kind: kind, speaker: character.name, text: text)))
             case "tool_use":
                 guard let id = block["id"]?.string, let name = block["name"]?.string else { continue }
+                if !fromHelper {
+                    let input = Self.isAgentTool(name)
+                        ? block["input"]?["description"]?.string ?? ""
+                        : Self.summarise(block["input"])
+                    await hub.emit(.toolUsed(ToolUse(id: id, toolName: name, input: input)))
+                }
                 if Self.isAgentTool(name) {
                     let input = block["input"]
                     await sendOff(
@@ -335,7 +344,8 @@ actor ClaudeCharacter: SessionBackend {
         }
         let startsWaiting = approvals.isEmpty
         approvals[requestID] = request["input"] ?? [:]
-        await hub.emit(.approvalRequested(Approval(id: requestID, toolName: toolName, input: input)))
+        let approval = Approval(id: requestID, toolName: toolName, input: input, toolUseID: request["tool_use_id"]?.string)
+        await hub.emit(.approvalRequested(approval))
         if startsWaiting {
             await hub.emit(.statusChanged(.idle, stopReason: .requiresAction))
         }
@@ -344,7 +354,7 @@ actor ClaudeCharacter: SessionBackend {
     /// Claude Code no longer needs an answer, such as after an interrupt.
     private func withdrawApproval(_ requestID: String?) async {
         guard let requestID, approvals.removeValue(forKey: requestID) != nil else { return }
-        await hub.emit(.approvalResolved(approvalID: requestID))
+        await hub.emit(.approvalResolved(approvalID: requestID, outcome: .withdrawn))
         if approvals.isEmpty, turnActive {
             await hub.emit(.statusChanged(.running, stopReason: nil))
         }
@@ -396,7 +406,7 @@ actor ClaudeCharacter: SessionBackend {
         approvals = [:]
         helpers = [:]
         for id in withdrawn {
-            await hub.emit(.approvalResolved(approvalID: id))
+            await hub.emit(.approvalResolved(approvalID: id, outcome: .withdrawn))
         }
         for id in calledBack {
             await hub.emit(.subagentFinished(subagentID: id))
@@ -421,12 +431,20 @@ actor ClaudeCharacter: SessionBackend {
         let input = request["input"]
         if let command = input?["command"]?.string { return command }
         if let description = request["description"]?.string, !description.isEmpty { return description }
-        for key in ["file_path", "notebook_path", "path", "url", "query"] {
-            if let value = input?[key]?.string { return value }
-        }
+        let summary = summarise(input)
+        if !summary.isEmpty { return summary }
         guard let input, let json = try? input.encoded() else { return "" }
         let text = String(decoding: json, as: UTF8.self)
         return text.count > 500 ? String(text.prefix(500)) + "…" : text
+    }
+
+    /// What a tool call does in a few words, such as its command or the
+    /// file it works on. Empty if there's nothing short to say.
+    static func summarise(_ input: JSONValue?) -> String {
+        for key in ["command", "file_path", "notebook_path", "path", "url", "query", "pattern", "description"] {
+            if let value = input?[key]?.string, !value.isEmpty { return value }
+        }
+        return ""
     }
 
     private static func controlRequest(_ request: JSONValue) -> JSONValue {

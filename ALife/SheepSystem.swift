@@ -119,7 +119,7 @@ struct SheepSystem: System {
         state.phase = state.hasReportedBack ? .returning : .wandering
     }
 
-    /// Walks to a random place on the lot, stands there a little, and goes on
+    /// Walks to a random place nearby, stands there a little, and goes on
     /// to the next, until its helper has reported back.
     private func wander(_ sheep: Entity, _ state: inout SheepComponent, on lot: LotComponent, deltaTime: Float) {
         if state.hasReportedBack {
@@ -130,9 +130,11 @@ struct SheepSystem: System {
         state.pause -= deltaTime
         guard state.pause <= 0 else { return }
 
-        // Somewhere a few tiles away, so the walk is worth watching.
+        // Somewhere a few tiles away, so the walk is worth watching, but not
+        // so far that it wanders off out of sight on the big lot.
         let here = lot.tile(at: sheep.position)
-        let places = lot.grid.allTiles.filter {
+        let reach = 8
+        let places = (-reach...reach).flatMap { dz in (-reach...reach).map { dx in Tile(x: here.x + dx, z: here.z + dz) } }.filter {
             lot.grid.isWalkable($0) && max(abs($0.x - here.x), abs($0.z - here.z)) >= 3
         }
         if let place = places.randomElement(), let route = lot.route(from: sheep.position, to: place) {

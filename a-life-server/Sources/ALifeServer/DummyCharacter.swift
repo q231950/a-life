@@ -67,7 +67,7 @@ actor DummyCharacter: SessionBackend {
             throw Abort(.notFound, reason: "No such approval")
         }
         pendingApproval = nil
-        await hub.emit(.approvalResolved(approvalID: approvalID))
+        await hub.emit(.approvalResolved(approvalID: approvalID, outcome: allow ? .allowed : .denied))
         pending.answer.yield(allow)
         pending.answer.finish()
     }
@@ -119,6 +119,7 @@ actor DummyCharacter: SessionBackend {
     /// One step of the work. Afterwards, answers whatever was said meanwhile.
     private func work(_ activity: String, doing description: String, on instruction: String) async throws {
         try await post(.activityChanged(activity))
+        try await post(.toolUsed(ToolUse(toolName: activity, input: description)))
         try await Task.sleep(for: step)
         try await answerWhatWasSaid(doing: description, on: instruction)
     }
@@ -210,7 +211,7 @@ actor DummyCharacter: SessionBackend {
         if let pending = pendingApproval {
             pendingApproval = nil
             pending.answer.finish()
-            await hub.emit(.approvalResolved(approvalID: pending.id))
+            await hub.emit(.approvalResolved(approvalID: pending.id, outcome: .withdrawn))
         }
         for id in calledBack {
             await hub.emit(.subagentFinished(subagentID: id))

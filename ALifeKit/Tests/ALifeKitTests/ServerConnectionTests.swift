@@ -28,9 +28,9 @@ final class ServerConnectionTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out waiting for \(description)", file: file, line: line)
     }
 
-    /// The event streams opened so far, oldest first.
+    /// The sessions' event streams opened so far, oldest first.
     private var streamRequests: [StubServer.Recorded] {
-        StubServer.requests.filter { $0.url.path.hasSuffix("/events") }
+        StubServer.requests.filter { $0.url.path.hasPrefix("/v1/sessions/") && $0.url.path.hasSuffix("/events") }
     }
 
     func testWithoutAServerAddressAsksForOne() async {
@@ -146,6 +146,43 @@ final class ServerConnectionTests: XCTestCase {
         server.disconnect()
     }
 
+    func testFollowsTheLot() async throws {
+        let (server, _) = makeConnection()
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        XCTAssertEqual(server.lot, Lot())
+        XCTAssertTrue(StubServer.requests.contains { $0.url.path == "/v1/lot/events" })
+
+        let restaurant = LotItem(
+            id: "buildings/restaurant.md", category: .building, kind: "restaurant", name: "Luigi's",
+            area: LotArea(x: 20, y: 30, width: 5, depth: 4)
+        )
+        StubServer.pushLot(Lot(revision: 1, items: [restaurant]))
+        await wait(for: "the restaurant") { server.lot.items == [restaurant] }
+
+        let roses = LotItem(
+            id: "garden/roses.md", category: .plant, kind: "rose", name: "Roses",
+            area: LotArea(x: 40, y: 30, width: 3, depth: 1), color: "#D02030"
+        )
+        StubServer.pushLot(Lot(revision: 2, items: [restaurant, roses]))
+        await wait(for: "the roses") { server.lot.revision == 2 }
+        XCTAssertEqual(server.lot.items.map(\.kind), ["restaurant", "rose"])
+
+        server.disconnect()
+    }
+
+    func testAServerWithoutALotStillHasItsSessionsFollowed() async throws {
+        let (server, _) = makeConnection()
+        StubServer.hasLot = false
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")), to: "gardener")
+        await wait(for: "events") { gardener.state.conversationID == "g1" }
+        XCTAssertEqual(server.lot, Lot())
+        server.disconnect()
+    }
+
     func testAFailedSendIsReportedOnThatSession() async throws {
         let (server, _) = makeConnection()
         server.connect()
@@ -173,6 +210,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var streams: [String: StubServer] = [:]
     nonisolated(unsafe) private static var _roster: [SessionState] = []
     nonisolated(unsafe) private static var _failPosts: (status: Int, reason: String)?
+    nonisolated(unsafe) private static var _hasLot = true
 
     static var requests: [Recorded] { lock.withLock { _requests } }
     /// What `GET /v1/sessions` answers.
@@ -186,12 +224,20 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         set { lock.withLock { _failPosts = newValue } }
     }
 
+    /// Whether it serves the lot, as servers from before there was
+    /// anything to build don't.
+    static var hasLot: Bool {
+        get { lock.withLock { _hasLot } }
+        set { lock.withLock { _hasLot = newValue } }
+    }
+
     static func reset() {
         lock.withLock {
             _requests = []
             streams = [:]
             _roster = [SessionState(id: "gardener", name: "Gardener"), SessionState(id: "builder", name: "Builder")]
             _failPosts = nil
+            _hasLot = true
         }
     }
 
@@ -199,6 +245,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         guard let stream = lock.withLock({ streams[sessionID] }) else { return }
         let json = String(decoding: try! JSONEncoder().encode(envelope), as: UTF8.self)
         stream.client?.urlProtocol(stream, didLoad: Data("id: \(envelope.seq)\nevent: \(envelope.event.type)\ndata: \(json)\n\n".utf8))
+    }
+
+    /// Sends the whole lot down the lot's stream.
+    static func pushLot(_ lot: Lot) {
+        guard let stream = lock.withLock({ streams["lot"] }) else { return }
+        let json = String(decoding: try! JSONEncoder().encode(lot), as: UTF8.self)
+        stream.client?.urlProtocol(stream, didLoad: Data("id: \(lot.revision)\nevent: lot\ndata: \(json)\n\n".utf8))
     }
 
     static func dropStream(_ sessionID: String) {
@@ -233,7 +286,10 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         }
         Self.lock.withLock { Self._requests.append(Recorded(method: method, url: url, body: body)) }
 
-        if method == "GET", url.path.hasSuffix("/events") {
+        if method == "GET", url.path == "/v1/lot/events", !Self.hasLot {
+            respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
+        } else if method == "GET", url.path.hasSuffix("/events") {
+            // A session's stream is kept under its id, and the lot's under "lot".
             let sessionID = url.deletingLastPathComponent().lastPathComponent
             respond(200, contentType: "text/event-stream", body: ": connected\n\n", finish: false)
             Self.lock.withLock { Self.streams[sessionID] = self } // stays open

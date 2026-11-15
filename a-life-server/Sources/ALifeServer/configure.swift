@@ -9,18 +9,16 @@ enum Players: Sendable {
     /// step of the script takes `step`.
     case dummies(step: Duration)
 
-    /// From the environment, for `cast`:
+    /// From the environment, for `cast` working on `lot`:
     ///
     /// - `ALIFE_BACKEND`: `claude` (the default) or `dummy`.
-    /// - `ALIFE_LOT_DIR`: the directory the characters work in, `~/a-life-lot`
-    ///   unless set. It is made if it isn't there.
     /// - `ALIFE_REPO_DIR`: the a*life checkout the characters who work on
     ///   a*life work in, such as the Engineer. The checkout the server was
     ///   built from unless set.
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
-    static func fromEnvironment(for cast: [Character], logger: Logger) throws -> Players {
+    static func fromEnvironment(for cast: [Character], lot: URL, logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
         case "dummy", "dummies":
@@ -32,9 +30,6 @@ enum Players: Sendable {
                         + "To try the server without it, set ALIFE_BACKEND=dummy."
                 )
             }
-            let lot = environment["ALIFE_LOT_DIR"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-lot")
-            try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
             let repository = try ClaudeCode.findRepository(in: environment)
             let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             logger.notice("The characters are Claude Code sessions (\(executable.path)), working on the lot in \(lot.path)")
@@ -51,6 +46,15 @@ enum Players: Sendable {
             throw ConfigurationError("ALIFE_BACKEND is \(other); it can be claude or dummy.")
         }
     }
+
+    /// The directory the characters work in: `ALIFE_LOT_DIR`, or
+    /// `~/a-life-lot` unless it is set. It is made if it isn't there.
+    static func lotDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) throws -> URL {
+        let lot = environment["ALIFE_LOT_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-lot")
+        try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
+        return lot
+    }
 }
 
 struct ConfigurationError: Error, CustomStringConvertible {
@@ -62,11 +66,35 @@ struct ConfigurationError: Error, CustomStringConvertible {
 }
 
 /// Sets the server up with a session per character in `cast`, played by
-/// `players`. Each is as the environment says if `nil`: the cast is read
-/// from the agents file, `ALIFE_AGENTS_FILE` or the shipped `agents.yaml`.
-func configure(_ app: Application, players: Players? = nil, cast: [Character]? = nil) async throws {
+/// `players`, and the lot in `lotDirectory`. Each is as the environment says
+/// if `nil`: the cast is read from the agents file, `ALIFE_AGENTS_FILE` or
+/// the shipped `agents.yaml`, and the lot is `ALIFE_LOT_DIR`. Given
+/// `players` but no `lotDirectory`, the lot stays empty.
+func configure(
+    _ app: Application,
+    players playersGiven: Players? = nil,
+    cast: [Character]? = nil,
+    lotDirectory: URL? = nil,
+    lotSurveyInterval: Duration = .seconds(1)
+) async throws {
     let cast = try cast ?? loadCast(logger: app.logger)
-    let players = try players ?? Players.fromEnvironment(for: cast, logger: app.logger)
+    var lotDirectory = lotDirectory
+    let players: Players
+    if let given = playersGiven {
+        players = given
+    } else {
+        let directory = try lotDirectory ?? Players.lotDirectory()
+        lotDirectory = directory
+        players = try Players.fromEnvironment(for: cast, lot: directory, logger: app.logger)
+    }
+
+    // What the characters build and plant shows up in the front ends.
+    let lot = LotHub(directory: lotDirectory)
+    if let lotDirectory {
+        app.logger.notice("The lot is in \(lotDirectory.path). What's built in buildings/ and planted in garden/ there shows in the front ends.")
+        await lot.survey()
+        await lot.watch(every: lotSurveyInterval)
+    }
 
     var sessions: [HostedSession] = []
     for character in cast {
@@ -83,8 +111,8 @@ func configure(_ app: Application, players: Players? = nil, cast: [Character]? =
         sessions.append(HostedSession(id: character.id, hub: hub, backend: backend))
     }
 
-    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions))
-    routes(app, sessions: sessions)
+    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot))
+    routes(app, sessions: sessions, lot: lot)
 }
 
 /// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
@@ -97,11 +125,14 @@ private func loadCast(logger: Logger) throws -> [Character] {
 }
 
 /// When the server stops, ends the open event streams, so shutdown doesn't
-/// wait on clients that are still listening, and stops each session.
+/// wait on clients that are still listening, and stops each session and
+/// watching the lot.
 private struct EndSessionsOnShutdown: LifecycleHandler {
     let sessions: [HostedSession]
+    let lot: LotHub
 
     func shutdownAsync(_ application: Application) async {
+        await lot.stop()
         for session in sessions {
             await session.hub.closeStreams()
             await session.backend.shutdown()

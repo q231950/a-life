@@ -69,7 +69,22 @@ public struct ALifeServerClient: Sendable {
         // An idle timeout. The server sends a heartbeat every few seconds; if
         // it goes quiet this long the stream errors and the caller reconnects.
         request.timeoutInterval = 60
-        return try await EventStreamConnection().open(request, configuration: urlSession.configuration)
+        return try await EventStreamConnection<EventEnvelope>().open(request, configuration: urlSession.configuration)
+    }
+
+    /// Everything on the lot that the characters have built and planted.
+    public func lot() async throws -> Lot {
+        try JSONDecoder().decode(Lot.self, from: await send("GET", "/v1/lot"))
+    }
+
+    /// Follows the lot: the server sends what is on it now, then the whole
+    /// lot again each time something on it changes. Returns once the server
+    /// has accepted the connection.
+    public func lotChanges() async throws -> AsyncThrowingStream<Lot, Error> {
+        var request = makeRequest("GET", "/v1/lot/events")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 60 // as for a session's events
+        return try await EventStreamConnection<Lot>().open(request, configuration: urlSession.configuration)
     }
 
     // MARK: Plumbing
@@ -116,22 +131,23 @@ public struct ALifeServerClient: Sendable {
 }
 
 /// One server-sent-events connection, driven by `URLSession` delegate
-/// callbacks (which, unlike `URLSession.bytes`, also exist on Linux).
-private final class EventStreamConnection: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// callbacks (which, unlike `URLSession.bytes`, also exist on Linux). Each
+/// event's data is one `Element` in JSON.
+private final class EventStreamConnection<Element: Decodable & Sendable>: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     // All state is touched only on the session's serial delegate queue.
     private var parser = ServerSentEventParser()
     private var opened: CheckedContinuation<Void, Error>?
-    private var events: AsyncThrowingStream<EventEnvelope, Error>.Continuation?
+    private var events: AsyncThrowingStream<Element, Error>.Continuation?
     private var failureStatus: Int?
     private var failureBody = Data()
 
-    func open(_ request: URLRequest, configuration: URLSessionConfiguration) async throws -> AsyncThrowingStream<EventEnvelope, Error> {
+    func open(_ request: URLRequest, configuration: URLSessionConfiguration) async throws -> AsyncThrowingStream<Element, Error> {
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
         let task = session.dataTask(with: request)
 
-        let (stream, continuation) = AsyncThrowingStream<EventEnvelope, Error>.makeStream()
+        let (stream, continuation) = AsyncThrowingStream<Element, Error>.makeStream()
         continuation.onTermination = { _ in
             task.cancel()
             session.finishTasksAndInvalidate()
@@ -177,8 +193,8 @@ private final class EventStreamConnection: NSObject, URLSessionDataDelegate, @un
             return
         }
         for message in parser.feed(data) {
-            guard let envelope = try? JSONDecoder().decode(EventEnvelope.self, from: Data(message.data.utf8)) else { continue }
-            events?.yield(envelope)
+            guard let element = try? JSONDecoder().decode(Element.self, from: Data(message.data.utf8)) else { continue }
+            events?.yield(element)
         }
     }
 

@@ -63,14 +63,15 @@ final class CastTests: XCTestCase {
             XCTAssertFalse(character.helper.description.isEmpty)
         }
 
-        // Lists in a helper's prompt keep their lines.
-        XCTAssertTrue(Character.gardener.helper.prompt.contains("garden/rose-bed.md, with:\n- a title and one line on what grows there,\n"))
+        // The lines a helper writes at the top of a file keep their lines.
+        XCTAssertTrue(Character.gardener.helper.prompt.contains("garden/rose-bed.md, starting with these lines, which put it on the lot:\n\n---\nkind: rose\ncolor: red\n"))
+        XCTAssertTrue(Character.builder.helper.prompt.contains("\n---\nkind: restaurant\nx: 38\ny: 22\nwidth: 5\ndepth: 4\n---\n"))
 
         // The Engineer sends its a*life expert for any change to a*life, and
         // the expert knows its way around the app, the package and the server.
         XCTAssertTrue(Character.engineer.helper.description.contains("Use it whenever a*life is to be changed."))
         let expert = Character.engineer.helper.prompt
-        for part in ["ALife/", "ALifeKit/", "a-life-server/", "World.swift", "SheepSystem.swift", "ClaudeCharacter.swift", "agents.yaml"] {
+        for part in ["ALife/", "ALifeKit/", "a-life-server/", "World.swift", "SheepSystem.swift", "Buildings.swift", "Plants.swift", "ClaudeCharacter.swift", "LotSurvey.swift", "LotHub.swift", "agents.yaml"] {
             XCTAssertTrue(expert.contains(part), "the a*life expert doesn't know \(part)")
         }
         XCTAssertTrue(expert.contains("\n1. Run git status first."))
