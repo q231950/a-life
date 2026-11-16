@@ -43,7 +43,8 @@ enum Workspace: Equatable, Sendable {
 }
 
 /// A project a character works on, as the agents file's `project` says: a
-/// directory on this machine, or a git repository the server clones.
+/// directory on this machine, a git repository the server clones, or
+/// several repositories it clones side by side.
 struct Project: Equatable, Sendable {
     /// The id of the character who works on it, which names its clone.
     let id: String
@@ -55,6 +56,35 @@ struct Project: Equatable, Sendable {
         /// A git repository, cloned once into a directory the server keeps
         /// for the character, at `branch` or the repository's default.
         case repository(String, branch: String?)
+        /// Several git repositories, such as an app and its server, each
+        /// cloned once into the directory the server keeps for the
+        /// character, side by side, so the character works on them all.
+        case repositories([Repository])
+    }
+
+    /// One of the git repositories a project is made of.
+    struct Repository: Equatable, Sendable {
+        let address: String
+        /// The branch to clone, or `nil` for the repository's default.
+        var branch: String? = nil
+
+        /// The directory it is cloned into, named after the repository, such
+        /// as `app` for `https://github.com/you/app.git`.
+        var name: String { Project.cloneName(of: address) ?? address }
+    }
+
+    /// The name a repository's clone gets, as `git clone` would choose it:
+    /// the last part of its address without `.git`. `nil` if there's no
+    /// such name that will do for a directory.
+    static func cloneName(of address: String) -> String? {
+        var name = Substring(address)
+        while name.hasSuffix("/") { name = name.dropLast() }
+        if let separator = name.lastIndex(where: { $0 == "/" || $0 == ":" }) {
+            name = name[name.index(after: separator)...]
+        }
+        if name.hasSuffix(".git") { name = name.dropLast(4) }
+        guard !name.isEmpty, !name.hasPrefix("."), !name.hasPrefix("-") else { return nil }
+        return String(name)
     }
 }
 
@@ -306,13 +336,13 @@ private struct AgentEntry: Decodable {
     }
 }
 
-/// An agent's `project`: a `path` on this machine, or a `repo` to clone,
-/// with its `branch` if need be.
+/// An agent's `project`: a `path` on this machine, a `repo` to clone, with
+/// its `branch` if need be, or several `repos` to clone side by side.
 private struct ProjectEntry: Decodable {
     let source: Project.Source
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case path, repo, branch
+        case path, repo, repos, branch
     }
 
     init(from decoder: any Decoder) throws {
@@ -322,11 +352,41 @@ private struct ProjectEntry: Decodable {
         let repo = try container.optional(String.self, .repo)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let branch = try container.optional(String.self, .branch)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        if let repos = try container.optional([RepoEntry].self, .repos) {
+            let at = container.codingPath + [CodingKeys.repos]
+            guard path == nil, repo == nil else {
+                throw FieldError(
+                    at,
+                    "can't go with \(path != nil ? "path" : "repo"). A project is a directory on this machine, a git repository to clone, or several to clone side by side, so give only one of them."
+                )
+            }
+            guard branch == nil else {
+                throw FieldError(
+                    container.codingPath + [CodingKeys.branch],
+                    "goes with each of the repos it is for, not with the project."
+                )
+            }
+            guard !repos.isEmpty else {
+                throw FieldError(at, "is empty. List at least one repo for the server to clone.")
+            }
+            let repositories = repos.map(\.repository)
+            for (index, repository) in repositories.enumerated() {
+                if let first = repositories.firstIndex(where: { $0.name == repository.name }), first < index {
+                    throw FieldError(
+                        at + [ListIndex(index), RepoEntry.CodingKeys.repo],
+                        "would be cloned into \(repository.name), as repos[\(first)] is. Each repo needs a directory of its own, so leave one of them out."
+                    )
+                }
+            }
+            source = .repositories(repositories)
+            return
+        }
+
         switch (path, repo) {
         case (nil, nil):
             throw FieldError(
                 container.codingPath,
-                "needs a path, a directory on this machine, or a repo, a git repository for the server to clone."
+                "needs a path, a directory on this machine, a repo, a git repository for the server to clone, or repos, several of them."
             )
         case (.some, .some):
             throw FieldError(
@@ -342,19 +402,31 @@ private struct ProjectEntry: Decodable {
             }
             source = .directory(try Self.directory(path, at: container.codingPath + [CodingKeys.path]))
         case (nil, let repo?):
-            guard Self.isGitAddress(repo) else {
-                throw FieldError(
-                    container.codingPath + [CodingKeys.repo],
-                    "\"\(repo)\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
-                )
-            }
-            if let branch, branch.isEmpty || branch.hasPrefix("-") || branch.contains(where: \.isWhitespace) {
-                throw FieldError(
-                    container.codingPath + [CodingKeys.branch],
-                    "\"\(branch)\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
-                )
+            try Self.checkAddress(repo, at: container.codingPath + [CodingKeys.repo])
+            if let branch {
+                try Self.checkBranch(branch, at: container.codingPath + [CodingKeys.branch])
             }
             source = .repository(repo, branch: branch)
+        }
+    }
+
+    /// Refuses `address` unless it is one `git clone` takes.
+    static func checkAddress(_ address: String, at codingPath: [any CodingKey]) throws {
+        guard isGitAddress(address) else {
+            throw FieldError(
+                codingPath,
+                "\"\(address)\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+            )
+        }
+    }
+
+    /// Refuses `branch` unless it can be a branch's name.
+    static func checkBranch(_ branch: String, at codingPath: [any CodingKey]) throws {
+        if branch.isEmpty || branch.hasPrefix("-") || branch.contains(where: \.isWhitespace) {
+            throw FieldError(
+                codingPath,
+                "\"\(branch)\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
+            )
         }
     }
 
@@ -386,6 +458,32 @@ private struct ProjectEntry: Decodable {
         guard let at = text.firstIndex(of: "@"), let colon = text[at...].firstIndex(of: ":") else { return false }
         let user = text[..<at], host = text[text.index(after: at)..<colon], path = text[text.index(after: colon)...]
         return !user.isEmpty && !host.isEmpty && !host.contains("/") && !path.isEmpty
+    }
+}
+
+/// One of a project's `repos`: the `repo` to clone, with its `branch` if
+/// need be.
+private struct RepoEntry: Decodable {
+    let repository: Project.Repository
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case repo, branch
+    }
+
+    init(from decoder: any Decoder) throws {
+        try rejectUnknownFields(in: decoder, CodingKeys.self, of: "a repo")
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let repo = try container.text(.repo)
+        let at = container.codingPath + [CodingKeys.repo]
+        try ProjectEntry.checkAddress(repo, at: at)
+        guard Project.cloneName(of: repo) != nil else {
+            throw FieldError(at, "\"\(repo)\" doesn't end in a name to clone it as, such as app in https://github.com/you/app.git.")
+        }
+        let branch = try container.optional(String.self, .branch)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let branch {
+            try ProjectEntry.checkBranch(branch, at: container.codingPath + [CodingKeys.branch])
+        }
+        repository = Project.Repository(address: repo, branch: branch)
     }
 }
 

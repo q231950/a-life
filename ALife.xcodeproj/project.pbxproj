@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1FE00000000000000000010 /* ALifeClient in Frameworks */ = {isa = PBXBuildFile; productRef = A1FE00000000000000000011 /* ALifeClient */; };
+		A1FE00000000000000000015 /* ptts in Frameworks */ = {isa = PBXBuildFile; productRef = A1FE00000000000000000014 /* ptts */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1FE00000000000000000010 /* ALifeClient in Frameworks */,
+				A1FE00000000000000000015 /* ptts in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +73,7 @@
 			name = ALife;
 			packageProductDependencies = (
 				A1FE00000000000000000011 /* ALifeClient */,
+				A1FE00000000000000000014 /* ptts */,
 			);
 			productName = ALife;
 			productReference = A1FE00000000000000000001 /* ALife.app */;
@@ -102,6 +105,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A1FE00000000000000000012 /* XCLocalSwiftPackageReference "ALifeKit" */,
+				A1FE00000000000000000013 /* XCRemoteSwiftPackageReference "xn-ptts" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1FE00000000000000000005 /* Products */;
@@ -267,6 +271,7 @@
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXCLUDED_ARCHS = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "ALife-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "a*life";
@@ -310,6 +315,7 @@
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				EXCLUDED_ARCHS = x86_64;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "ALife-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "a*life";
@@ -370,10 +376,26 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A1FE00000000000000000013 /* XCRemoteSwiftPackageReference "xn-ptts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gradium-ai/xn-ptts.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.7.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		A1FE00000000000000000011 /* ALifeClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ALifeClient;
+		};
+		A1FE00000000000000000014 /* ptts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1FE00000000000000000013 /* XCRemoteSwiftPackageReference "xn-ptts" */;
+			productName = ptts;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

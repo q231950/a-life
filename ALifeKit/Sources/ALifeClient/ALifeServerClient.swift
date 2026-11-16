@@ -87,6 +87,14 @@ public struct ALifeServerClient: Sendable {
         return try await EventStreamConnection<Lot>().open(request, configuration: urlSession.configuration)
     }
 
+    /// Where the server offers the voice model the characters speak with:
+    /// a Phonon model bundle, its `bundle.json` and every file it lists, at
+    /// the same paths under this address. The server answers 404 for all of
+    /// it if it has no model to offer.
+    public var voiceModelURL: URL {
+        baseURL.appendingPathComponent("v1/voice", isDirectory: true)
+    }
+
     // MARK: Plumbing
 
     /// `/v1/sessions/{id}`, then `components`.

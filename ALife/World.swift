@@ -194,6 +194,16 @@ final class World {
         return entity
     }
 
+    /// The sessions whose characters stand close enough to yours to be
+    /// heard.
+    func residentsInEarshot() -> Set<String> {
+        let you = character.position
+        return Set(agentCharacters.compactMap { id, agent in
+            let position = agent.entity.position
+            return Earshot.contains(listener: (x: you.x, z: you.z), speaker: (x: position.x, z: position.z)) ? id : nil
+        })
+    }
+
     /// The session whose character `entity` is, or is part of.
     func residentID(of entity: Entity) -> String? {
         var current: Entity? = entity

@@ -38,6 +38,8 @@ struct ClaudeCode: ClaudeCodeLauncher {
     var model: String?
     /// The clone of each project that is a git repository, by the id of the
     /// character who works on it, or why there isn't one: see `checkOut`.
+    /// For a project of several repositories, the directory their clones
+    /// are in.
     var clones: [String: Result<URL, ConfigurationError>] = [:]
 
     func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
@@ -59,6 +61,14 @@ struct ClaudeCode: ClaudeCodeLauncher {
                 case .success(let clone): directory = clone
                 case .failure(let problem): throw problem
                 case nil: throw ConfigurationError("\(address) hasn't been cloned. Restart the server to clone it.")
+                }
+            case .repositories(let repositories):
+                switch clones[project.id] {
+                case .success(let clones): directory = clones
+                case .failure(let problem): throw problem
+                case nil:
+                    let addresses = repositories.map(\.address).joined(separator: ", ")
+                    throw ConfigurationError("\(addresses) haven't been cloned. Restart the server to clone them.")
                 }
             }
         }
@@ -140,7 +150,30 @@ struct ClaudeCode: ClaudeCodeLauncher {
     /// if one is given, and reused after that. Throws, saying why, if it
     /// can't be cloned or something else is in its place.
     static func checkOut(_ repository: String, branch: String?, for id: String, in projects: URL) throws -> Checkout {
-        let clone = projects.appendingPathComponent(id, isDirectory: true)
+        try checkOut(repository, branch: branch, into: projects.appendingPathComponent(id, isDirectory: true))
+    }
+
+    /// The clones of the `repositories` of the character `id`'s project,
+    /// side by side in a directory of its own in `projects`, each named
+    /// after its repository and checked out as a single repository is. Says
+    /// for each, in order, what became of it or why it couldn't be cloned.
+    static func checkOut(_ repositories: [Project.Repository], for id: String, in projects: URL) -> [Result<Checkout, ConfigurationError>] {
+        let directory = projects.appendingPathComponent(id, isDirectory: true)
+        if FileManager.default.fileExists(atPath: directory.appendingPathComponent(".git").path) {
+            // A clone of a single repository from before, when the project was one.
+            let problem = ConfigurationError("\(directory.path) is a git checkout itself, so the project's repos won't be cloned into it. Move it out of the way and restart the server.")
+            return repositories.map { _ in .failure(problem) }
+        }
+        return repositories.map { repository in
+            Result {
+                try checkOut(repository.address, branch: repository.branch, into: directory.appendingPathComponent(repository.name, isDirectory: true))
+            }.mapError { $0 as? ConfigurationError ?? ConfigurationError("\($0)") }
+        }
+    }
+
+    /// The clone of `repository` in `clone`, cloned the first time and
+    /// reused after that.
+    private static func checkOut(_ repository: String, branch: String?, into clone: URL) throws -> Checkout {
         let fileManager = FileManager.default
         if fileManager.fileExists(atPath: clone.path) {
             guard fileManager.fileExists(atPath: clone.appendingPathComponent(".git").path) else {
@@ -148,7 +181,7 @@ struct ClaudeCode: ClaudeCodeLauncher {
             }
             return .reused(clone)
         }
-        try fileManager.createDirectory(at: projects, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: clone.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         let git = Process()
         git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
