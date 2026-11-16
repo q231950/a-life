@@ -146,6 +146,36 @@ final class ServerConnectionTests: XCTestCase {
         server.disconnect()
     }
 
+    func testOnlyWhatIsSaidAfterCatchingUpIsNew() async throws {
+        let (server, _) = makeConnection()
+        // The server had got to 3 before this front end connected.
+        var gardenerListed = SessionState(id: "gardener", name: "Gardener")
+        gardenerListed.lastSeq = 3
+        StubServer.roster = [gardenerListed]
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let gardener = try XCTUnwrap(server.session("gardener"))
+
+        let before = Message(id: "m1", kind: .agent, speaker: "Gardener", text: "I watered the roses.")
+        let after = Message(id: "m2", kind: .agent, speaker: "Gardener", text: "The tulips are up.")
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 2, event: .message(before)), to: "gardener") // replayed
+        StubServer.push(EventEnvelope(seq: 3, event: .statusChanged(.idle, stopReason: .endTurn)), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 4, event: .message(after)), to: "gardener") // live
+        await wait(for: "the live message") { gardener.transcript.count == 2 }
+        XCTAssertEqual(gardener.newMessages, [after])
+
+        server.disconnect()
+    }
+
+    func testOffersTheVoiceModelAtTheServersAddress() {
+        let (server, _) = makeConnection(url: URL(string: "https://my-mac.example.ts.net"))
+        XCTAssertEqual(server.voiceModelURL?.absoluteString, "https://my-mac.example.ts.net/v1/voice/")
+        XCTAssertEqual(server.voiceModelURL?.appending(path: "voices/Sir Bramwell.safetensors").path, "/v1/voice/voices/Sir Bramwell.safetensors")
+        server.setServerURL("")
+        XCTAssertNil(server.voiceModelURL)
+    }
+
     func testFollowsTheLot() async throws {
         let (server, _) = makeConnection()
         server.connect()

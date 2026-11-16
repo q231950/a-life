@@ -4,7 +4,7 @@ import Vapor
 extension SessionState: @retroactive Content {}
 extension Lot: @retroactive Content {}
 
-func routes(_ app: Application, sessions: [HostedSession], lot: LotHub) {
+func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, voice: URL? = nil) {
     let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
 
     /// The session a request names in its path.
@@ -90,6 +90,33 @@ func routes(_ app: Application, sessions: [HostedSession], lot: LotHub) {
             try serverSentEvent(id: lot.revision, type: "lot", data: lot)
         }
     }
+
+    // The voice model the front ends speak the characters' lines with: a
+    // Phonon model bundle, `bundle.json` and the files it lists, served as
+    // they are from `voice`. Not found if there's no model there.
+    app.get("v1", "voice", "**") { request -> Response in
+        guard let voice, let file = voiceFile(at: request.url.path, in: voice) else {
+            throw Abort(.notFound, reason: "The server has no voice model. See Voices in a-life-server/README.md.")
+        }
+        return try await request.fileio.asyncStreamFile(at: file.path)
+    }
+}
+
+/// The file in the voice model directory `voice` that `path`, such as
+/// `/v1/voice/voices/Sir%20Bramwell.safetensors`, asks for, if there is
+/// one. Nothing outside `voice` is ever served, nor any hidden file.
+func voiceFile(at path: String, in voice: URL) -> URL? {
+    let prefix = "/v1/voice/"
+    guard path.hasPrefix(prefix) else { return nil }
+    var file = voice
+    for component in path.dropFirst(prefix.count).split(separator: "/", omittingEmptySubsequences: false) {
+        guard let name = String(component).removingPercentEncoding,
+              !name.isEmpty, !name.hasPrefix("."), !name.contains("/"), !name.contains("\0") else { return nil }
+        file.appendPathComponent(name)
+    }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: file.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return nil }
+    return file
 }
 
 /// A `text/event-stream` response with a frame for each of `events`, and a

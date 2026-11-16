@@ -7,7 +7,10 @@ import AppKit
 
 struct WorldView: View {
     @Environment(ServerConnection.self) private var server
+    @Environment(Voices.self) private var voices
     @State private var world: World?
+    /// Says the characters' lines out loud while you stand near them.
+    @State private var narrator: Narrator?
     /// The character you are talking to. `nil` means the first one.
     @State private var selectedID: String?
     @State private var showsSettings = false
@@ -32,6 +35,15 @@ struct WorldView: View {
         }
         .onChange(of: selected?.id) { _, id in
             world?.show(residents, selectedID: id)
+        }
+        .onChange(of: speakers) { _, speakers in
+            narrator?.listen(to: speakers, inEarshot: world?.residentsInEarshot() ?? [])
+        }
+        .task(id: server.serverURL) {
+            voices.load(from: server.voiceModelURL)
+        }
+        .task {
+            await keepEarshot()
         }
         .onChange(of: server.lot) { old, new in
             // Only news from the server this app has heard from already
@@ -83,6 +95,27 @@ struct WorldView: View {
                 subagents: session.subagents.map(\.id)
             )
         }
+    }
+
+    // MARK: Voices
+
+    /// What each character has said lately, for the narrator.
+    private var speakers: [Narrator.Speaker] {
+        server.sessions.map { Narrator.Speaker(id: $0.id, messages: $0.newMessages) }
+    }
+
+    /// Keeps an ear on who is close enough to hear, as you and the
+    /// characters walk about, so a character you walk away from stops
+    /// talking.
+    private func keepEarshot() async {
+        let narrator = Narrator(engine: voices)
+        narrator.listen(to: speakers, inEarshot: []) // what was said before is let go
+        self.narrator = narrator
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(250))
+            narrator.listenerMoved(inEarshot: world?.residentsInEarshot() ?? [])
+        }
+        narrator.hush()
     }
 
     // MARK: Gestures
@@ -142,4 +175,5 @@ struct WorldView: View {
 #Preview {
     WorldView()
         .environment(ServerConnection(serverURLStore: InMemoryServerURLStore()))
+        .environment(Voices())
 }

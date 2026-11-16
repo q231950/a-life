@@ -4,6 +4,7 @@ import SwiftUI
 /// Where the address of the a-life-server is set.
 struct SettingsView: View {
     @Environment(ServerConnection.self) private var server
+    @Environment(Voices.self) private var voices
     @Environment(\.dismiss) private var dismiss
     @State private var address = ""
     @State private var addressIsInvalid = false
@@ -53,6 +54,24 @@ struct SettingsView: View {
                 } footer: {
                     Text("Each character has a session of its own on the server, shared by every front end connected to it. Starting one over clears its conversation for all of them. To start just one over, use the … button next to its name.")
                 }
+
+                Section {
+                    LabeledContent("Voices", value: voicesStatus)
+                    if voices.status == .ready {
+                        LabeledContent("Last said", value: voices.lastSaid ?? "Nothing yet")
+                            .lineLimit(2)
+                    }
+                    if let problem = voices.problem {
+                        LabeledContent("Problem", value: problem)
+                    }
+                    if case .unavailable = voices.status {
+                        Button("Try again") { voices.load(from: server.voiceModelURL) }
+                    }
+                } header: {
+                    Text("Voices")
+                } footer: {
+                    Text("Each character says what it has to say out loud, in a voice of its own, while you stand within \(Int(Earshot.distance)) tiles of it. Nothing said yet, with the voices ready, means no character has had anything to say near you. The voice model comes from the server once, and speaks on this device. See Voices in a-life-server/README.md.")
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Settings")
@@ -68,6 +87,16 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 420)
         #endif
+    }
+
+    private var voicesStatus: String {
+        switch voices.status {
+        case .off: return "Off"
+        case .downloading(let fraction): return "Downloading, \(Int(fraction * 100))%"
+        case .loading: return "Getting ready"
+        case .ready: return "Ready"
+        case .unavailable(let reason): return reason
+        }
     }
 
     private func save() {

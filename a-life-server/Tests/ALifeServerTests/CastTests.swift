@@ -38,19 +38,26 @@ final class CastTests: XCTestCase {
 
     // MARK: The shipped file
 
-    func testTheShippedFileHasTheGardenerTheBuilderAndTheEngineer() throws {
+    func testTheShippedFileHasTheGardenerTheBuilderTheEngineerAndTheFlamingoEngineer() throws {
         let cast = try Cast.load(contentsOf: Cast.shippedFile)
-        XCTAssertEqual(cast.map(\.id), ["gardener", "builder", "engineer"])
-        XCTAssertEqual(cast.map(\.name), ["Gardener", "Builder", "Engineer"])
-        XCTAssertEqual(cast.map(\.color), ["#D9594D", "#F2A633", "#8050C8"])
-        XCTAssertEqual(cast.map(\.permissionMode), ["acceptEdits", "default", "default"])
-        // The Engineer works on a*life itself, in its checkout.
-        XCTAssertEqual(cast.map(\.workspace), [.lot, .lot, .aLife])
-        XCTAssertEqual(cast.map(\.changesThings), [false, true, true])
-        XCTAssertEqual(cast.map(\.helper.name), ["planter", "construction-worker", "a-life-expert"])
+        XCTAssertEqual(cast.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer"])
+        XCTAssertEqual(cast.map(\.name), ["Gardener", "Builder", "Engineer", "Flamingo Engineer"])
+        XCTAssertEqual(cast.map(\.color), ["#D9594D", "#F2A633", "#8050C8", "#F27BA8"])
+        XCTAssertEqual(cast.map(\.permissionMode), ["acceptEdits", "default", "default", "default"])
+        // The Engineer works on a*life itself, in its checkout, and the
+        // Flamingo Engineer on the three repositories of Flamingo Chess.
+        let flamingoChess = Project(id: "flamingo-engineer", source: .repositories([
+            Project.Repository(address: "https://github.com/q231950/flamingo.git"),
+            Project.Repository(address: "https://github.com/q231950/flamingo-chess-light.git"),
+            Project.Repository(address: "https://github.com/q231950/neoneon.git"),
+        ]))
+        XCTAssertEqual(cast.map(\.workspace), [.lot, .lot, .aLife, .project(flamingoChess)])
+        XCTAssertEqual(cast.map(\.changesThings), [false, true, true, true])
+        XCTAssertEqual(cast.map(\.helper.name), ["planter", "construction-worker", "a-life-expert", "flamingo-expert"])
         XCTAssertEqual(cast.map(\.helper.tools), [
             ["Read", "Glob", "Grep", "Write", "Edit"],
             ["Read", "Glob", "Grep", "Write", "Edit"],
+            ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
             ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
         ])
 
@@ -77,6 +84,17 @@ final class CastTests: XCTestCase {
         XCTAssertTrue(expert.contains("\n1. Run git status first."))
         XCTAssertTrue(expert.contains("swift test --package-path a-life-server"))
         XCTAssertFalse(expert.contains("--cloud"))
+
+        // The Flamingo Engineer sends its expert for any change to Flamingo
+        // Chess, and the expert knows which checkout is which.
+        XCTAssertTrue(Character.flamingoEngineer.role.contains("`flamingo-expert`"))
+        XCTAssertTrue(Character.flamingoEngineer.helper.description.contains("Use it whenever Flamingo Chess is to be changed."))
+        let flamingoExpert = Character.flamingoEngineer.helper.prompt
+        for part in ["flamingo/ is the iOS app", "flamingo-chess-light/ is the app for the Light Phone", "neoneon/ is the server"] {
+            XCTAssertTrue(flamingoExpert.contains(part), "the Flamingo expert doesn't know \(part)")
+        }
+        XCTAssertTrue(flamingoExpert.contains("\n1. Run git status in each repository you'll touch, first."))
+        XCTAssertTrue(flamingoExpert.contains("Don't commit, push or switch branches"))
     }
 
     // MARK: What a file says
@@ -248,6 +266,26 @@ final class CastTests: XCTestCase {
         }
     }
 
+    func testAProjectCanBeSeveralGitRepositoriesClonedSideBySide() throws {
+        let yaml = painter(onProject: """
+
+              repos:
+                - repo: https://github.com/someone/app.git
+                - repo: "git@github.com:someone/app-server.git"
+                  branch: develop
+                - {repo: "file:///tmp/tools/"}
+        """)
+        let character = try XCTUnwrap(Cast.decode(yaml, from: "agents.yaml").first)
+        let repositories = [
+            Project.Repository(address: "https://github.com/someone/app.git"),
+            Project.Repository(address: "git@github.com:someone/app-server.git", branch: "develop"),
+            Project.Repository(address: "file:///tmp/tools/"),
+        ]
+        XCTAssertEqual(character.workspace, .project(Project(id: "painter", source: .repositories(repositories))))
+        // Each is cloned into a directory named as git clone would name it.
+        XCTAssertEqual(repositories.map(\.name), ["app", "app-server", "tools"])
+    }
+
     func testTheShippedFilesProjectEngineerWorksOnceItsCommentsAreTakenOff() throws {
         // The example at the end of the shipped file, without its #s.
         let shipped = try String(contentsOf: Cast.shippedFile, encoding: .utf8)
@@ -309,15 +347,59 @@ final class CastTests: XCTestCase {
             ),
             (
                 painter(onProject: "{branch: main}"),
-                "agents.yaml: agents[0].project needs a path, a directory on this machine, or a repo, a git repository for the server to clone."
+                "agents.yaml: agents[0].project needs a path, a directory on this machine, a repo, a git repository for the server to clone, or repos, several of them."
             ),
             (
                 painter(onProject: "{url: \"https://github.com/someone/app.git\"}"),
-                "agents.yaml: agents[0].project.url isn't a field of a project. The fields are path, repo and branch."
+                "agents.yaml: agents[0].project.url isn't a field of a project. The fields are path, repo, repos and branch."
             ),
             (
                 painter(onProject: "/tmp"),
                 "agents.yaml: agents[0].project should be a set of fields."
+            ),
+            (
+                painter(onProject: "{repos: []}"),
+                "agents.yaml: agents[0].project.repos is empty. List at least one repo for the server to clone."
+            ),
+            (
+                painter(onProject: "{repos: https://github.com/someone/app.git}"),
+                "agents.yaml: agents[0].project.repos should be a list."
+            ),
+            (
+                painter(onProject: "{path: /tmp, repos: [{repo: \"https://github.com/someone/app.git\"}]}"),
+                "agents.yaml: agents[0].project.repos can't go with path. A project is a directory on this machine, a git repository to clone, or several to clone side by side, so give only one of them."
+            ),
+            (
+                painter(onProject: "{repo: \"https://github.com/someone/app.git\", repos: [{repo: \"https://github.com/someone/server.git\"}]}"),
+                "agents.yaml: agents[0].project.repos can't go with repo. A project is a directory on this machine, a git repository to clone, or several to clone side by side, so give only one of them."
+            ),
+            (
+                painter(onProject: "{branch: main, repos: [{repo: \"https://github.com/someone/app.git\"}]}"),
+                "agents.yaml: agents[0].project.branch goes with each of the repos it is for, not with the project."
+            ),
+            (
+                painter(onProject: "{repos: [{repo: \"https://github.com/someone/app.git\"}, {repo: github.com/someone/server}]}"),
+                "agents.yaml: agents[0].project.repos[1].repo \"github.com/someone/server\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+            ),
+            (
+                painter(onProject: "{repos: [{repo: \"https://github.com/someone/app.git\", branch: \"-x\"}]}"),
+                "agents.yaml: agents[0].project.repos[0].branch \"-x\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
+            ),
+            (
+                painter(onProject: "{repos: [{repo: \"https://github.com/someone/.git\"}]}"),
+                "agents.yaml: agents[0].project.repos[0].repo \"https://github.com/someone/.git\" doesn't end in a name to clone it as, such as app in https://github.com/you/app.git."
+            ),
+            (
+                painter(onProject: "{repos: [{repo: \"https://github.com/someone/app.git\"}, {repo: \"git@gitlab.com:else/app\"}]}"),
+                "agents.yaml: agents[0].project.repos[1].repo would be cloned into app, as repos[0] is. Each repo needs a directory of its own, so leave one of them out."
+            ),
+            (
+                painter(onProject: "{repos: [{branch: main}]}"),
+                "agents.yaml: agents[0].project.repos[0].repo is missing."
+            ),
+            (
+                painter(onProject: "{repos: [{url: \"https://github.com/someone/app.git\"}]}"),
+                "agents.yaml: agents[0].project.repos[0].url isn't a field of a repo. The fields are repo and branch."
             ),
             (
                 amended(replacing: "works_in: a-life", with: "works_in: a-life\n    project: {path: /tmp}"),

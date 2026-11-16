@@ -40,8 +40,19 @@ public final class AgentSession {
     /// character can't be told anything else.
     public var isWaitingForYou: Bool { !state.approvals.isEmpty }
 
+    /// What was said in the session since this front end caught up with it,
+    /// oldest first, as it happened: not what was said before and replayed
+    /// on connecting. The most recent few only. These are the lines worth
+    /// saying out loud.
+    public private(set) var newMessages: [Message] = []
+
     /// Set by the connection while it has a server to talk to.
     @ObservationIgnored var client: ALifeServerClient?
+    /// The sequence number the server had got to when the connection last
+    /// listed the sessions. Events up to it are replayed, not new.
+    @ObservationIgnored var caughtUpAt = 0
+    /// How many of `newMessages` are kept.
+    static let newMessagesKept = 20
 
     public init(_ state: SessionState) {
         id = state.id
@@ -89,12 +100,20 @@ public final class AgentSession {
     // MARK: Kept up to date by the connection
 
     func apply(_ envelope: EventEnvelope) {
+        let known = state.messages.count
         state.apply(envelope)
+        if envelope.seq > caughtUpAt, case .message(let message) = envelope.event, state.messages.count > known {
+            newMessages.append(message)
+            if newMessages.count > Self.newMessagesKept {
+                newMessages.removeFirst(newMessages.count - Self.newMessagesKept)
+            }
+        }
     }
 
     /// Takes on what the server's list of sessions says about this one.
     func update(from listed: SessionState) {
         if state.name != listed.name { state.name = listed.name }
         if state.color != listed.color { state.color = listed.color }
+        caughtUpAt = listed.lastSeq
     }
 }

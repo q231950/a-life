@@ -44,6 +44,12 @@ public final class ServerConnection {
         serverURL = serverURLStore.load()
     }
 
+    /// Where the server offers the voice model the characters speak with,
+    /// if there is a server. See `ALifeServerClient.voiceModelURL`.
+    public var voiceModelURL: URL? {
+        serverURL.map { ALifeServerClient(baseURL: $0).voiceModelURL }
+    }
+
     /// The session with this id, if the server has one.
     public func session(_ id: String) -> AgentSession? {
         sessions.first { $0.id == id }

@@ -7,6 +7,8 @@ struct ALifeApp: App {
     /// The app's connection to the a-life-server, and through it a session
     /// per character. The sessions themselves live on the server.
     @State private var server: ServerConnection
+    /// The characters' voices, which speak on this device.
+    @State private var voices = Voices()
 
     init() {
         _server = State(initialValue: ServerConnection())
@@ -30,6 +32,7 @@ struct ALifeApp: App {
         WindowGroup {
             WorldView()
                 .environment(server)
+                .environment(voices)
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 800)

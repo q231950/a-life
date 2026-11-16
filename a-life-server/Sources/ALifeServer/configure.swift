@@ -19,7 +19,7 @@ enum Players: Sendable {
     /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
     ///   `sonnet`. Claude Code's own default unless set.
     /// - `ALIFE_PROJECTS_DIR`: where the projects that are git repositories
-    ///   are cloned. `~/a-life-projects` unless set.
+    ///   are cloned, a directory per character. `~/a-life-projects` unless set.
     ///
     /// It clones each such project that isn't cloned yet, and says where
     /// each character works.
@@ -72,6 +72,28 @@ enum Players: Sendable {
                             logger.error("\(name) can't start until this is fixed: \(problem)")
                             claudeCode.clones[project.id] = .failure(problem)
                         }
+                    case .repositories(let repositories):
+                        // As with one repository: if any can't be cloned,
+                        // only this character is kept from starting.
+                        var problems: [String] = []
+                        for (repository, checkout) in zip(repositories, ClaudeCode.checkOut(repositories, for: project.id, in: projects)) {
+                            switch checkout {
+                            case .success(.cloned(let clone)):
+                                logger.notice("\(name) works on \(repository.address), cloned just now into \(clone.path)")
+                            case .success(.reused(let clone)):
+                                logger.notice("\(name) works on \(repository.address), in its clone from before, \(clone.path), as it is")
+                            case .failure(let problem):
+                                logger.error("\(name) can't start until this is fixed: \(problem)")
+                                if !problems.contains(problem.description) { problems.append(problem.description) }
+                            }
+                        }
+                        let directory = projects.appendingPathComponent(project.id, isDirectory: true)
+                        if problems.isEmpty {
+                            logger.notice("\(name) works on its \(repositories.count) repos side by side, in \(directory.path)")
+                            claudeCode.clones[project.id] = .success(directory)
+                        } else {
+                            claudeCode.clones[project.id] = .failure(ConfigurationError(problems.joined(separator: " ")))
+                        }
                     }
                 }
             }
@@ -89,6 +111,13 @@ enum Players: Sendable {
         try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
         return lot
     }
+
+    /// Where the voice model the front ends speak with is: `ALIFE_VOICE_DIR`,
+    /// or `~/a-life-voice` unless it is set. It may not be there at all.
+    static func voiceDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        environment["ALIFE_VOICE_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-voice")
+    }
 }
 
 struct ConfigurationError: Error, CustomStringConvertible {
@@ -100,26 +129,40 @@ struct ConfigurationError: Error, CustomStringConvertible {
 }
 
 /// Sets the server up with a session per character in `cast`, played by
-/// `players`, and the lot in `lotDirectory`. Each is as the environment says
-/// if `nil`: the cast is read from the agents file, `ALIFE_AGENTS_FILE` or
-/// the shipped `agents.yaml`, and the lot is `ALIFE_LOT_DIR`. Given
-/// `players` but no `lotDirectory`, the lot stays empty.
+/// `players`, the lot in `lotDirectory`, and the voice model in
+/// `voiceDirectory`. Each is as the environment says if `nil`: the cast is
+/// read from the agents file, `ALIFE_AGENTS_FILE` or the shipped
+/// `agents.yaml`, the lot is `ALIFE_LOT_DIR` and the voice model
+/// `ALIFE_VOICE_DIR`. Given `players` but no `lotDirectory`, the lot stays
+/// empty, and with no `voiceDirectory` there's no voice model either.
 func configure(
     _ app: Application,
     players playersGiven: Players? = nil,
     cast: [Character]? = nil,
     lotDirectory: URL? = nil,
+    voiceDirectory: URL? = nil,
     lotSurveyInterval: Duration = .seconds(1)
 ) async throws {
     let cast = try cast ?? loadCast(logger: app.logger)
     var lotDirectory = lotDirectory
+    var voiceDirectory = voiceDirectory
     let players: Players
     if let given = playersGiven {
         players = given
     } else {
         let directory = try lotDirectory ?? Players.lotDirectory()
         lotDirectory = directory
+        voiceDirectory = voiceDirectory ?? Players.voiceDirectory()
         players = try Players.fromEnvironment(for: cast, lot: directory, logger: app.logger)
+    }
+
+    // The characters' voices, for the front ends to download.
+    if let voiceDirectory {
+        if FileManager.default.fileExists(atPath: voiceDirectory.appendingPathComponent("bundle.json").path) {
+            app.logger.notice("The characters speak with the voice model in \(voiceDirectory.path)")
+        } else {
+            app.logger.notice("There's no voice model in \(voiceDirectory.path), so the characters don't speak. See Voices in the README.")
+        }
     }
 
     // What the characters build and plant shows up in the front ends.
@@ -146,7 +189,7 @@ func configure(
     }
 
     app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot))
-    routes(app, sessions: sessions, lot: lot)
+    routes(app, sessions: sessions, lot: lot, voice: voiceDirectory)
 }
 
 /// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
