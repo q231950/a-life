@@ -115,8 +115,23 @@ struct AgentPanel: View {
     }
 }
 
-/// One button per character, showing whether it is working or waiting for you.
+/// Who you can talk to: a button per character where there's room for them
+/// all, and otherwise one button that opens a menu of them, so a long cast
+/// still fits on a phone.
 private struct CharacterPicker: View {
+    let selectedID: String
+    let select: (String) -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            CharacterButtons(selectedID: selectedID, select: select)
+            CompactCharacterPicker(selectedID: selectedID, select: select)
+        }
+    }
+}
+
+/// One button per character, showing whether it is working or waiting for you.
+private struct CharacterButtons: View {
     @Environment(ServerConnection.self) private var server
     let selectedID: String
     let select: (String) -> Void
@@ -140,6 +155,129 @@ private struct CharacterPicker: View {
                 .accessibilityValue(session.statusText)
             }
         }
+    }
+}
+
+/// The character you're talking to, in one button that opens a menu of
+/// everyone and what they're up to. Anyone else waiting for you is counted
+/// in an orange badge beside it, so they aren't tucked away in the menu.
+private struct CompactCharacterPicker: View {
+    @Environment(ServerConnection.self) private var server
+    @Environment(\.shirts) private var shirts
+    let selectedID: String
+    let select: (String) -> Void
+
+    /// Everyone but the one you're talking to who is waiting for you.
+    private var othersWaiting: [AgentSession] {
+        server.sessions.filter { $0.isWaitingForYou && $0.id != selectedID }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let selected = server.session(selectedBy: selectedID) {
+                Menu {
+                    Picker("Talk to", selection: Binding(get: { selectedID }, set: { select($0) })) {
+                        ForEach(Array(server.sessions.enumerated()), id: \.element.id) { slot, session in
+                            CharacterMenuItem(
+                                session: session,
+                                shirt: shirts[session.id] ?? .shirt(hex: session.color, slot: slot)
+                            )
+                            .tag(session.id)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(selected.statusColor)
+                            .frame(width: 8, height: 8)
+                        Text(selected.name)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .imageScale(.small)
+                    }
+                    .font(.footnote)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.bordered)
+                .tint(.accentColor)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Talking to \(selected.name)")
+                .accessibilityValue(selected.statusText)
+                .accessibilityHint("Shows everyone you can talk to")
+            }
+            if let first = othersWaiting.first {
+                Button("\(othersWaiting.count) waiting") {
+                    select(first.id)
+                }
+                .font(.caption.bold())
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .fixedSize()
+                .accessibilityLabel("\(ListFormatter.localizedString(byJoining: othersWaiting.map(\.name))) \(othersWaiting.count == 1 ? "is" : "are") waiting for you")
+                .accessibilityHint("Talks to \(first.name)")
+            }
+        }
+    }
+}
+
+/// A character in the menu of everyone: its name, what it is up to, and a
+/// symbol for its status in the colour of its shirt, so you can tell who is
+/// who as you can on the lot.
+private struct CharacterMenuItem: View {
+    let session: AgentSession
+    /// The character's shirt on the lot.
+    let shirt: PlatformColor
+
+    var body: some View {
+        Label {
+            #if os(macOS)
+            // A Mac menu item shows a single line.
+            Text("\(session.name) · \(session.statusText)")
+            #else
+            Text(session.name)
+            Text(session.statusText)
+            #endif
+        } icon: {
+            Image(symbol: session.statusSymbol, in: shirt)
+        }
+        .accessibilityLabel(session.name)
+        .accessibilityValue(session.statusText)
+    }
+}
+
+extension EnvironmentValues {
+    /// Each character's shirt on the lot, by session, for the panel to show
+    /// them in. A character missing from it hasn't reached the lot yet.
+    @Entry var shirts: [String: PlatformColor] = [:]
+}
+
+extension Image {
+    /// An SF Symbol drawn in `color` and kept that way. A menu draws the
+    /// images in its items as templates, in its own colour, and ignores
+    /// `foregroundStyle`, so the colour has to be in the image itself.
+    init(symbol name: String, in color: PlatformColor) {
+        #if os(macOS)
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil) else {
+            self.init(systemName: name)
+            return
+        }
+        let image = NSImage(size: symbol.size, flipped: false) { rect in
+            symbol.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        image.isTemplate = false
+        self.init(nsImage: image)
+        #else
+        guard let symbol = UIImage(systemName: name) else {
+            self.init(systemName: name)
+            return
+        }
+        self.init(uiImage: symbol.withTintColor(color, renderingMode: .alwaysOriginal))
+        #endif
     }
 }
 
@@ -442,5 +580,12 @@ extension AgentSession {
     var statusColor: Color {
         if isWaitingForYou { return .orange }
         return status == .running ? .green : .secondary
+    }
+
+    /// A symbol for the status, for menus, where the symbol is drawn in the
+    /// character's shirt colour rather than the status's.
+    var statusSymbol: String {
+        if isWaitingForYou { return "exclamationmark.circle.fill" }
+        return status == .running ? "circle.fill" : "circle"
     }
 }
