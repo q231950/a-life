@@ -39,6 +39,9 @@ enum Players: Sendable {
             let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             logger.notice("The characters are Claude Code sessions (\(executable.path))")
             var claudeCode = ClaudeCode(executable: executable, lot: lot, repository: repository, model: model)
+            // So the Team Lead can add agents to the cast.
+            claudeCode.agentsFile = Cast.file(in: environment)
+            claudeCode.serverCommand = Bundle.main.executableURL
             let projects = ClaudeCode.projectsDirectory(in: environment)
             for character in cast {
                 let name = character.name
@@ -131,7 +134,7 @@ struct ConfigurationError: Error, CustomStringConvertible {
 /// Sets the server up with a session per character in `cast`, played by
 /// `players`, the lot in `lotDirectory`, and the voice model in
 /// `voiceDirectory`. Each is as the environment says if `nil`: the cast is
-/// read from the agents file, `ALIFE_AGENTS_FILE` or the shipped
+/// read from the agents file, `ALIFE_AGENTS_FILE` or the checkout's
 /// `agents.yaml`, the lot is `ALIFE_LOT_DIR` and the voice model
 /// `ALIFE_VOICE_DIR`. Given `players` but no `lotDirectory`, the lot stays
 /// empty, and with no `voiceDirectory` there's no voice model either.
@@ -193,7 +196,7 @@ func configure(
 }
 
 /// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
-/// shipped one.
+/// one in the checkout the server was built from, or the shipped one.
 private func loadCast(logger: Logger) throws -> [Character] {
     let file = Cast.file(in: ProcessInfo.processInfo.environment)
     let cast = try Cast.load(contentsOf: file)

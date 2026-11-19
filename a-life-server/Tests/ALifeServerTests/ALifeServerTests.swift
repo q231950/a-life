@@ -253,7 +253,7 @@ final class ALifeServerTests: XCTestCase {
         let snapshot = try await client.state(of: "builder")
         XCTAssertEqual(snapshot, state)
         let listed = try await client.sessions()
-        XCTAssertEqual(listed.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer"])
+        XCTAssertEqual(listed.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer", "team-lead"])
         XCTAssertEqual(listed[1], state)
 
         // Naming a conversation the server doesn't have replays the current one in full.

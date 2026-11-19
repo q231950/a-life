@@ -77,7 +77,7 @@ All optional, as environment variables:
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
 | `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
-| `ALIFE_AGENTS_FILE` | The agents file, which lists the characters. The shipped [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) unless set. See [The agents file](#the-agents-file). |
+| `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
 | `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id (with a clone of each repository in it, for a project of several). `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
 
@@ -237,8 +237,9 @@ The characters are listed in the [agents file](#the-agents-file). Each character
 | **Gardener** | `planter` | Plants plants: reads `lot.md` for room, then writes `garden/<bed>.md` with the kind of plant, its colour and where the bed is at the top, so it grows on the lot, and how many and how to look after them; or edits a bed that's there. Puts out foals the same way. | anything but changes to files on the lot (`acceptEdits`) |
 | **Engineer** | `a-life-expert` | Changes a\*life itself, the app, `ALifeKit` and this server, in your a\*life checkout: knows its way around all of it, makes the change, keeps the tests and READMEs in step, and runs the tests. | every change and command (`default`) |
 | **Flamingo Engineer** | `flamingo-expert` | Changes Flamingo Chess, in its three repositories cloned side by side: `flamingo` (the iOS app), `flamingo-chess-light` (the Light Phone app) and `neoneon` (the server). Keeps a change that spans them in step, runs their tests. See [A character for another project](#a-character-for-another-project). | every change and command (`default`) |
+| **Team Lead** | `recruiter` | Adds a new agent to the agents file: reads it, writes the new agent as the others are written, and adds it with the server's `add-agent` command, which checks it and leaves everyone else as they are. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). | every command (`default`) |
 
-Each character has a colour of its own, which the front ends dress it in: the Gardener's shirt is red, the Builder's orange, the Engineer's purple and the Flamingo Engineer's pink. Its helpers' sheep wear the same colour.
+Each character has a colour of its own, which the front ends dress it in: the Gardener's shirt is red, the Builder's orange, the Engineer's purple, the Flamingo Engineer's pink and the Team Lead's teal. Its helpers' sheep wear the same colour. Each speaks in a voice of its own too, chosen by its place in the agents file.
 
 Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Gardener works the same way with its planter, but its changes to files on the lot go ahead without asking. Their helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them.
 
@@ -310,9 +311,28 @@ When it starts, the server says which directory each character works in, and whe
 
 The shipped [`agents.yaml`](Sources/ALifeServer/agents.yaml) has such a character, the Flamingo Engineer, who looks after Flamingo Chess: its iOS app, `flamingo`, its Light Phone app, `flamingo-chess-light`, and its server, `neoneon`, cloned into `~/a-life-projects/flamingo-engineer`. It sends its helper, the `flamingo-expert`, for every change, and the expert keeps a change that spans the repositories, such as one to the server's API and the apps that use it, in step. The file ends with another, the App Engineer, commented out: take the `#`s off, point it at your project, and restart the server.
 
+### The Team Lead and the agents file
+
+The Team Lead adds new agents to the [agents file](#the-agents-file), so that you can have someone new on the lot without writing their entry yourself. Tell it "I'd like a Painter who paints the houses" and it works out with you who they are: their name, what they do, where they work (the lot, a\*life, or a project of yours, a directory or a git repository's ssh address), their colour and how careful they should be. Then it sends its recruiter off, the `recruiter` subagent, which reads the agents file, writes the new agent the way the others are written, with a role and a helper of its own, and adds it with the server's own command:
+
+```sh
+"$ALIFE_SERVER_COMMAND" add-agent <<'AGENT'
+id: painter
+name: Painter
+color: "#3366CC"
+...
+AGENT
+```
+
+The server gives every Claude Code session it starts `ALIFE_AGENTS_FILE`, the agents file it read the cast from, and `ALIFE_SERVER_COMMAND`, its own command. `add-agent` takes a new agent's fields on its standard input (or from the file named after it), as an agent in the file has them, with or without the `- ` in front. It checks the new agent as the server checks the whole file when it starts, and also that no other agent has its id or its name, then adds it after the last agent, before any comments at the end of the file, such as the App Engineer example. The other agents and the file's comments stay as they are, word for word: if the new agent can't be added without changing them, or anything about it is wrong, the file isn't touched, and the command says what's wrong and where, so the recruiter can fix it and try again. You can run it yourself, too, as `swift run ALifeServer add-agent < painter.yaml`; nothing else of the server starts.
+
+The Team Lead works on the lot but leaves it alone, and its recruiter has Read, Glob, Grep and Bash but neither Write nor Edit: it never writes the agents file itself, and can't change or take away an agent that's there. Its session runs in the `default` permission mode, so `add-agent` asks you first (`recruiter: "$ALIFE_SERVER_COMMAND" add-agent ...`), and you see the new agent before it's added. Restart the server and the new agent joins the lot; the front ends pick it up when they reconnect.
+
+Unless `ALIFE_AGENTS_FILE` is set, the agents file is the one in the a\*life checkout the server was built from, `Sources/ALifeServer/agents.yaml`, so a new agent is a change in that checkout, there for you to look over and commit, and joins the lot without building the server again. If that checkout is gone, the server reads, and the Team Lead adds to, the copy it was built with.
+
 ### The agents file
 
-The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder, the Engineer and the Flamingo Engineer above. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode or where it works (the lot, a\*life or a project of your own), or to add or take away a character. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
+The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Gardener, the Builder, the Engineer, the Flamingo Engineer and the Team Lead above. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode or where it works (the lot, a\*life or a project of your own), or to add or take away a character; or have the [Team Lead](#the-team-lead-and-the-agents-file) add one. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
 
 ```sh
 ALIFE_AGENTS_FILE=~/my-agents.yaml swift run ALifeServer
@@ -343,7 +363,7 @@ agents:
 | Field | | What it is |
 |---|---|---|
 | `id` | required | The session's id, which its URLs use, such as `/v1/sessions/painter`: lowercase letters, digits and hyphens. No two agents can share one. |
-| `name` | required | What the front ends call the character. |
+| `name` | required | What the front ends call the character. No two agents can share one, whatever their capitals. |
 | `color` | optional | Its shirt on the lot, which its helper's sheep wear too, as `"#RRGGBB"`. Quote it: in YAML, `#` starts a comment. Without one, the front ends choose. |
 | `permission_mode` | optional | [Claude Code's permission mode](https://code.claude.com/docs/en/permission-modes) for the session, which decides what it asks you before doing: `default` (or `manual`) asks before every change, `acceptEdits` lets changes to files go ahead, and `plan`, `auto`, `dontAsk` and `bypassPermissions` are also taken. `default` unless set. |
 | `works_in` | optional | Where the character's session works: `lot`, the directory the characters share, or `a-life`, your a\*life checkout, as the [Engineer](#the-engineer-and-the-alife-checkout) does. `lot` unless set, or unless it has a `project`. |
@@ -369,6 +389,7 @@ agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are 
 agents.yaml: agents[3].project.path /Users/you/Development/my-app isn't a directory on this machine. A project's path has to be there already; for one that isn't, give its repo instead.
 agents.yaml: agents[3].project.repos[0].repo "https://github.com/you/my-app.git" is an https address, which the server can't clone: it clones without asking for a password. Use the repository's ssh address instead, such as git@github.com:you/my-app.git.
 agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an id of its own.
+agents.yaml: agents[5].name "Painter" is agents[4]'s name too. Each agent needs a name of its own.
 ```
 
 A field it doesn't know is refused rather than ignored, so a typo doesn't quietly leave a character with a default.
@@ -417,7 +438,7 @@ After each look, the server writes `lot.md` in the lot: what stands where, what 
 With `ALIFE_BACKEND=dummy`, each character is a `DummyCharacter` instead, which plays a short script for whatever it is told. No model is called and nothing real happens, so the front ends can be worked on without spending tokens.
 
 - The **Gardener** only looks. It reads, then sends two helpers off at once, one to search the flower beds and one to check the hedges, and reports back once both have reported back to it. It never asks for permission.
-- The **Builder** changes things. It reads, sends a helper off to measure the north corner and waits for it, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back. The **Engineer** plays the same script.
+- The **Builder** changes things. It reads, sends a helper off to measure the north corner and waits for it, then asks for approval of a shell command. The session goes idle with `requires_action` and waits for as long as it takes. Once answered, it runs the command (or doesn't) and reports back. The **Engineer**, the **Flamingo Engineer** and the **Team Lead** play the same script.
 
 Each helper is out for a few steps (the Gardener's for four and six, the Builder's for four); while they are out, the character's activity is `agent`.
 
@@ -446,17 +467,18 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 
 | File | What it does |
 |---|---|
-| `entrypoint.swift` | Starts Vapor. |
+| `entrypoint.swift` | Starts Vapor, or runs `add-agent` without it. |
 | `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, and the routes. |
 | `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode and its helper. See [The agents file](#the-agents-file). |
-| `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`. |
+| `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`, and adds a new agent after the last one without changing the others. |
+| `AddAgent.swift` | The `add-agent` command, which the Team Lead's recruiter runs to add an agent to the agents file. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). |
 | `routes.swift` | The HTTP API, including the event streams and the lot's, and the voice model's files. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many foals fit in a bed, and writes `lot.md`. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
 | `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
-| `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, and reads and writes its stream-json, one message per line. |
+| `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, with the agents file and the server's command in its environment, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in. |
 | `fetch-voice.sh` | Not in `Sources`: fetches the voice model into `ALIFE_VOICE_DIR`. See [Voices](#voices). |
@@ -469,13 +491,13 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Gardener's foals and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the planter being told where the house is, the planter being told about foals, and a front end seeing a restaurant and an oak appear.
 
 `VoiceModelTests` fetch a voice model's files from the address the client package gives, names with spaces in them included, and check that nothing outside it, and no hidden file, is served, and that a server without a model has nothing to fetch.
 
-`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Flamingo Engineer, the App Engineer in the shipped file once its comments are taken off, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
+`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Flamingo Engineer, the Team Lead and its recruiter, the App Engineer in the shipped file once its comments are taken off, adding an agent (after the last one, leaving the others and the comments as they are, and refusing one whose id or name is taken or whose fields are wrong, without touching the file), the `add-agent` command, `ALIFE_AGENTS_FILE` and the checkout's agents file, and a server with a cast of its own.
 
 One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It costs a little, so it only runs when asked:
 
