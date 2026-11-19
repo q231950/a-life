@@ -8,10 +8,11 @@ import UIKit
 typealias PlatformColor = UIColor
 #endif
 
-/// Builds the lot (floor tiles, a little house, some bushes, your character),
-/// turns taps on tiles into walks, shows one character per session on the
-/// server, with a little sheep for each helper it has sent off, and shows
-/// what the characters have built and planted.
+/// Builds the lot (floor tiles, the office in the middle, some bushes, your
+/// character), turns taps on tiles into walks, shows one character per
+/// session on the server, with a room of its own in the office and a little
+/// sheep for each helper it has sent off, and shows what the characters
+/// have built and planted.
 @MainActor
 final class World {
     let root = Entity()
@@ -20,7 +21,7 @@ final class World {
     /// The floor plan. Once the lot is built, it is put on `root` too, for
     /// the systems that walk things around on it.
     private var lot = LotComponent(grid: TileGrid(width: LotPlan.width, depth: LotPlan.depth), tileSize: 1)
-    /// The floor plan with only the house and the bushes on it, before
+    /// The floor plan with only the office and the bushes on it, before
     /// anything is built or planted.
     private var scenery = TileGrid(width: LotPlan.width, depth: LotPlan.depth)
     /// The buildings and beds on the lot, by the file each comes from.
@@ -32,6 +33,10 @@ final class World {
     /// that has flown off is gone from the lot, and is dropped from here at
     /// the next `show(_:selectedID:)`.
     private var sheep: [String: Entity] = [:]
+    /// The office, and the shirts of the characters whose rooms it has, by
+    /// slot, to build it again when they change.
+    private var office = Entity()
+    private var officeShirts: [Int: PlatformColor]?
 
     init() {
         character = Self.makeCharacter(shirt: PlatformColor(red: 0.25, green: 0.45, blue: 0.85, alpha: 1))
@@ -40,11 +45,12 @@ final class World {
             materials: [SimpleMaterial(color: PlatformColor(red: 1, green: 0.85, blue: 0.2, alpha: 1), isMetallic: false)]
         )
 
-        placeHouse()
+        placeOffice()
         placeBushes()
         placeFloor()
         scenery = lot.grid
         root.components.set(lot)
+        showOffice()
 
         // On the path beside the lawn.
         let start = Tile(x: LotPlan.lawn.x - 1, z: LotPlan.lawn.y + 1)
@@ -99,26 +105,22 @@ final class World {
 
     private struct AgentCharacter {
         let entity: Entity
-        /// Which desk and which spot on the lawn belong to this agent.
+        /// Which room in the office and which spot on the lawn belong to
+        /// this agent.
         let slot: Int
-        /// Its shirt's colour, which its sheep wear, too.
+        /// Its shirt's colour, which its room and its sheep have, too.
         let shirt: PlatformColor
         var name: String
-        var destination: Tile
         var isWaitingForYou = false
     }
 
-    /// The floor inside the house: where agents go while they work.
-    private static let desks = LotArea(
-        x: LotPlan.house.x + 1, y: LotPlan.house.y + 1, width: LotPlan.house.width - 2, depth: LotPlan.house.depth - 2
-    ).tiles.map { Tile(x: $0.x, z: $0.y) }
     /// The lawn in front of the door: where agents wait.
     private static let lawn = LotPlan.lawn.tiles.map { Tile(x: $0.x, z: $0.y) }
 
-    /// Makes the scene match the sessions: one character each, inside the
-    /// house while it works (or waits for you mid-task) and out on the lawn
-    /// otherwise, with a ring under the one you are talking to, and a sheep
-    /// for each helper it has out.
+    /// Makes the scene match the sessions: one character each, in its room
+    /// in the office while it works (or waits for you mid-task) and out on
+    /// the lawn otherwise, with a ring under the one you are talking to, and
+    /// a sheep in its room for each helper it has out.
     func show(_ residents: [Resident], selectedID: String?) {
         let current = Set(residents.map(\.id))
         for (id, gone) in agentCharacters where !current.contains(id) {
@@ -138,29 +140,38 @@ final class World {
             }
             shown.entity.findEntity(named: "Selection")?.isEnabled = resident.id == selectedID
 
-            let spots = resident.isAtWork ? Self.desks : Self.lawn
-            let destination = spots[shown.slot % spots.count]
-            if shown.destination != destination, walk(shown.entity, to: destination) {
-                shown.destination = destination
-            }
+            // `CommuteSystem` takes it to work and back.
+            shown.entity.components[CommuteComponent.self]?.isAtWork = resident.isAtWork
             agentCharacters[resident.id] = shown
         }
+        showOffice()
         showSheep(for: residents)
     }
 
-    /// Puts a sheep next to its agent for each helper that has just been sent
-    /// off, and sends each sheep whose helper has reported back home to its
-    /// agent. `SheepSystem` takes it from there.
+    /// Builds the office again if the characters with rooms in it, or their
+    /// shirts, have changed.
+    private func showOffice() {
+        let shirts = Dictionary(agentCharacters.values.map { ($0.slot, $0.shirt) }, uniquingKeysWith: { first, _ in first })
+        guard shirts != officeShirts else { return }
+        officeShirts = shirts
+        office.removeFromParent()
+        office = OfficeBuilding.make(rooms: shirts, on: lot)
+        root.addChild(office)
+    }
+
+    /// Puts a sheep in its agent's room for each helper that has just been
+    /// sent off, and pops each sheep whose helper has reported back.
+    /// `SheepSystem` takes it from there.
     private func showSheep(for residents: [Resident]) {
         sheep = sheep.filter { $0.value.parent != nil } // the ones that flew off
 
         var out: Set<String> = []
         for resident in residents {
             guard let agent = agentCharacters[resident.id] else { continue }
-            for (place, id) in resident.subagents.enumerated() {
+            for id in resident.subagents {
                 out.insert(id)
                 if sheep[id] == nil {
-                    sheep[id] = addSheep(beside: agent, place: place)
+                    sheep[id] = addSheep(beside: agent)
                 }
             }
         }
@@ -170,26 +181,17 @@ final class World {
         }
     }
 
-    /// A sheep popping up beside `agent`, on the side of the `place`th free
-    /// tile around it, so that it doesn't stand in a wall and two sent off
-    /// together don't stand in each other.
-    private func addSheep(beside agent: AgentCharacter, place: Int) -> Entity {
+    /// A sheep popping up in `agent`'s room, on the nearest spot round its
+    /// desk that none of the agent's other sheep stands on.
+    private func addSheep(beside agent: AgentCharacter) -> Entity {
+        let taken = Set(sheep.values.compactMap { $0.components[SheepComponent.self] }.filter { $0.agent === agent.entity }.map(\.place))
+        let place = (0...taken.count).first { !taken.contains($0) } ?? 0
+        let room = OfficePlan.room(forSlot: agent.slot)
+
         let entity = Self.makeSheep(scarf: agent.shirt)
-        let here = lot.tile(at: agent.entity.position)
-        let sides = [(x: 1, z: 0), (x: -1, z: 0), (x: 0, z: 1), (x: 0, z: -1)].filter {
-            lot.grid.isWalkable(Tile(x: here.x + $0.x, z: here.z + $0.z))
-        }
-        entity.position = agent.entity.position
-        if !sides.isEmpty {
-            let side = sides[place % sides.count]
-            let direction = SIMD3<Float>(Float(side.x), 0, Float(side.z))
-            entity.position += direction * 0.5
-            // Facing away from its agent, towards where it's off to.
-            entity.orientation = simd_quatf(angle: atan2(direction.x, direction.z), axis: [0, 1, 0])
-        }
+        entity.position = lot.position(of: OfficePlan.sheepSpot(in: room, place: place), height: room.floor)
         entity.scale = SIMD3(repeating: 0.01) // it pops up from nothing
-        entity.components.set(WalkComponent(speed: 1.6))
-        entity.components.set(SheepComponent(agent: agent.entity))
+        entity.components.set(SheepComponent(agent: agent.entity, spot: entity.position, place: place, scarf: agent.shirt))
         root.addChild(entity)
         return entity
     }
@@ -232,6 +234,13 @@ final class World {
         entity.name = resident.id
         entity.position = lot.position(of: home)
         entity.components.set(WalkComponent())
+        let room = OfficePlan.room(forSlot: slot)
+        let lift = OfficePlan.lift(forSlot: slot)
+        entity.components.set(CommuteComponent(
+            lawn: home,
+            lift: Tile(x: lift.x, z: lift.y),
+            desk: lot.position(of: room.desk, height: room.floor)
+        ))
         // Both are needed for a tap to land on the character itself.
         let shape = ShapeResource.generateBox(width: 0.5, height: 1.1, depth: 0.5).offsetBy(translation: [0, 0.55, 0])
         entity.components.set(CollisionComponent(shapes: [shape]))
@@ -249,7 +258,7 @@ final class World {
         entity.addChild(ring)
 
         root.addChild(entity)
-        return AgentCharacter(entity: entity, slot: slot, shirt: shirt, name: resident.name, destination: home)
+        return AgentCharacter(entity: entity, slot: slot, shirt: shirt, name: resident.name)
     }
 
     /// A "!" over the character's head while it waits for your answer.
@@ -411,11 +420,10 @@ final class World {
         root.addChild(earth)
     }
 
-    /// A 6×6 room in the middle of the lot with a two-tile doorway, so paths
-    /// visibly route around walls.
-    private func placeHouse() {
-        let mesh = MeshResource.generateBox(width: lot.tileSize, height: 0.7, depth: lot.tileSize)
-        let material = SimpleMaterial(color: PlatformColor(red: 0.95, green: 0.9, blue: 0.8, alpha: 1), roughness: 0.7, isMetallic: false)
+    /// Blocks the tiles along the office's walls on the floor plan, all but
+    /// its two-tile doorway, so paths visibly route around them. The office
+    /// itself is drawn by `showOffice()`, once the lot is built.
+    private func placeOffice() {
         let house = LotPlan.house
         let doorway = Set(LotPlan.doorway.map { Tile(x: $0.x, z: $0.y) })
 
@@ -423,9 +431,6 @@ final class World {
             let tile = Tile(x: spot.x, z: spot.y)
             guard !doorway.contains(tile) else { continue }
             lot.grid.block(tile)
-            let wall = ModelEntity(mesh: mesh, materials: [material])
-            wall.position = lot.position(of: tile) + [0, 0.35, 0]
-            root.addChild(wall)
         }
     }
 
