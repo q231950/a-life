@@ -15,6 +15,7 @@ extension Character {
     static var builder: Character { shipped("builder") }
     static var engineer: Character { shipped("engineer") }
     static var flamingoEngineer: Character { shipped("flamingo-engineer") }
+    static var teamLead: Character { shipped("team-lead") }
 
     private static func shipped(_ id: String) -> Character {
         guard let character = shippedCast.first(where: { $0.id == id }) else {

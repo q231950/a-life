@@ -116,7 +116,8 @@ struct Helper: Equatable, Sendable {
 /// `agents.yaml` next to this file, which the server ships with, or the file
 /// `ALIFE_AGENTS_FILE` names. The file is read once, when the server starts,
 /// and checked; anything wrong with it stops the server with a message that
-/// says where.
+/// says where. New agents can be added to it, as the Team Lead does, and
+/// join the lot when the server next starts.
 enum Cast {
     /// The agents file the server ships with. `Package.swift` copies it into
     /// the server's resources.
@@ -127,10 +128,21 @@ enum Cast {
         return file
     }
 
-    /// The agents file to read: the one `ALIFE_AGENTS_FILE` names, or the
-    /// shipped one if it isn't set.
+    /// The agents file in the a*life checkout the server was built from, the
+    /// one the shipped file is copied from, if it is still there.
+    static var checkoutFile: URL? {
+        guard let checkout = ClaudeCode.builtFrom else { return nil }
+        let file = checkout.appendingPathComponent("a-life-server/Sources/ALifeServer/agents.yaml")
+        return FileManager.default.fileExists(atPath: file.path) ? file : nil
+    }
+
+    /// The agents file to read: the one `ALIFE_AGENTS_FILE` names, or else
+    /// the one in the checkout the server was built from, so that an agent
+    /// added to it (by the Team Lead, say) joins the lot when the server
+    /// restarts, without building it again. The shipped copy if there's
+    /// neither.
     static func file(in environment: [String: String]) -> URL {
-        guard let path = environment["ALIFE_AGENTS_FILE"], !path.isEmpty else { return shippedFile }
+        guard let path = environment["ALIFE_AGENTS_FILE"], !path.isEmpty else { return checkoutFile ?? shippedFile }
         return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
     }
 
@@ -173,6 +185,124 @@ enum Cast {
     /// The permission modes Claude Code takes. `manual` is another name for
     /// `default`.
     static let permissionModes = ["default", "manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]
+
+    // MARK: Adding an agent
+
+    /// Adds the agent `entry` describes to the agents file at `file`, as
+    /// `adding(_:to:from:)` does, and says who it is. The file is left as it
+    /// was if the agent can't be added.
+    @discardableResult
+    static func add(_ entry: String, toFileAt file: URL) throws -> Character {
+        let yaml: String
+        do {
+            yaml = try String(contentsOf: file, encoding: .utf8)
+        } catch {
+            throw CastError("Couldn't read the agents file \(file.path): \(error.localizedDescription)")
+        }
+        let (text, added) = try adding(entry, to: yaml, from: file.path)
+        do {
+            try text.write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            throw CastError("Couldn't write the agents file \(file.path): \(error.localizedDescription)")
+        }
+        return added
+    }
+
+    /// The text of the agents file `yaml` with one more agent at the end of
+    /// its list: the one `entry` describes, its fields as an agent in the
+    /// file has them (with or without the `- ` in front). Everything already
+    /// in the file, its agents and its comments, stays as it is, word for
+    /// word, so a new agent never changes or takes the place of another.
+    ///
+    /// The new agent is checked as the server checks the file when it
+    /// starts, with the others: it needs an id and a name of its own. Throws,
+    /// saying what's wrong and where, if it can't be added; and if the file
+    /// is wrong already, since nothing could be added to it.
+    static func adding(_ entry: String, to yaml: String, from source: String) throws -> (text: String, added: Character) {
+        let cast = try decode(yaml, from: source)
+        let fields = try fields(of: entry)
+
+        let lines = yaml.components(separatedBy: "\n")
+        // As the file's agents are indented, such as "  - id: gardener".
+        let indent = lines.lazy
+            .compactMap { line -> String? in
+                let spaces = line.prefix { $0 == " " }
+                return line.dropFirst(spaces.count).hasPrefix("- ") ? String(spaces) : nil
+            }
+            .first ?? "  "
+        let item = fields.enumerated().map { index, line in
+            line.isEmpty ? "" : indent + (index == 0 ? "- " : "  ") + line
+        }
+
+        // After the last agent, before any comments at the end of the file,
+        // such as an example to take the #s off; or else at its very end.
+        var places: [Int] = []
+        if let last = lines.lastIndex(where: { line in
+            let text = line.trimmingCharacters(in: .whitespaces)
+            return !text.isEmpty && !text.hasPrefix("#")
+        }) {
+            places.append(last + 1)
+        }
+        let end = lines.last == "" ? lines.count - 1 : lines.count
+        if !places.contains(end) { places.append(end) }
+
+        var firstProblem: Error?
+        for place in places {
+            var candidate = Array(lines[..<place])
+            if place > 0, !candidate[place - 1].trimmingCharacters(in: .whitespaces).isEmpty { candidate.append("") }
+            candidate += item
+            candidate += lines[place...]
+            var text = candidate.joined(separator: "\n")
+            if !text.hasSuffix("\n") { text += "\n" }
+            do {
+                let after = try decode(text, from: source)
+                // Only if everyone else is just as they were.
+                if after.count == cast.count + 1, Array(after.dropLast()) == cast, let added = after.last {
+                    return (text, added)
+                }
+            } catch {
+                firstProblem = firstProblem ?? error
+            }
+        }
+        throw firstProblem ?? CastError(
+            "\(source): the new agent couldn't be added after the last one without changing the others. Add it to the file by hand."
+        )
+    }
+
+    /// The lines of a new agent's fields, without the indent or the `- `
+    /// they had, once checked to be one agent's fields.
+    private static func fields(of entry: String) throws -> [String] {
+        var lines = entry.replacingOccurrences(of: "\t", with: "    ").components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces).isEmpty ? "" : $0.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression) }
+        while lines.first == "" { lines.removeFirst() }
+        while lines.last == "" { lines.removeLast() }
+        guard !lines.isEmpty else {
+            throw CastError("The new agent is empty. Give its fields, starting with id:.")
+        }
+        /// Without the indent they all share.
+        func dedented(_ lines: [String]) -> [String] {
+            let margin = lines.filter { !$0.isEmpty }.map { $0.prefix { $0 == " " }.count }.min() ?? 0
+            return lines.map { $0.isEmpty ? "" : String($0.dropFirst(margin)) }
+        }
+        lines = dedented(lines)
+
+        let node: Node?
+        do {
+            node = try Yams.compose(yaml: lines.joined(separator: "\n"))
+        } catch {
+            throw CastError("The new agent isn't valid YAML: \(error)")
+        }
+        switch node {
+        case .mapping?:
+            return lines
+        case .sequence(let items)? where items.count == 1 && items.first?.mapping != nil && lines[0].hasPrefix("- "):
+            // A list item, "- id: painter", stands for its fields.
+            lines[0] = "  " + lines[0].dropFirst(2)
+            return dedented(lines)
+        default:
+            throw CastError("The new agent should be one agent's fields, starting with id:, as an agent in the file has them.")
+        }
+    }
 
     // MARK: Explaining what's wrong
 
@@ -259,6 +389,14 @@ private struct AgentsFile: Decodable {
                 throw FieldError(
                     [CodingKeys.agents, ListIndex(index), AgentEntry.CodingKeys.id],
                     "\"\(entry.character.id)\" is agents[\(first)]'s id too. Each agent needs an id of its own."
+                )
+            }
+            // Two characters called the same couldn't be told apart on the lot.
+            let name = entry.character.name.lowercased()
+            if let first = entries.firstIndex(where: { $0.character.name.lowercased() == name }), first < index {
+                throw FieldError(
+                    [CodingKeys.agents, ListIndex(index), AgentEntry.CodingKeys.name],
+                    "\"\(entry.character.name)\" is agents[\(first)]'s name too. Each agent needs a name of its own."
                 )
             }
         }

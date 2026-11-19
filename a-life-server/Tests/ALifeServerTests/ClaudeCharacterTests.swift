@@ -224,6 +224,40 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertEqual(transcript(state).last, "Engineer: The sheep jump before they fly off now, and the tests pass.")
     }
 
+    func testTheTeamLeadSendsItsRecruiterToAddAnAgent() async throws {
+        let (teamLead, hub, claudeCode) = await make(.teamLead)
+        try await teamLead.handleMessage("Add a Painter who paints the houses on the lot")
+
+        // On the lot, but asking before every change, with a recruiter that
+        // can't write files: it adds agents with the server's command.
+        let arguments = try XCTUnwrap(claudeCode.launches.first)
+        XCTAssertEqual(claudeCode.workspaces, [.lot])
+        XCTAssertEqual(value(after: "--permission-mode", in: arguments), "default")
+        let agents = try JSONValue.decode(Data(XCTUnwrap(value(after: "--agents", in: arguments)).utf8))
+        XCTAssertEqual(agents["recruiter"]?["tools"], ["Read", "Glob", "Grep", "Bash"])
+        XCTAssertNil(agents["construction-worker"])
+        XCTAssertTrue(try XCTUnwrap(value(after: "--append-system-prompt", in: arguments)).contains("`recruiter` agent"))
+
+        // The recruiter asks before it adds the agent.
+        let cli = try XCTUnwrap(claudeCode.clis.first)
+        cli.say(sendsOff("recruiter", to: "Add the Painter"))
+        cli.say(taskStarted("recruiter"))
+        var state = await until(hub, "the recruiter") { !$0.subagents.isEmpty }
+        XCTAssertEqual(state.subagents, [Subagent(id: "toolu_agent", task: "Add the Painter")])
+        cli.say(#"{"type":"control_request","request_id":"request-add","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"\"$ALIFE_SERVER_COMMAND\" add-agent"},"tool_use_id":"toolu_add","agent_id":"task-1"}}"#)
+        state = await until(hub, "the approval") { !$0.approvals.isEmpty }
+        XCTAssertEqual(state.approvals, [Approval(id: "request-add", toolName: "Bash", input: "recruiter: \"$ALIFE_SERVER_COMMAND\" add-agent", toolUseID: "toolu_add")])
+
+        try await teamLead.decide(approvalID: "request-add", allow: true)
+        cli.say(taskNotification("completed"))
+        cli.say(helperReport())
+        cli.say(says("The Painter is on the team, and joins the lot once you restart the server."))
+        cli.say(result(text: "The Painter is on the team, and joins the lot once you restart the server."))
+        state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
+        XCTAssertTrue(state.subagents.isEmpty)
+        XCTAssertEqual(transcript(state).last, "Team Lead: The Painter is on the team, and joins the lot once you restart the server.")
+    }
+
     func testDenyingTellsClaudeCodeNo() async throws {
         let (builder, hub, claudeCode) = await make(.builder)
         try await builder.handleMessage("Knock down the shed")
@@ -478,6 +512,20 @@ final class ClaudeCodeProcessTests: XCTestCase {
         let directory = try XCTUnwrap(said?["directory"]?.string)
         // On macOS, /var is a link to /private/var.
         XCTAssertEqual(URL(fileURLWithPath: directory).resolvingSymlinksInPath().path, lot.resolvingSymlinksInPath().path)
+    }
+
+    func testSessionsAreToldTheAgentsFileAndTheServersCommand() async throws {
+        // For the Team Lead's recruiter, to add an agent.
+        var claudeCode = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: try lot())
+        let script = #"printf '{"agents":"%s","server":"%s"}\n' "$ALIFE_AGENTS_FILE" "$ALIFE_SERVER_COMMAND""#
+        claudeCode.agentsFile = URL(fileURLWithPath: "/tmp/team/agents.yaml")
+        claudeCode.serverCommand = URL(fileURLWithPath: "/tmp/team/ALifeServer")
+        var said: JSONValue?
+        for await message in try claudeCode.launch(["-c", script], in: .lot).messages {
+            said = message
+        }
+        XCTAssertEqual(said?["agents"], "/tmp/team/agents.yaml")
+        XCTAssertEqual(said?["server"], "/tmp/team/ALifeServer")
     }
 
     func testCharactersWhoWorkOnALifeWorkInTheCheckout() async throws {
