@@ -46,6 +46,8 @@ public enum LotPlan {
     public static let depth = 64
     /// The most tiles a building or a bed can stretch along either side.
     public static let largestSide = 16
+    /// The most foals in one bed. A bed of foals has one on each tile.
+    public static let mostFoals = 6
 
     /// The whole lot.
     public static let bounds = LotArea(x: 0, y: 0, width: width, depth: depth)
@@ -106,6 +108,17 @@ public struct LotItem: Codable, Identifiable, Equatable, Sendable {
 
     /// The tiles it covers.
     public var area: LotArea { LotArea(x: x, y: y, width: width, depth: depth) }
+
+    /// Whether it is a bed of foals the Gardener put out, one on each tile,
+    /// rather than plants: its kind is a foal, a colt, a filly, a pony or a
+    /// baby horse. The foals play round their bed, so it isn't in anyone's way.
+    public var isFoals: Bool {
+        guard category == .plant else { return false }
+        let words = kind.lowercased().split { !$0.isLetter }
+        return words.contains { Self.foalWords.contains(String($0)) } || words.joined(separator: " ").contains("baby horse")
+    }
+
+    private static let foalWords: Set<String> = ["foal", "foals", "colt", "colts", "filly", "fillies", "pony", "ponies"]
 }
 
 /// Everything on the lot that the characters have built and planted.

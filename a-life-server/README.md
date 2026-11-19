@@ -234,7 +234,7 @@ The characters are listed in the [agents file](#the-agents-file). Each character
 | Character | Its helper | What the helper does | Asks you before |
 |---|---|---|---|
 | **Builder** | `construction-worker` | Builds buildings: reads `lot.md` for room, then writes `buildings/<name>.md` with its kind and where it stands at the top, so it appears on the lot, and its rooms and a floor plan; or edits one that's there. | every change (Claude Code's `default` permission mode) |
-| **Gardener** | `planter` | Plants plants: reads `lot.md` for room, then writes `garden/<bed>.md` with the kind of plant, its colour and where the bed is at the top, so it grows on the lot, and how many and how to look after them; or edits a bed that's there. | anything but changes to files on the lot (`acceptEdits`) |
+| **Gardener** | `planter` | Plants plants: reads `lot.md` for room, then writes `garden/<bed>.md` with the kind of plant, its colour and where the bed is at the top, so it grows on the lot, and how many and how to look after them; or edits a bed that's there. Puts out foals the same way. | anything but changes to files on the lot (`acceptEdits`) |
 | **Engineer** | `a-life-expert` | Changes a\*life itself, the app, `ALifeKit` and this server, in your a\*life checkout: knows its way around all of it, makes the change, keeps the tests and READMEs in step, and runs the tests. | every change and command (`default`) |
 | **Flamingo Engineer** | `flamingo-expert` | Changes Flamingo Chess, in its three repositories cloned side by side: `flamingo` (the iOS app), `flamingo-chess-light` (the Light Phone app) and `neoneon` (the server). Keeps a change that spans them in step, runs their tests. See [A character for another project](#a-character-for-another-project). | every change and command (`default`) |
 
@@ -396,7 +396,7 @@ A little trattoria by the house. …
 | `kind` | required | What it is, such as `restaurant`, `house`, `rose` or `oak`. The front ends draw the kinds they know, and anything else as a plain building or plant, so any kind will do. |
 | `x`, `y` | required | Its top left tile. |
 | `width`, `depth` | optional | How many tiles it covers along `x` and along `y`, each 1 to 16. A building is 3 by 3 and a plant one tile unless set. A bed has one plant on each tile. |
-| `color` | optional | For plants: a colour by name (`red`, `pink`, `white`, `yellow`, `orange`, `purple`, `blue` and a few more) or as `"#RRGGBB"`. A colour it doesn't know is left to the front end. |
+| `color` | optional | For plants: a colour by name (`red`, `pink`, `white`, `yellow`, `orange`, `purple`, `blue` and a few more, and horses' coats such as `chestnut`, `bay`, `grey` and `palomino` for foals) or as `"#RRGGBB"`. A colour it doesn't know is left to the front end. |
 | `name` | optional | What the front ends call it. The file's first `# ` heading unless set, or else its file name. |
 
 The kinds the app draws:
@@ -405,8 +405,9 @@ The kinds the app draws:
 |---|---|
 | Buildings | house, restaurant, cafe, shop, office, tower, school, library, barn, shed, church, hospital, and words like them (a bistro is a restaurant, a bookshop a shop). A barn (or a stable or a farm) comes with a pen of chickens and goats, a lunging ring and horses that gallop round the lot, so it wants room: about 13 by 5, with the row in front of it free. |
 | Plants | flowers (rose, tulip, daisy, sunflower, lavender, poppy, or any other flower), trees (oak, maple, birch, apple, cherry, palm, pine), bush, hedge, grass, and vegetables (carrot, lettuce, cabbage, tomato, pumpkin, potato, or any other vegetable) |
+| Foals | foal, and pony, colt, filly or baby horse: a foal on each tile of the bed, at most 6 to a bed (`LotPlan.mostFoals`), in its colour or a coat of its own. They graze, trot, frisk and lie down within a few tiles of their bed, and anyone can walk across their patch, but it still takes up its tiles. Only in `garden/`. |
 
-The server looks at `buildings/` and `garden/` every second. A file that runs off the lot, is on the house, is bigger than 16 tiles a side, or is missing its kind, `x` or `y`, stays off the lot. If two things would share a tile, the one that was there first (whose file changed longest ago) stays, and the other stays off. An empty file stands for nothing, so emptying one pulls the building down or digs the bed up. Files without the lines at the top, such as ones written before the lot could be built on, stay off it too, until a character adds them.
+The server looks at `buildings/` and `garden/` every second. A file that runs off the lot, is on the house, is bigger than 16 tiles a side, is a bed of more than 6 foals, or is missing its kind, `x` or `y`, stays off the lot. If two things would share a tile, the one that was there first (whose file changed longest ago) stays, and the other stays off. An empty file stands for nothing, so emptying one pulls the building down or digs the bed up. Files without the lines at the top, such as ones written before the lot could be built on, stay off it too, until a character adds them.
 
 After each look, the server writes `lot.md` in the lot: what stands where, what couldn't be put on the lot and why, and a map of every tile, with `.` for free ones. The construction worker and the planter read it to find room before they build or plant, and again afterwards to check that what they made is on the lot. Don't edit it: the server writes it again.
 
@@ -450,7 +451,7 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`. |
 | `routes.swift` | The HTTP API, including the event streams and the lot's, and the voice model's files. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
-| `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house and each other, and writes `lot.md`. |
+| `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many foals fit in a bed, and writes `lot.md`. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
 | `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
@@ -469,7 +470,7 @@ The tests start the server on a free local port with the dummy characters and dr
 
 `ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Gardener's planter, the Engineer sending its a\*life expert off in the a\*life checkout, denying, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
-`LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the planter being told where the house is, and a front end seeing a restaurant and an oak appear.
+`LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Gardener's foals and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the planter being told where the house is, the planter being told about foals, and a front end seeing a restaurant and an oak appear.
 
 `VoiceModelTests` fetch a voice model's files from the address the client package gives, names with spaces in them included, and check that nothing outside it, and no hidden file, is served, and that a server without a model has nothing to fetch.
 

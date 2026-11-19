@@ -124,6 +124,33 @@ final class LotTests: XCTestCase {
         ])
     }
 
+    func testTheGardenerCanPutOutFoals() throws {
+        // A foal on each tile, in a horse's colour.
+        try write("---\nkind: foal\ncolour: chestnut\nx: 10\ny: 40\nwidth: 3\ndepth: 2\n---\n# Foals", to: "garden/foals.md")
+        try write("---\nkind: Shetland pony\nx: 20\ny: 40\ncolor: grey\n---\n", to: "garden/pony.md")
+        // Too many foals for one bed.
+        try write("---\nkind: baby horses\nx: 2\ny: 50\nwidth: 4\ndepth: 2\n---\n", to: "garden/herd.md")
+        // A building called a pony stable isn't foals, whatever its size.
+        try write("---\nkind: pony stable\nx: 40\ny: 50\nwidth: 4\ndepth: 3\n---\n", to: "buildings/stable.md")
+
+        let (items, problems) = survey()
+        XCTAssertEqual(items, [
+            LotItem(id: "buildings/stable.md", category: .building, kind: "pony stable", name: "Stable", area: LotArea(x: 40, y: 50, width: 4, depth: 3)),
+            LotItem(id: "garden/foals.md", category: .plant, kind: "foal", name: "Foals", area: LotArea(x: 10, y: 40, width: 3, depth: 2), color: "#8C4A23"),
+            LotItem(id: "garden/pony.md", category: .plant, kind: "shetland pony", name: "Pony", area: LotArea(x: 20, y: 40), color: "#BDBAB4"),
+        ])
+        XCTAssertEqual(items.map(\.isFoals), [false, true, true])
+        XCTAssertEqual(problems, ["garden/herd.md: a bed of foals has a foal on each tile, and can have at most 6 of them, not 8 (4 by 2)."])
+    }
+
+    func testThePlanterIsToldItCanPutOutFoals() {
+        let prompt = Character.gardener.helper.prompt
+        XCTAssertTrue(prompt.contains("kind: foal"), prompt)
+        XCTAssertTrue(prompt.contains("at most \(LotPlan.mostFoals)"), prompt)
+        XCTAssertTrue(Character.gardener.helper.description.contains("foals"))
+        XCTAssertTrue(Character.gardener.role.contains("foals"))
+    }
+
     func testAnEmptyFileIsSomethingTakenAway() throws {
         try write(restaurant, to: "buildings/restaurant.md")
         try write("\n", to: "buildings/restaurant.md")
@@ -163,6 +190,7 @@ final class LotTests: XCTestCase {
         XCTAssertTrue(report.contains("- A: Luigi's, a restaurant, at x 38 to 42, y 22 to 25, from buildings/restaurant.md\n"), report)
         XCTAssertTrue(report.contains("- B: Rose bed, a rose, #D7263D, at x 20 to 22, y 30, from garden/roses.md\n"), report)
         XCTAssertTrue(report.contains("## Not on the lot\n\n- buildings/office.md: it isn't on the lot"), report)
+        XCTAssertTrue(report.contains("a bed of kind foal has a foal on each tile, at most 6"), report)
 
         let map = report.components(separatedBy: "```\n").last { $0.contains("#") }!.split(separator: "\n")
         XCTAssertEqual(map.count, 2 + 64) // two lines of column numbers, then a line per row
