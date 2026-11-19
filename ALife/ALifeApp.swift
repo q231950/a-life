@@ -17,6 +17,8 @@ struct ALifeApp: App {
         LotComponent.registerComponent()
         WalkComponent.registerComponent()
         SheepComponent.registerComponent()
+        CommuteComponent.registerComponent()
+        BurstComponent.registerComponent()
         SpinComponent.registerComponent()
         BlinkComponent.registerComponent()
         HorseComponent.registerComponent()
@@ -24,6 +26,8 @@ struct ALifeApp: App {
         PenAnimalComponent.registerComponent()
         WalkSystem.registerSystem()
         SheepSystem.registerSystem()
+        CommuteSystem.registerSystem()
+        BurstSystem.registerSystem()
         TurbineSystem.registerSystem()
         BarnSystem.registerSystem()
     }
