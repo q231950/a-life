@@ -286,11 +286,11 @@ A character can work on a project of your own instead of the lot or a\*life, so 
     ...
 ```
 
-or a git repository, which the server clones for it:
+or a git repository, at its ssh address (`git@...`, not `https://...`), which the server clones for it:
 
 ```yaml
     project:
-      repo: git@github.com:you/my-app.git   # or https://github.com/you/my-app.git
+      repo: git@github.com:you/my-app.git   # its ssh address, not https://
       branch: main                          # optional: the repository's default unless set
 ```
 
@@ -299,12 +299,12 @@ or several git repositories, such as an app and its server, which the server clo
 ```yaml
     project:
       repos:
-        - repo: https://github.com/you/my-app.git
+        - repo: git@github.com:you/my-app.git
         - repo: git@github.com:you/my-server.git
           branch: main                      # optional, for each repo
 ```
 
-A `path` is a full path, or one from `~`, and has to be there when the server starts; the server won't start if it isn't. A `repo` is cloned the first time the server starts with it, into `~/a-life-projects/<id>` (or under `ALIFE_PROJECTS_DIR`), at its `branch` if there is one. On later starts the server uses that clone as it is: it doesn't fetch, pull or switch branches, so whatever the character or you did in it is kept. `repos` are cloned the same way, each into `~/a-life-projects/<id>/<name>`, where its name is the last part of its address without `.git`, as `git clone` would name it (`my-app` and `my-server` above), and the character's session works in `~/a-life-projects/<id>`, with all of them; no two of a character's repos can have the same name. To start afresh, delete the clone and restart the server. If something that isn't a git checkout is in its place, the server leaves it alone. The clone runs `git` with your own credentials, without asking for a password, so a private repository needs an ssh key or a credential helper that works without you.
+A `path` is a full path, or one from `~`, and has to be there when the server starts; the server won't start if it isn't. A `repo` is cloned the first time the server starts with it, into `~/a-life-projects/<id>` (or under `ALIFE_PROJECTS_DIR`), at its `branch` if there is one. On later starts the server uses that clone as it is: it doesn't fetch, pull or switch branches, so whatever the character or you did in it is kept. `repos` are cloned the same way, each into `~/a-life-projects/<id>/<name>`, where its name is the last part of its address without `.git`, as `git clone` would name it (`my-app` and `my-server` above), and the character's session works in `~/a-life-projects/<id>`, with all of them; no two of a character's repos can have the same name. To start afresh, delete the clone and restart the server. If something that isn't a git checkout is in its place, the server leaves it alone. The clone runs `git` with your own ssh key, without asking for a password, so give each repository's ssh address, such as `git@github.com:you/my-app.git`, and have a key that works without you (in `ssh-agent` or without a passphrase). An `https://` address would ask for a password nobody is there to type in, so the clone would fail and the character would have nothing to work on; the server won't start with one, and says which ssh address to use instead.
 
 When it starts, the server says which directory each character works in, and whether it cloned a project just now or found it from before. If a clone fails, even one of a character's several, it says why and carries on: the others work as usual, and that character says why when you talk to it, until the clone works on a later start.
 
@@ -349,9 +349,9 @@ agents:
 | `works_in` | optional | Where the character's session works: `lot`, the directory the characters share, or `a-life`, your a\*life checkout, as the [Engineer](#the-engineer-and-the-alife-checkout) does. `lot` unless set, or unless it has a `project`. |
 | `project` | optional | Instead of `works_in`: a project of your own for the character to work on. See [A character for another project](#a-character-for-another-project). |
 | `project.path` | | A directory on your Mac, as a full path or from `~`. It has to be there. |
-| `project.repo` | | Instead of `path`: a git repository, such as `https://github.com/you/app.git` or `git@github.com:you/app.git` (`ssh://`, `git://` and `file://` addresses do too), which the server clones into `ALIFE_PROJECTS_DIR`. |
+| `project.repo` | | Instead of `path`: a git repository's ssh address, such as `git@github.com:you/app.git` (`ssh://`, `git://` and `file://` addresses do too, but not `https://` or `http://`, which can't be cloned without a password), which the server clones into `ALIFE_PROJECTS_DIR`. |
 | `project.branch` | optional | Only with `repo`: the branch to clone. The repository's default unless set. |
-| `project.repos` | | Instead of `path` or `repo`: a list of git repositories, each a `repo` with a `branch` if need be, which the server clones side by side into `ALIFE_PROJECTS_DIR/<id>`, for the character to work on them all. At least one, and no two with the same name. |
+| `project.repos` | | Instead of `path` or `repo`: a list of git repositories, each a `repo` at its ssh address with a `branch` if need be, which the server clones side by side into `ALIFE_PROJECTS_DIR/<id>`, for the character to work on them all. At least one, and no two with the same name. |
 | `changes_things` | optional | Only for the [dummy characters](#the-dummy-characters): `true` plays the script that asks for approval, like the Builder's. `false` unless set. |
 | `role` | required | Who the character is, added to Claude Code's own system prompt (`--append-system-prompt`). |
 | `helper.name` | required | The subagent's name, which the character uses to send it off: lowercase letters, digits and hyphens. |
@@ -367,6 +367,7 @@ The server checks the whole file when it starts and won't start if anything is w
 agents.yaml: agents[2].color should be a colour like "#8050C8", not "purple".
 agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, project, changes_things, role and helper.
 agents.yaml: agents[3].project.path /Users/you/Development/my-app isn't a directory on this machine. A project's path has to be there already; for one that isn't, give its repo instead.
+agents.yaml: agents[3].project.repos[0].repo "https://github.com/you/my-app.git" is an https address, which the server can't clone: it clones without asking for a password. Use the repository's ssh address instead, such as git@github.com:you/my-app.git.
 agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an id of its own.
 ```
 
@@ -474,7 +475,7 @@ The tests start the server on a free local port with the dummy characters and dr
 
 `VoiceModelTests` fetch a voice model's files from the address the client package gives, names with spaces in them included, and check that nothing outside it, and no hidden file, is served, and that a server without a model has nothing to fetch.
 
-`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, the Flamingo Engineer, the App Engineer in the shipped file once its comments are taken off, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
+`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Flamingo Engineer, the App Engineer in the shipped file once its comments are taken off, `ALIFE_AGENTS_FILE`, and a server with a cast of its own.
 
 One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It costs a little, so it only runs when asked:
 
