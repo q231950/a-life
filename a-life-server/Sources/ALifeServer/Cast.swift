@@ -69,7 +69,7 @@ struct Project: Equatable, Sendable {
         var branch: String? = nil
 
         /// The directory it is cloned into, named after the repository, such
-        /// as `app` for `https://github.com/you/app.git`.
+        /// as `app` for `git@github.com:you/app.git`.
         var name: String { Project.cloneName(of: address) ?? address }
     }
 
@@ -410,14 +410,36 @@ private struct ProjectEntry: Decodable {
         }
     }
 
-    /// Refuses `address` unless it is one `git clone` takes.
+    /// Refuses `address` unless it is one `git clone` takes without asking
+    /// for a password. The server clones with the person's own credentials
+    /// and nobody to type them in, so an https address, which git asks for
+    /// a password for, fails when the server starts: it has to be the
+    /// repository's ssh address instead.
     static func checkAddress(_ address: String, at codingPath: [any CodingKey]) throws {
         guard isGitAddress(address) else {
             throw FieldError(
                 codingPath,
-                "\"\(address)\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+                "\"\(address)\" isn't a git repository's address. It can be like git@github.com:you/app.git, or start with ssh://, git:// or file://."
             )
         }
+        if let ssh = sshAddress(for: address) {
+            throw FieldError(
+                codingPath,
+                "\"\(address)\" is an https address, which the server can't clone: it clones without asking for a password. Use the repository's ssh address instead, such as \(ssh)."
+            )
+        }
+    }
+
+    /// The ssh address, such as `git@github.com:you/app.git`, that stands
+    /// for `address` if it is an http or https one, or `nil` if it isn't.
+    static func sshAddress(for address: String) -> String? {
+        guard let scheme = ["https://", "http://"].first(where: { address.lowercased().hasPrefix($0) }) else { return nil }
+        let rest = address.dropFirst(scheme.count)
+        guard let slash = rest.firstIndex(of: "/") else { return "git@\(rest):you/app.git" }
+        var host = rest[..<slash]
+        if let at = host.lastIndex(of: "@") { host = host[host.index(after: at)...] }
+        let path = rest[rest.index(after: slash)...]
+        return "git@\(host):\(path.isEmpty ? "you/app.git" : path)"
     }
 
     /// Refuses `branch` unless it can be a branch's name.
@@ -477,7 +499,7 @@ private struct RepoEntry: Decodable {
         let at = container.codingPath + [CodingKeys.repo]
         try ProjectEntry.checkAddress(repo, at: at)
         guard Project.cloneName(of: repo) != nil else {
-            throw FieldError(at, "\"\(repo)\" doesn't end in a name to clone it as, such as app in https://github.com/you/app.git.")
+            throw FieldError(at, "\"\(repo)\" doesn't end in a name to clone it as, such as app in git@github.com:you/app.git.")
         }
         let branch = try container.optional(String.self, .branch)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let branch {

@@ -22,16 +22,20 @@
 #                    session to work on, with one of:
 #     path           A directory on this machine, as a full path or from ~. It
 #                    has to be there when the server starts.
-#     repo           A git repository, such as https://github.com/you/app.git
-#                    or git@github.com:you/app.git. The server clones it once,
+#     repo           A git repository's ssh address, such as
+#                    git@github.com:you/app.git. The server clones it once,
 #                    into ALIFE_PROJECTS_DIR (~/a-life-projects unless set)
 #                    under the agent's id, and works in that clone as it is
-#                    on later starts.
+#                    on later starts. It clones with your own ssh key and
+#                    nobody to type a password in, so an https address, such
+#                    as https://github.com/you/app.git, won't clone and the
+#                    server won't start with one: use git@ (or ssh://, or
+#                    file:// for one on this machine).
 #     branch         Optional, only with repo. The branch to clone. Unless set:
 #                    the repository's default.
 #     repos          Instead of path or repo: several git repositories, such as
-#                    an app and its server, each a repo with a branch if need
-#                    be. The server clones each once, side by side, into
+#                    an app and its server, each a repo, at its git@ address,
+#                    with a branch if need be. The server clones each once, side by side, into
 #                    ALIFE_PROJECTS_DIR/<id>/<name>, where name is the last
 #                    part of its address without .git, and the session works
 #                    in ALIFE_PROJECTS_DIR/<id>, with all of them.
@@ -223,9 +227,9 @@ agents:
     permission_mode: default
     project:
       repos:
-        - repo: https://github.com/q231950/flamingo.git
-        - repo: https://github.com/q231950/flamingo-chess-light.git
-        - repo: https://github.com/q231950/neoneon.git
+        - repo: git@github.com:q231950/flamingo.git
+        - repo: git@github.com:q231950/flamingo-chess-light.git
+        - repo: git@github.com:q231950/neoneon.git
     changes_things: true
     role: |
       You are the Flamingo Engineer, a character in a*life, a little life sim. The Builder and the Gardener work on the lot, and the Engineer on a*life itself. You don't: you look after Flamingo Chess, a project of the person's, and fix it, add to it and keep its tests passing, as they ask. Your working directory holds its three checkouts side by side: flamingo, the iOS app, flamingo-chess-light, the Light Phone app, and neoneon, the server they both talk to.
@@ -263,7 +267,8 @@ agents:
   #   permission_mode: default
   #   project:
   #     path: ~/Development/my-app
-  #     # or, to have the server clone it into ~/a-life-projects/app-engineer:
+  #     # or, to have the server clone it into ~/a-life-projects/app-engineer,
+  #     # its ssh address (git@..., not https://..., which won't clone):
   #     # repo: git@github.com:you/my-app.git
   #     # branch: main
   #   changes_things: true

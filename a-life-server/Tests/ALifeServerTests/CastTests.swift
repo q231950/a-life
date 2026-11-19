@@ -47,9 +47,9 @@ final class CastTests: XCTestCase {
         // The Engineer works on a*life itself, in its checkout, and the
         // Flamingo Engineer on the three repositories of Flamingo Chess.
         let flamingoChess = Project(id: "flamingo-engineer", source: .repositories([
-            Project.Repository(address: "https://github.com/q231950/flamingo.git"),
-            Project.Repository(address: "https://github.com/q231950/flamingo-chess-light.git"),
-            Project.Repository(address: "https://github.com/q231950/neoneon.git"),
+            Project.Repository(address: "git@github.com:q231950/flamingo.git"),
+            Project.Repository(address: "git@github.com:q231950/flamingo-chess-light.git"),
+            Project.Repository(address: "git@github.com:q231950/neoneon.git"),
         ]))
         XCTAssertEqual(cast.map(\.workspace), [.lot, .lot, .aLife, .project(flamingoChess)])
         XCTAssertEqual(cast.map(\.changesThings), [false, true, true, true])
@@ -255,7 +255,7 @@ final class CastTests: XCTestCase {
 
     func testAProjectCanBeAGitRepositoryWithABranch() throws {
         let repositories: [(project: String, source: Project.Source)] = [
-            ("{repo: https://github.com/someone/app.git}", .repository("https://github.com/someone/app.git", branch: nil)),
+            ("{repo: \"git@gitlab.com:someone/app\"}", .repository("git@gitlab.com:someone/app", branch: nil)),
             ("{repo: \"git@github.com:someone/app.git\", branch: develop}", .repository("git@github.com:someone/app.git", branch: "develop")),
             ("{repo: \"ssh://git@example.com/app.git\"}", .repository("ssh://git@example.com/app.git", branch: nil)),
             ("{repo: \"file:///tmp/app.git\", branch: release/1.0}", .repository("file:///tmp/app.git", branch: "release/1.0")),
@@ -270,14 +270,14 @@ final class CastTests: XCTestCase {
         let yaml = painter(onProject: """
 
               repos:
-                - repo: https://github.com/someone/app.git
+                - repo: git@github.com:someone/app.git
                 - repo: "git@github.com:someone/app-server.git"
                   branch: develop
                 - {repo: "file:///tmp/tools/"}
         """)
         let character = try XCTUnwrap(Cast.decode(yaml, from: "agents.yaml").first)
         let repositories = [
-            Project.Repository(address: "https://github.com/someone/app.git"),
+            Project.Repository(address: "git@github.com:someone/app.git"),
             Project.Repository(address: "git@github.com:someone/app-server.git", branch: "develop"),
             Project.Repository(address: "file:///tmp/tools/"),
         ]
@@ -327,14 +327,14 @@ final class CastTests: XCTestCase {
             ),
             (
                 painter(onProject: "{repo: github.com/someone/app}"),
-                "agents.yaml: agents[0].project.repo \"github.com/someone/app\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+                "agents.yaml: agents[0].project.repo \"github.com/someone/app\" isn't a git repository's address. It can be like git@github.com:you/app.git, or start with ssh://, git:// or file://."
             ),
             (
                 painter(onProject: "{repo: \"--upload-pack=touch /tmp/x\"}"),
-                "agents.yaml: agents[0].project.repo \"--upload-pack=touch /tmp/x\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+                "agents.yaml: agents[0].project.repo \"--upload-pack=touch /tmp/x\" isn't a git repository's address. It can be like git@github.com:you/app.git, or start with ssh://, git:// or file://."
             ),
             (
-                painter(onProject: "{repo: \"https://github.com/someone/app.git\", branch: \"-x\"}"),
+                painter(onProject: "{repo: \"git@github.com:someone/app.git\", branch: \"-x\"}"),
                 "agents.yaml: agents[0].project.branch \"-x\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
             ),
             (
@@ -342,7 +342,7 @@ final class CastTests: XCTestCase {
                 "agents.yaml: agents[0].project.branch is only for a repo. A project's path is used as it is, at whatever branch it is on."
             ),
             (
-                painter(onProject: "{path: /tmp, repo: \"https://github.com/someone/app.git\"}"),
+                painter(onProject: "{path: /tmp, repo: \"git@github.com:someone/app.git\"}"),
                 "agents.yaml: agents[0].project.repo can't go with path. A project is either a directory on this machine or a git repository to clone, so leave one of them out."
             ),
             (
@@ -350,7 +350,7 @@ final class CastTests: XCTestCase {
                 "agents.yaml: agents[0].project needs a path, a directory on this machine, a repo, a git repository for the server to clone, or repos, several of them."
             ),
             (
-                painter(onProject: "{url: \"https://github.com/someone/app.git\"}"),
+                painter(onProject: "{url: \"git@github.com:someone/app.git\"}"),
                 "agents.yaml: agents[0].project.url isn't a field of a project. The fields are path, repo, repos and branch."
             ),
             (
@@ -362,35 +362,35 @@ final class CastTests: XCTestCase {
                 "agents.yaml: agents[0].project.repos is empty. List at least one repo for the server to clone."
             ),
             (
-                painter(onProject: "{repos: https://github.com/someone/app.git}"),
+                painter(onProject: "{repos: \"git@github.com:someone/app.git\"}"),
                 "agents.yaml: agents[0].project.repos should be a list."
             ),
             (
-                painter(onProject: "{path: /tmp, repos: [{repo: \"https://github.com/someone/app.git\"}]}"),
+                painter(onProject: "{path: /tmp, repos: [{repo: \"git@github.com:someone/app.git\"}]}"),
                 "agents.yaml: agents[0].project.repos can't go with path. A project is a directory on this machine, a git repository to clone, or several to clone side by side, so give only one of them."
             ),
             (
-                painter(onProject: "{repo: \"https://github.com/someone/app.git\", repos: [{repo: \"https://github.com/someone/server.git\"}]}"),
+                painter(onProject: "{repo: \"git@github.com:someone/app.git\", repos: [{repo: \"git@github.com:someone/server.git\"}]}"),
                 "agents.yaml: agents[0].project.repos can't go with repo. A project is a directory on this machine, a git repository to clone, or several to clone side by side, so give only one of them."
             ),
             (
-                painter(onProject: "{branch: main, repos: [{repo: \"https://github.com/someone/app.git\"}]}"),
+                painter(onProject: "{branch: main, repos: [{repo: \"git@github.com:someone/app.git\"}]}"),
                 "agents.yaml: agents[0].project.branch goes with each of the repos it is for, not with the project."
             ),
             (
-                painter(onProject: "{repos: [{repo: \"https://github.com/someone/app.git\"}, {repo: github.com/someone/server}]}"),
-                "agents.yaml: agents[0].project.repos[1].repo \"github.com/someone/server\" isn't a git repository's address. It can be like https://github.com/you/app.git or git@github.com:you/app.git, or start with ssh://, git:// or file://."
+                painter(onProject: "{repos: [{repo: \"git@github.com:someone/app.git\"}, {repo: github.com/someone/server}]}"),
+                "agents.yaml: agents[0].project.repos[1].repo \"github.com/someone/server\" isn't a git repository's address. It can be like git@github.com:you/app.git, or start with ssh://, git:// or file://."
             ),
             (
-                painter(onProject: "{repos: [{repo: \"https://github.com/someone/app.git\", branch: \"-x\"}]}"),
+                painter(onProject: "{repos: [{repo: \"git@github.com:someone/app.git\", branch: \"-x\"}]}"),
                 "agents.yaml: agents[0].project.repos[0].branch \"-x\" won't do. A branch's name has no spaces and doesn't start with a hyphen, such as main."
             ),
             (
-                painter(onProject: "{repos: [{repo: \"https://github.com/someone/.git\"}]}"),
-                "agents.yaml: agents[0].project.repos[0].repo \"https://github.com/someone/.git\" doesn't end in a name to clone it as, such as app in https://github.com/you/app.git."
+                painter(onProject: "{repos: [{repo: \"git@github.com:someone/.git\"}]}"),
+                "agents.yaml: agents[0].project.repos[0].repo \"git@github.com:someone/.git\" doesn't end in a name to clone it as, such as app in git@github.com:you/app.git."
             ),
             (
-                painter(onProject: "{repos: [{repo: \"https://github.com/someone/app.git\"}, {repo: \"git@gitlab.com:else/app\"}]}"),
+                painter(onProject: "{repos: [{repo: \"git@github.com:someone/app.git\"}, {repo: \"git@gitlab.com:else/app\"}]}"),
                 "agents.yaml: agents[0].project.repos[1].repo would be cloned into app, as repos[0] is. Each repo needs a directory of its own, so leave one of them out."
             ),
             (
@@ -398,12 +398,32 @@ final class CastTests: XCTestCase {
                 "agents.yaml: agents[0].project.repos[0].repo is missing."
             ),
             (
-                painter(onProject: "{repos: [{url: \"https://github.com/someone/app.git\"}]}"),
+                painter(onProject: "{repos: [{url: \"git@github.com:someone/app.git\"}]}"),
                 "agents.yaml: agents[0].project.repos[0].url isn't a field of a repo. The fields are repo and branch."
             ),
             (
                 amended(replacing: "works_in: a-life", with: "works_in: a-life\n    project: {path: /tmp}"),
                 "agents.yaml: agents[0].project can't go with works_in. A character works on the lot, on a*life or on a project of its own, so leave one of them out."
+            ),
+        ]
+        for mistake in mistakes {
+            XCTAssertThrowsError(try Cast.decode(mistake.file, from: "agents.yaml"), mistake.error) { error in
+                XCTAssertEqual("\(error)", mistake.error)
+            }
+        }
+    }
+
+    func testHttpsAddressesAreRefusedPointingToTheirSshAddress() {
+        // The server clones without asking for a password, so an https
+        // clone would fail when it starts.
+        let mistakes: [(file: String, error: String)] = [
+            (
+                painter(onProject: "{repo: \"https://github.com/someone/app.git\"}"),
+                "agents.yaml: agents[0].project.repo \"https://github.com/someone/app.git\" is an https address, which the server can't clone: it clones without asking for a password. Use the repository's ssh address instead, such as git@github.com:someone/app.git."
+            ),
+            (
+                painter(onProject: "{repos: [{repo: \"git@github.com:someone/app.git\"}, {repo: \"http://me@gitlab.example.com/else/server\"}]}"),
+                "agents.yaml: agents[0].project.repos[1].repo \"http://me@gitlab.example.com/else/server\" is an https address, which the server can't clone: it clones without asking for a password. Use the repository's ssh address instead, such as git@gitlab.example.com:else/server."
             ),
         ]
         for mistake in mistakes {
