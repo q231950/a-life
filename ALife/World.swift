@@ -194,6 +194,12 @@ final class World {
         return entity
     }
 
+    /// Each character's shirt colour, by session, so the panel can show
+    /// them in the same colours as the lot.
+    var shirts: [String: PlatformColor] {
+        agentCharacters.mapValues(\.shirt)
+    }
+
     /// The sessions whose characters stand close enough to yours to be
     /// heard.
     func residentsInEarshot() -> Set<String> {
@@ -221,14 +227,7 @@ final class World {
         let slot = (0...taken.count).first { !taken.contains($0) } ?? 0
         let home = Self.lawn[slot % Self.lawn.count]
 
-        let shirts: [PlatformColor] = [
-            PlatformColor(red: 0.85, green: 0.35, blue: 0.3, alpha: 1),
-            PlatformColor(red: 0.95, green: 0.65, blue: 0.2, alpha: 1),
-            PlatformColor(red: 0.3, green: 0.7, blue: 0.65, alpha: 1),
-            PlatformColor(red: 0.8, green: 0.45, blue: 0.75, alpha: 1),
-            PlatformColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1),
-        ]
-        let shirt = resident.color.flatMap { PlatformColor(hex: $0) } ?? shirts[slot % shirts.count]
+        let shirt = PlatformColor.shirt(hex: resident.color, slot: slot)
         let entity = Self.makeCharacter(shirt: shirt)
         entity.name = resident.id
         entity.position = lot.position(of: home)
@@ -514,5 +513,23 @@ final class World {
         sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 80, depthBias: 2)
         sun.look(at: .zero, from: [6, 10, 4], relativeTo: nil)
         return sun
+    }
+}
+
+extension PlatformColor {
+    /// The shirts for characters the server gives no colour, by slot.
+    private static let spareShirts: [PlatformColor] = [
+        PlatformColor(red: 0.85, green: 0.35, blue: 0.3, alpha: 1),
+        PlatformColor(red: 0.95, green: 0.65, blue: 0.2, alpha: 1),
+        PlatformColor(red: 0.3, green: 0.7, blue: 0.65, alpha: 1),
+        PlatformColor(red: 0.8, green: 0.45, blue: 0.75, alpha: 1),
+        PlatformColor(red: 0.5, green: 0.5, blue: 0.55, alpha: 1),
+    ]
+
+    /// A character's shirt: the colour the server gives it as `#RRGGBB`, or
+    /// else a spare one for the character's slot. The lot and the panel both
+    /// pick it here, so a character looks the same in both.
+    static func shirt(hex: String?, slot: Int) -> PlatformColor {
+        hex.flatMap { PlatformColor(hex: $0) } ?? spareShirts[slot % spareShirts.count]
     }
 }

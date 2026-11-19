@@ -14,6 +14,8 @@ struct WorldView: View {
     /// The character you are talking to. `nil` means the first one.
     @State private var selectedID: String?
     @State private var showsSettings = false
+    /// Each character's shirt on the lot, for the panel to show them in.
+    @State private var shirts: [String: PlatformColor] = [:]
     #if os(macOS)
     @State private var scrollMonitor: Any?
     #endif
@@ -25,6 +27,7 @@ struct WorldView: View {
             world.show(residents, selectedID: selected?.id)
             content.add(world.root)
             self.world = world
+            shirts = world.shirts
         }
         .ignoresSafeArea()
         .gesture(tap)
@@ -32,6 +35,7 @@ struct WorldView: View {
         .simultaneousGesture(zoom)
         .onChange(of: residents) { _, residents in
             world?.show(residents, selectedID: selected?.id)
+            shirts = world?.shirts ?? [:]
         }
         .onChange(of: selected?.id) { _, id in
             world?.show(residents, selectedID: id)
@@ -57,6 +61,7 @@ struct WorldView: View {
         .overlay(alignment: .bottom) {
             VStack(spacing: 8) {
                 AgentPanel(selectedID: $selectedID)
+                    .environment(\.shirts, shirts)
                 Text(hint)
                     .font(.footnote)
                     .padding(.horizontal, 12)
