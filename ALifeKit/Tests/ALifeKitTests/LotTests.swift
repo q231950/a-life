@@ -57,4 +57,19 @@ final class LotTests: XCTestCase {
         XCTAssertEqual(item.category, .unknown)
         XCTAssertNil(item.color)
     }
+
+    func testFoalsAreBedsOfFoalsPoniesAndBabyHorsesInTheGarden() {
+        func item(_ kind: String, _ category: LotItem.Category = .plant) -> LotItem {
+            LotItem(id: "garden/x.md", category: category, kind: kind, name: "X", area: LotArea(x: 1, y: 1))
+        }
+        for kind in ["foal", "foals", "Shetland pony", "colt", "filly", "baby horses", "baby-horse"] {
+            XCTAssertTrue(item(kind).isFoals, kind)
+        }
+        for kind in ["rose", "horse chestnut", "foaling", "paddock"] {
+            XCTAssertFalse(item(kind).isFoals, kind)
+        }
+        // Foals live in the garden, not in a building.
+        XCTAssertFalse(item("foal", .building).isFoals)
+        XCTAssertEqual(LotPlan.mostFoals, 6)
+    }
 }

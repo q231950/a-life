@@ -1,3 +1,4 @@
+import ALifeClient
 import Foundation
 import RealityKit
 
@@ -62,17 +63,59 @@ struct HorseComponent: Component {
     /// How far round the ring it has gone, and how far it is going, in radians.
     fileprivate var lunged: Float = 0
     fileprivate var lungeLength: Float = 0
-    /// Where it is in its stride, in radians, and how much it is moving,
-    /// from 0 standing to 1 at a gallop.
-    fileprivate var stride: Float = .random(in: 0..<(2 * .pi))
-    fileprivate var motion: Float = 0
-    /// How far its head is lowered, in radians.
-    fileprivate var neck: Float = 0
+    fileprivate var stride = Stride()
 
     init(feedTile: Tile, ring: Ring?) {
         self.feedTile = feedTile
         self.ring = ring
     }
+}
+
+/// One of the foals the Gardener put out, a child of its bed, so it goes
+/// when the bed does, and everything here is in the bed's space.
+///
+/// It stays near its bed: it grazes a while, trots or dashes off to a spot
+/// a few tiles away, frisks now and then with a buck and a kick, and lies
+/// down for a rest.
+struct FoalComponent: Component {
+    enum Phase {
+        /// Standing, head down, nibbling at the grass.
+        case grazing
+        /// Off to somewhere near the bed, at a trot or a dash.
+        case trotting
+        /// Bucking and kicking up its heels on the spot.
+        case frisking
+        /// Lying down.
+        case resting
+    }
+
+    /// The bed's tiles on the lot, which it never strays far from.
+    let home: LotArea
+
+    fileprivate(set) var phase = Phase.grazing
+    /// How long it has been in its current phase, in seconds.
+    fileprivate var elapsed: Float = 0
+    /// How long to stay in this phase, in seconds, if it doesn't end by
+    /// itself. Short to start with, so the foals get going soon.
+    fileprivate var duration: Float = .random(in: 0.5...4)
+    /// How far it is lying down, from 0 standing to 1 lying.
+    fileprivate var lying: Float = 0
+    fileprivate var stride = Stride()
+
+    init(home: LotArea) {
+        self.home = home
+    }
+}
+
+/// Where a horse or a foal is in its stride, which `BarnSystem` keeps from
+/// one frame to the next to move its legs, body and neck smoothly.
+struct Stride {
+    /// Where it is in its stride, in radians.
+    var phase: Float = .random(in: 0..<(2 * .pi))
+    /// How much it is moving, from 0 standing to 1 at full tilt.
+    var motion: Float = 0
+    /// How far its head is lowered, in radians.
+    var neck: Float = 0
 }
 
 /// A chicken or a goat in a barn's pen, which potters about inside it.
@@ -105,12 +148,14 @@ struct PenAnimalComponent: Component {
     }
 }
 
-/// Takes every horse through its phases (see `HorseComponent`), moves its
-/// legs, body and neck as it goes, and lets the chickens and goats potter
-/// about their pens. The horses' walking across the lot is left to
-/// `WalkSystem`, along routes that go round whatever stands on the lot.
+/// Takes every horse and foal through its phases (see `HorseComponent` and
+/// `FoalComponent`), moves its legs, body and neck as it goes, and lets the
+/// chickens and goats potter about their pens. The horses' and foals'
+/// walking across the lot is left to `WalkSystem`, along routes that go
+/// round whatever stands on the lot.
 struct BarnSystem: System {
     private static let horses = EntityQuery(where: .has(HorseComponent.self))
+    private static let foals = EntityQuery(where: .has(FoalComponent.self))
     private static let penAnimals = EntityQuery(where: .has(PenAnimalComponent.self))
 
     /// How fast a horse goes, in metres per second.
@@ -122,6 +167,13 @@ struct BarnSystem: System {
     private static let gallopReach = 6...18
     /// How likely a horse is to go into the ring after feeding, if the ring is free.
     private static let lungeChance = 0.35
+    /// How fast a foal goes, in metres per second.
+    private static let foalTrotSpeed: Float = 1.5
+    private static let foalDashSpeed: Float = 3
+    /// How far from its bed a foal goes, in tiles.
+    private static let foalReach = 4
+    /// How long a foal frisks for, in seconds.
+    private static let friskTime: Float = 1.2
 
     init(scene: RealityKit.Scene) {}
 
@@ -132,7 +184,7 @@ struct BarnSystem: System {
             guard var state = horse.components[HorseComponent.self],
                   let barn = horse.parent,
                   let lot = barn.parent?.components[LotComponent.self] else { continue }
-            let yard = Yard(lot: lot, barn: barn.position)
+            let yard = Yard(lot: lot, origin: barn.position)
 
             state.elapsed += deltaTime
             let phase = state.phase
@@ -165,8 +217,18 @@ struct BarnSystem: System {
             if state.phase != phase {
                 state.elapsed = 0
             }
-            animate(horse, &state, deltaTime: deltaTime)
+            let speed = state.phase == .lunging ? Self.lungeSpeed : Self.speed(of: horse)
+            let neck: Float = state.phase == .feeding ? 1.25 + sin(state.elapsed * 2.5) * 0.08 : state.stride.motion * 0.35
+            animate(horse, &state.stride, speed: speed, topSpeed: Self.gallopSpeed, neck: neck, deltaTime: deltaTime)
             horse.components[HorseComponent.self] = state
+        }
+
+        for foal in context.entities(matching: Self.foals, updatingSystemWhen: .rendering) {
+            guard var state = foal.components[FoalComponent.self],
+                  let bed = foal.parent,
+                  let lot = bed.parent?.components[LotComponent.self] else { continue }
+            play(foal, &state, in: Yard(lot: lot, origin: bed.position), deltaTime: deltaTime)
+            foal.components[FoalComponent.self] = state
         }
 
         for animal in context.entities(matching: Self.penAnimals, updatingSystemWhen: .rendering) {
@@ -264,42 +326,121 @@ struct BarnSystem: System {
         } ?? false
     }
 
-    /// Swings its legs, bobs its body and rocks it as it runs, faster the
-    /// faster it goes, and lowers its head to feed.
-    private func animate(_ horse: Entity, _ state: inout HorseComponent, deltaTime: Float) {
-        let speed: Float
-        if state.phase == .lunging {
-            speed = Self.lungeSpeed
-        } else if let walk = horse.components[WalkComponent.self], !walk.waypoints.isEmpty {
-            speed = walk.speed
-        } else {
-            speed = 0
+    // MARK: Foals
+
+    /// Takes a foal through its phases: grazing, trotting off, frisking and
+    /// resting, then on to whatever it fancies next.
+    private func play(_ foal: Entity, _ state: inout FoalComponent, in yard: Yard, deltaTime: Float) {
+        state.elapsed += deltaTime
+        switch state.phase {
+        case .grazing, .resting:
+            if state.elapsed >= state.duration { startPlaying(foal, &state, in: yard) }
+        case .trotting:
+            if Self.hasArrived(foal) { startPlaying(foal, &state, in: yard) }
+        case .frisking:
+            if state.elapsed >= Self.friskTime { startPlaying(foal, &state, in: yard) }
         }
+
+        state.lying += ((state.phase == .resting ? 1 : 0) - state.lying) * min(1, deltaTime * 2)
+        // Two bucks, one after the other.
+        let buck = state.phase == .frisking ? max(0, sin(state.elapsed / Self.friskTime * 4 * .pi)) : 0
+        let neck: Float
+        switch state.phase {
+        case .grazing: neck = 1.5 + sin(state.elapsed * 3) * 0.1
+        case .resting: neck = 0.1
+        case .trotting, .frisking: neck = state.stride.motion * 0.25
+        }
+        animate(foal, &state.stride, speed: Self.speed(of: foal), topSpeed: Self.foalDashSpeed, cadence: 1.5, neck: neck, lying: state.lying, buck: buck, deltaTime: deltaTime)
+    }
+
+    /// Picks what a foal does next. Mostly it trots off somewhere near its
+    /// bed, now and then at a dash; otherwise it frisks, lies down or grazes.
+    private func startPlaying(_ foal: Entity, _ state: inout FoalComponent, in yard: Yard) {
+        let previous = state.phase
+        state.elapsed = 0
+        let roll = Double.random(in: 0..<1)
+        if roll < 0.5, previous != .trotting || roll < 0.2, let route = route(for: foal, near: state.home, in: yard) {
+            setWalk(foal, route, speed: Double.random(in: 0..<1) < 0.3 ? Self.foalDashSpeed : Self.foalTrotSpeed)
+            state.phase = .trotting
+        } else if roll < 0.65, previous != .frisking {
+            state.phase = .frisking
+        } else if roll < 0.75, previous != .resting {
+            state.duration = .random(in: 6...12)
+            state.phase = .resting
+        } else {
+            state.duration = .random(in: 2...6)
+            state.phase = .grazing
+        }
+    }
+
+    /// A way to a free tile a few tiles from the bed, ending a little off
+    /// the tile's middle so that foals don't stand in one another.
+    private func route(for foal: Entity, near home: LotArea, in yard: Yard) -> [SIMD3<Float>]? {
+        let here = yard.tile(at: foal.position)
+        let reach = Self.foalReach
+        for _ in 0..<8 {
+            let place = Tile(
+                x: .random(in: (home.x - reach)...(home.xs.upperBound - 1 + reach)),
+                z: .random(in: (home.y - reach)...(home.ys.upperBound - 1 + reach))
+            )
+            guard place != here, yard.lot.grid.isWalkable(place),
+                  var route = yard.route(from: foal.position, to: place),
+                  route.count <= reach * 3, // not all the way round a building
+                  let last = route.popLast() else { continue }
+            let nudge = yard.lot.tileSize * 0.25
+            return route + [last + [.random(in: -nudge...nudge), 0, .random(in: -nudge...nudge)]]
+        }
+        return nil
+    }
+
+    // MARK: Moving the legs
+
+    /// Swings its legs, bobs its body and rocks it as it runs, faster the
+    /// faster it goes, and lowers its head to `neck` radians. A foal's
+    /// strides come quicker (`cadence`), it can lie down (`lying`, from 0
+    /// standing to 1 lying, its legs folded under it) and buck (`buck`, from
+    /// 0 to 1 at the top of a kick).
+    private func animate(
+        _ animal: Entity, _ stride: inout Stride, speed: Float, topSpeed: Float, cadence: Float = 1, neck: Float,
+        lying: Float = 0, buck: Float = 0, deltaTime: Float
+    ) {
         let ease = min(1, deltaTime * 6)
-        state.motion += (min(speed / Self.gallopSpeed, 1) - state.motion) * ease
-        state.stride = (state.stride + deltaTime * (4 + speed * 2)).truncatingRemainder(dividingBy: 2 * .pi)
+        stride.motion += (min(speed / topSpeed, 1) - stride.motion) * ease
+        stride.phase = (stride.phase + deltaTime * (4 + speed * 2) * cadence).truncatingRemainder(dividingBy: 2 * .pi)
+        stride.neck += (neck - stride.neck) * min(1, deltaTime * 3)
 
-        let neck: Float = state.phase == .feeding ? 1.25 + sin(state.elapsed * 2.5) * 0.08 : state.motion * 0.35
-        state.neck += (neck - state.neck) * min(1, deltaTime * 3)
-
-        guard let gait = horse.children.first(where: { $0.name == "Gait" }) else { return }
+        guard let gait = animal.children.first(where: { $0.name == "Gait" }) else { return }
         // Settles down smoothly as it comes to a stop.
-        let bob = state.motion
-        gait.position.y = abs(sin(state.stride)) * 0.1 * bob
-        gait.orientation = simd_quatf(angle: sin(state.stride) * 0.08 * bob, axis: [1, 0, 0])
+        let bob = stride.motion
+        // Lying, its body comes down to just above the floor.
+        let hips = gait.children.first { $0.name == "BackLeg" }?.position.y ?? 0
+        gait.position.y = abs(sin(stride.phase)) * 0.1 * bob + buck * 0.1 - lying * max(hips - 0.1, 0)
+        // Nose down and heels up as it bucks.
+        gait.orientation = simd_quatf(angle: sin(stride.phase) * 0.08 * bob + buck * 0.35, axis: [1, 0, 0])
         for part in gait.children {
             switch part.name {
             case "FrontLeg", "BackLeg":
+                let isBack = part.name == "BackLeg"
                 // The hind legs push off half a stride after the front ones,
                 // and the right leg of each pair just after the left.
-                let lead: Float = (part.name == "BackLeg" ? .pi : 0) + (part.position.x > 0 ? 0.5 : 0)
-                part.orientation = simd_quatf(angle: sin(state.stride + lead) * (0.15 + 0.55 * state.motion) * bob, axis: [1, 0, 0])
+                let lead: Float = (isBack ? .pi : 0) + (part.position.x > 0 ? 0.5 : 0)
+                let swing = sin(stride.phase + lead) * (0.15 + 0.55 * stride.motion) * bob
+                // Folded under it lying down, and the hind legs kicked out behind in a buck.
+                let folded: Float = isBack ? -1.5 : 1.5
+                let kick: Float = isBack ? 0.9 : -0.3
+                part.orientation = simd_quatf(angle: swing * (1 - lying) + folded * lying + kick * buck, axis: [1, 0, 0])
             case "Neck":
-                part.orientation = simd_quatf(angle: state.neck, axis: [1, 0, 0])
+                part.orientation = simd_quatf(angle: stride.neck, axis: [1, 0, 0])
             default:
                 break
             }
         }
+    }
+
+    /// How fast it is walking, in metres per second, or 0 if it is standing.
+    private static func speed(of animal: Entity) -> Float {
+        guard let walk = animal.components[WalkComponent.self], !walk.waypoints.isEmpty else { return 0 }
+        return walk.speed
     }
 
     private func setWalk(_ horse: Entity, _ waypoints: [SIMD3<Float>], speed: Float) {
@@ -361,22 +502,22 @@ struct BarnSystem: System {
     }
 }
 
-/// The lot as a barn's horses see it: in the barn's space, which is the
-/// lot's space moved to the barn's middle.
+/// The lot as a barn's horses, or a bed's foals, see it: in the space of
+/// their barn or bed, which is the lot's space moved to its middle.
 private struct Yard {
     let lot: LotComponent
-    /// Where the barn stands on the lot.
-    let barn: SIMD3<Float>
+    /// Where the barn or the bed stands on the lot.
+    let origin: SIMD3<Float>
 
     func position(of tile: Tile) -> SIMD3<Float> {
-        lot.position(of: tile) - barn
+        lot.position(of: tile) - origin
     }
 
     func tile(at position: SIMD3<Float>) -> Tile {
-        lot.tile(at: position + barn)
+        lot.tile(at: position + origin)
     }
 
-    func route(from origin: SIMD3<Float>, to goal: Tile) -> [SIMD3<Float>]? {
-        lot.route(from: origin + barn, to: goal)?.map { $0 - barn }
+    func route(from start: SIMD3<Float>, to goal: Tile) -> [SIMD3<Float>]? {
+        lot.route(from: start + origin, to: goal)?.map { $0 - origin }
     }
 }

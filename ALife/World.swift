@@ -325,9 +325,10 @@ final class World {
             }
         }
 
-        // Nobody walks through what is built or planted, except grass.
+        // Nobody walks through what is built or planted, except grass and
+        // the foals' patch, which the foals trot in and out of.
         var grid = scenery
-        for (item, _) in placed.values where !(item.category == .plant && Plants.isWalkable(item.kind)) {
+        for (item, _) in placed.values where !(item.category == .plant && (item.isFoals || Plants.isWalkable(item.kind))) {
             for tile in item.area.tiles {
                 grid.block(Tile(x: tile.x, z: tile.y))
             }
@@ -340,7 +341,7 @@ final class World {
         }
     }
 
-    /// A building or a bed of plants, standing where it is on the lot.
+    /// A building, a bed of plants or the Gardener's foals, standing where it is on the lot.
     private func makeEntity(for item: LotItem) -> Entity {
         let area = item.area
         let first = lot.position(of: Tile(x: area.x, z: area.y))
@@ -351,7 +352,7 @@ final class World {
         switch item.category {
         case .plant:
             let tiles = area.tiles.map { (x: $0.x, y: $0.y, position: lot.position(of: Tile(x: $0.x, z: $0.y)) - centre) }
-            entity = Plants.make(item, tiles: tiles, tileSize: lot.tileSize)
+            entity = item.isFoals ? Foals.make(item, tiles: tiles) : Plants.make(item, tiles: tiles, tileSize: lot.tileSize)
         case .building, .unknown:
             entity = Buildings.make(item, width: Float(area.width) * lot.tileSize, depth: Float(area.depth) * lot.tileSize)
         }

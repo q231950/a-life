@@ -20,7 +20,9 @@ import Yams
 ///
 /// An empty file stands for nothing. Without a `width` and `depth`, a building takes 3 by 3 tiles and a plant
 /// one. Plants can have a `color` too, and anything can have a `name`;
-/// without one, the file's first heading names it.
+/// without one, the file's first heading names it. A bed whose kind is a
+/// foal (or a pony, a colt, a filly or a baby horse) has a foal on each
+/// tile, and no more than `LotPlan.mostFoals` of them.
 enum LotSurvey {
     /// One file in `buildings/` or `garden/`.
     struct Entry: Equatable {
@@ -118,6 +120,11 @@ enum LotSurvey {
             throw Problem("at \(describe(area)) it is on the house or the lawn in front of it, \(describe(LotPlan.reserved)), where nothing can go.")
         }
 
+        let isFoals = LotItem(id: entry.id, category: entry.category, kind: kind, name: "", area: area).isFoals
+        guard !isFoals || width * depth <= LotPlan.mostFoals else {
+            throw Problem("a bed of foals has a foal on each tile, and can have at most \(LotPlan.mostFoals) of them, not \(width * depth) (\(width) by \(depth)).")
+        }
+
         let name = (fields["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? heading(in: body)
             ?? title(fromFile: entry.id)
@@ -160,7 +167,7 @@ enum LotSurvey {
             ---
             ```
 
-            Plants can have a color, such as red, too. Nothing can share a tile with anything else; where two things would, the one that was there first stays.
+            Plants can have a color, such as red, too. In garden/, a bed of kind foal has a foal on each tile, at most \(LotPlan.mostFoals), in its color if it has one, such as chestnut, bay, grey or palomino; they play round the bed, and anyone can walk across it. Nothing can share a tile with anything else; where two things would, the one that was there first stays.
 
             ## On the lot
 
@@ -248,7 +255,7 @@ enum LotSurvey {
         return name.prefix(1).uppercased() + name.dropFirst()
     }
 
-    /// The colours a plant can be given by name.
+    /// The colours a plant, or a foal's coat, can be given by name.
     static let colors: [String: String] = [
         "red": "#D7263D", "crimson": "#B0182E", "scarlet": "#E0301E",
         "pink": "#F28AB2", "rose": "#E8638B", "magenta": "#D1338F",
@@ -258,6 +265,9 @@ enum LotSurvey {
         "purple": "#8E4FC2", "violet": "#7F4FD6", "lilac": "#B79BE0", "lavender": "#A88AD8",
         "blue": "#3F6FD8", "sky blue": "#79B4F0",
         "green": "#4E9A3A", "brown": "#8A5A32", "black": "#2B2730",
+        "grey": "#BDBAB4", "gray": "#BDBAB4",
+        // Horses' coats, for foals.
+        "chestnut": "#8C4A23", "bay": "#52321F", "palomino": "#D9B26F", "dun": "#B89A6A",
     ]
 
     /// A colour given by name, such as `red`, or as `#RRGGBB`, as
