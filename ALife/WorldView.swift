@@ -150,12 +150,16 @@ struct WorldView: View {
     #if os(macOS)
     private let hint = "Click a character to talk to it · click the grass to walk · drag to orbit · scroll or pinch to zoom"
 
-    /// SwiftUI has no scroll-wheel gesture, so listen for the events directly.
+    /// SwiftUI has no scroll-wheel gesture, so listen for the events directly,
+    /// and zoom only when you scroll over the lot itself, not over the panel,
+    /// the buttons or anything else laid over it.
     private func startScrollZoom() {
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
             let delta = event.scrollingDeltaY
             MainActor.assumeIsolated {
-                world?.camera.scroll(by: delta)
+                if event.isOverLot {
+                    world?.camera.scroll(by: delta)
+                }
             }
             return event
         }
@@ -171,6 +175,25 @@ struct WorldView: View {
     private let hint = "Tap a character to talk to it · tap the grass to walk · drag to orbit · pinch to zoom"
     #endif
 }
+
+#if os(macOS)
+extension NSEvent {
+    /// Whether the pointer is over the lot itself rather than something laid
+    /// over it. SwiftUI's overlays answer AppKit's hit test themselves, so
+    /// only open lot finds the RealityView's own view underneath.
+    @MainActor
+    var isOverLot: Bool {
+        guard let content = window?.contentView else { return false }
+        let point = content.superview?.convert(locationInWindow, from: nil) ?? locationInWindow
+        var view = content.hitTest(point)
+        while let candidate = view {
+            if candidate is ARView { return true }
+            view = candidate.superview
+        }
+        return false
+    }
+}
+#endif
 
 #Preview {
     WorldView()
