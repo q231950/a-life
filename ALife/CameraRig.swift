@@ -1,3 +1,4 @@
+import ALifeClient
 import RealityKit
 import CoreGraphics
 
@@ -15,16 +16,20 @@ final class CameraRig {
     private var pitch: Float = 45 * .pi / 180
     private var distance: Float = 32
 
-    private let pitchRange: ClosedRange<Float> = (20 * .pi / 180)...(80 * .pi / 180)
+    /// From nearly level, to look out at the horizon, to nearly straight
+    /// down. The land round the lot is built for these (see `CameraReach`).
+    private let pitchRange: ClosedRange<Float> = (CameraReach.pitch.lowerBound * .pi / 180)...(CameraReach.pitch.upperBound * .pi / 180)
     /// Close enough to see the characters' faces, far enough to see the whole lot.
-    private let distanceRange: ClosedRange<Float> = 5...100
+    private let distanceRange = CameraReach.distance
 
     // Values at the start of the current drag or pinch.
     private var dragStart: (yaw: Float, pitch: Float)?
     private var zoomStart: Float?
 
     init() {
-        camera.camera.fieldOfViewInDegrees = 45
+        camera.camera.fieldOfViewInDegrees = CameraReach.fieldOfView
+        // It sees all the way to the sky, however far away that is.
+        camera.camera.far = .infinity
         root.addChild(pivot)
         pivot.addChild(camera)
         apply()
