@@ -66,7 +66,7 @@ final class World {
         let sun = Self.makeSun()
         root.addChild(sun)
         root.addChild(Horizon.make())
-        root.addChild(SkyDome.make(sunlight: sun, root: root))
+        root.addChild(SkyBox.make(sunlight: sun, root: root))
         root.addChild(camera.root)
         camera.focus(on: lot.position(of: Tile(x: LotPlan.house.x + LotPlan.house.width / 2, z: LotPlan.house.y + LotPlan.house.depth)))
     }

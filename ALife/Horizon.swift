@@ -1,184 +1,271 @@
 import ALifeClient
 import RealityKit
 
-/// The land and sea round the lot, laid out by `HorizonPlan`: a meadow all
-/// round it, a beach and a bay to the south with the city on its island
-/// (see `Skyline`), mountains with snowy tops to the north with forests of
-/// giant redwoods at their feet, and wooded hills to the east and the west.
-/// It is only to look at: nothing in it takes taps, and the characters
-/// never walk there.
+/// The world painted on the insides of the lot's box, laid out by
+/// `HorizonPlan`: on the south wall a bay with a beach, and the city on the
+/// horizon across it (see `Skyline`); on the north wall mountains with
+/// snowy tops, over foothills and a forest of giant redwoods; and on the
+/// east and west walls the coast turning into wooded hills. It is painted
+/// in flat layers a few centimetres apart, in front of the sky (see
+/// `SkyBox`), in colours that `DaySystem` dims and warms with the time of
+/// day. It is only to look at: nothing in it takes taps, and it stands
+/// behind the outermost tiles, so the characters walk in front of it.
 @MainActor
 enum Horizon {
+    /// How far in from each wall each layer is, from the back to the front.
+    private enum Layer {
+        static let farLand: Float = 0.05
+        static let sea: Float = 0.1
+        static let nearLand: Float = 0.22
+        static let trees: ClosedRange<Float> = 0.25...0.3
+    }
+
+    /// The colours the world on the walls is painted in, one part each.
+    private enum Paint: Int, CaseIterable {
+        case rockLit, rockShade, snowLit, snowShade, farHillLit, farHillShade, farShore
+        case seaNear, seaMid, seaFar, surf, sand
+        case foothillLit, foothillShade, hillLit, hillShade
+        case trunkLit, trunkShade, redwoodLit, redwoodShade, pineLit, pineShade
+
+        var color: SIMD3<Float> {
+            switch self {
+            case .rockLit: [0.63, 0.6, 0.62]
+            case .rockShade: [0.42, 0.42, 0.5]
+            case .snowLit: [0.97, 0.98, 1]
+            case .snowShade: [0.76, 0.82, 0.92]
+            case .farHillLit: [0.47, 0.62, 0.56]
+            case .farHillShade: [0.37, 0.51, 0.51]
+            case .farShore: [0.6, 0.68, 0.67]
+            case .seaNear: [0.1, 0.35, 0.55]
+            case .seaMid: [0.15, 0.44, 0.63]
+            case .seaFar: [0.34, 0.58, 0.74]
+            case .surf: [0.93, 0.96, 0.96]
+            case .sand: [0.9, 0.82, 0.62]
+            case .foothillLit: [0.27, 0.46, 0.28]
+            case .foothillShade: [0.2, 0.36, 0.24]
+            case .hillLit: [0.37, 0.57, 0.31]
+            case .hillShade: [0.29, 0.47, 0.27]
+            case .trunkLit: [0.6, 0.3, 0.18]
+            case .trunkShade: [0.42, 0.2, 0.13]
+            case .redwoodLit: [0.17, 0.36, 0.2]
+            case .redwoodShade: [0.11, 0.26, 0.16]
+            case .pineLit: [0.2, 0.41, 0.22]
+            case .pineShade: [0.13, 0.3, 0.18]
+            }
+        }
+    }
+
     static func make() -> Entity {
         let horizon = Entity()
         horizon.name = "Horizon"
-        for part in [makeLand(), makeSea(), makeForests(), Skyline.make()] {
-            horizon.addChild(part)
-        }
-        // Far beyond the reach of the sun's shadows, and nothing out here
-        // should darken the lot.
+        var painter = WallPainter(parts: Paint.allCases.count)
+        var random = SceneryRandom(seed: 7)
+        paintFarLand(with: &painter, random: &random)
+        paintSea(with: &painter)
+        paintNearLand(with: &painter, random: &random)
+        paintRedwoods(with: &painter, random: &random)
+        paintPines(with: &painter, random: &random)
+        horizon.addChild(painter.makeEntity(named: "Land and sea", colors: Paint.allCases.map(\.color)))
+        horizon.addChild(Skyline.make())
+        // Nothing painted on the walls should darken the lot.
         horizon.visit { $0.components.set(DynamicLightShadowComponent(castsShadow: false)) }
         return horizon
     }
 
     // MARK: Land and sea
 
-    /// What the land is covered in, one material each.
-    private enum Cover: Int, CaseIterable {
-        case meadow, woods, sand, seabed, quay, rock, snow
+    /// Which of the regions a strip of the walls is painted as. Where they
+    /// meet, strips of each are mixed, more of one the further into it.
+    private enum Region {
+        case sea, mountains, hills
+    }
 
-        @MainActor var material: SimpleMaterial {
-            switch self {
-            case .meadow: Buildings.material(PlatformColor(red: 0.45, green: 0.66, blue: 0.32, alpha: 1), roughness: 1)
-            case .woods: Buildings.material(PlatformColor(red: 0.24, green: 0.42, blue: 0.24, alpha: 1), roughness: 1)
-            case .sand: Buildings.material(PlatformColor(red: 0.88, green: 0.8, blue: 0.6, alpha: 1), roughness: 1)
-            case .seabed: Buildings.material(PlatformColor(red: 0.42, green: 0.45, blue: 0.4, alpha: 1), roughness: 1)
-            case .quay: Buildings.material(PlatformColor(red: 0.52, green: 0.52, blue: 0.54, alpha: 1), roughness: 0.9)
-            case .rock: Buildings.material(PlatformColor(red: 0.5, green: 0.47, blue: 0.45, alpha: 1), roughness: 1)
-            case .snow: Buildings.material(PlatformColor(red: 0.95, green: 0.96, blue: 0.98, alpha: 1), roughness: 0.8)
+    private static func region(around: Float, random: inout SceneryRandom) -> Region {
+        let regions = HorizonPlan.regions(around: around)
+        let pick = random.next(in: 0...1)
+        if pick < regions.sea { return .sea }
+        if pick < regions.sea + regions.mountains { return .mountains }
+        return .hills
+    }
+
+    /// Each metre of the walls, all the way round, from its left end to its
+    /// right, as seen from inside. The corners fall between strips.
+    private static var strips: [(Float, Float)] {
+        stride(from: Float(0), to: HorizonPlan.perimeter, by: 1).map { ($0, $0 + 1) }
+    }
+
+    /// The furthest land: the mountains' rocky faces and snowy tops, lit on
+    /// one side and in shade on the other, the far hills, and the low far
+    /// shore behind the city.
+    private static func paintFarLand(with painter: inout WallPainter, random: inout SceneryRandom) {
+        for (left, right) in strips {
+            let top = (HorizonPlan.farRidge(around: left), HorizonPlan.farRidge(around: right))
+            let strip: [SIMD2<Float>] = [[left, 0], [right, 0], [right, top.1], [left, top.0]]
+            let isLit = top.1 >= top.0
+            switch region(around: (left + right) / 2, random: &random) {
+            case .mountains:
+                let snow = ([left, HorizonPlan.snowLine(around: left)], [right, HorizonPlan.snowLine(around: right)]) as (SIMD2<Float>, SIMD2<Float>)
+                painter.fill(WallPainter.clip(strip, below: snow), inset: Layer.farLand, part: (isLit ? Paint.rockLit : .rockShade).rawValue)
+                painter.fill(WallPainter.clip(strip, above: snow), inset: Layer.farLand, part: (isLit ? Paint.snowLit : .snowShade).rawValue)
+            case .hills:
+                painter.fill(strip, inset: Layer.farLand, part: (isLit ? Paint.farHillLit : .farHillShade).rawValue)
+            case .sea:
+                painter.fill(strip, inset: Layer.farLand, part: Paint.farShore.rawValue)
             }
         }
     }
 
-    /// The land and the sea floor, one flat-shaded mesh from the middle of
-    /// the lot out to the edge, in rings that get further apart further out.
-    private static func makeLand() -> Entity {
-        var rings: [Float] = [0, 40, 55, 65, 72, 78, 84, 90, 96, 104, 112, 122, 132, 142]
-        rings += stride(from: Float(150), to: 460, by: 10)
-        rings += stride(from: Float(460), to: 760, by: 20)
-        rings += stride(from: Float(760), through: HorizonPlan.radius, by: 50)
-        let steps = 240
-
-        // Every point on the rings, by ring and step round.
-        let points = rings.map { distance in
-            (0..<steps).map { step in
-                let spot = HorizonPlan.point(bearing: Float(step) / Float(steps) * 2 * .pi, distance: distance)
-                return SIMD3<Float>(spot.x, HorizonPlan.height(x: spot.x, z: spot.z), spot.z)
+    /// The bay, from the beach out to the horizon, paler further out.
+    private static func paintSea(with painter: inout WallPainter) {
+        let bands: [(Float, Float, Paint)] = [(0, 2.2, .seaNear), (2.2, 4, .seaMid), (4, HorizonPlan.horizonHeight, .seaFar)]
+        for (left, right) in strips where HorizonPlan.regions(around: left).sea > 0.01 || HorizonPlan.regions(around: right).sea > 0.01 {
+            for (low, high, paint) in bands {
+                painter.rect(from: [left, low], to: [right, high], inset: Layer.sea, part: paint.rawValue)
             }
         }
+    }
 
-        var batch = MeshBatch(parts: Cover.allCases.count)
-        for ring in 1..<rings.count {
-            for step in 0..<steps {
-                let next = (step + 1) % steps
-                let inner = (points[ring - 1][step], points[ring - 1][next])
-                let outer = (points[ring][step], points[ring][next])
-                // The same cover for both halves, so where one gives way
-                // to another follows the rings.
-                let cover = cover(of: [inner.0, inner.1, outer.0, outer.1]).rawValue
-                batch.addTriangle(inner.0, outer.0, outer.1, facing: [0, 1, 0], part: cover)
-                batch.addTriangle(inner.0, outer.1, inner.1, facing: [0, 1, 0], part: cover)
+    /// The nearest land: foothills under the mountains, green hills to the
+    /// east and the west, and a beach with the surf along it by the bay.
+    private static func paintNearLand(with painter: inout WallPainter, random: inout SceneryRandom) {
+        for (left, right) in strips {
+            let top = (HorizonPlan.nearLand(around: left), HorizonPlan.nearLand(around: right))
+            let strip: [SIMD2<Float>] = [[left, 0], [right, 0], [right, top.1], [left, top.0]]
+            let isLit = top.1 >= top.0
+            switch region(around: (left + right) / 2, random: &random) {
+            case .mountains:
+                painter.fill(strip, inset: Layer.nearLand, part: (isLit ? Paint.foothillLit : .foothillShade).rawValue)
+            case .hills:
+                painter.fill(strip, inset: Layer.nearLand, part: (isLit ? Paint.hillLit : .hillShade).rawValue)
+            case .sea:
+                painter.fill(strip, inset: Layer.nearLand, part: Paint.sand.rawValue)
+                painter.fill([[left, top.0], [right, top.1], [right, top.1 + 0.15], [left, top.0 + 0.15]], inset: Layer.nearLand, part: Paint.surf.rawValue)
             }
         }
-        return batch.makeEntity(named: "Land", materials: Cover.allCases.map(\.material))
     }
 
-    /// What a patch of land with these corners is covered in, by where it
-    /// is and how high and steep.
-    private static func cover(of corners: [SIMD3<Float>]) -> Cover {
-        let middle = corners.reduce(.zero, +) / Float(corners.count)
-        let distance = simd_length(SIMD2(middle.x, middle.z))
-        let bearing = HorizonPlan.bearing(x: middle.x, z: middle.z)
-        let heights = corners.map(\.y)
-        let rise = (heights.max() ?? 0) - (heights.min() ?? 0)
-        let steepness = rise / max(1, simd_distance(corners[0], corners[3]))
+    // MARK: Trees
 
-        if middle.y < HorizonPlan.waterLevel - 0.4 { return .seabed }
-        if HorizonPlan.islandAmount(x: middle.x, z: middle.z) > 0.5 { return .quay }
-        if HorizonPlan.regions(bearing: bearing).sea > 0.05, middle.y < HorizonPlan.groundLevel - 0.01, middle.y < HorizonPlan.waterLevel + 1 {
-            return .sand
-        }
-        if middle.y > 135 + 20 * sin(7 * bearing) { return .snow }
-        if HorizonPlan.regions(bearing: bearing).mountains > 0.3, middle.y > 95 || (steepness > 0.45 && middle.y > 30) { return .rock }
-        return distance < HorizonPlan.flatRadius ? .meadow : .woods
-    }
-
-    /// The sea: one flat disc at sea level, under the land wherever the land
-    /// is higher.
-    private static func makeSea() -> Entity {
-        var batch = MeshBatch(parts: 1)
-        let steps = 120
-        let centre = SIMD3<Float>(0, HorizonPlan.waterLevel, 0)
-        for step in 0..<steps {
-            let here = HorizonPlan.point(bearing: Float(step) / Float(steps) * 2 * .pi, distance: HorizonPlan.radius)
-            let next = HorizonPlan.point(bearing: Float(step + 1) / Float(steps) * 2 * .pi, distance: HorizonPlan.radius)
-            batch.addTriangle(centre, [here.x, centre.y, here.z], [next.x, centre.y, next.z], facing: [0, 1, 0], part: 0)
-        }
-        let water = SimpleMaterial(color: PlatformColor(red: 0.07, green: 0.28, blue: 0.46, alpha: 1), roughness: 0.55, isMetallic: false)
-        return batch.makeEntity(named: "Sea", materials: [water])
-    }
-
-    // MARK: Forests
-
-    /// Giant redwoods in the mountains' foothills, and pines on the hills,
-    /// all in one mesh: trunks, redwood crowns and pine crowns.
-    private static func makeForests() -> Entity {
-        var batch = MeshBatch(parts: 3)
-        var random = SceneryRandom(seed: 7)
-
-        let redwoods = scatter(count: 170, spacing: 16, distances: 190...320, random: &random) { spot, height in
-            HorizonPlan.regions(bearing: spot.bearing).mountains > 0.55 && height > 1 && height < 115
-        }
-        for (base, _) in redwoods {
-            addRedwood(at: base, height: random.next(in: 36...62), to: &batch, random: &random)
-        }
-
-        let pines = scatter(count: 520, spacing: 6, distances: 160...360, random: &random) { spot, height in
-            HorizonPlan.regions(bearing: spot.bearing).hills > 0.6 && height > 1 && height < 85
-        }
-        for (base, _) in pines {
-            addPine(at: base, height: random.next(in: 14...28), to: &batch, random: &random)
-        }
-
-        return batch.makeEntity(named: "Forests", materials: [
-            Buildings.material(PlatformColor(red: 0.52, green: 0.24, blue: 0.15, alpha: 1), roughness: 1),
-            Buildings.material(PlatformColor(red: 0.13, green: 0.3, blue: 0.16, alpha: 1), roughness: 1),
-            Buildings.material(PlatformColor(red: 0.16, green: 0.34, blue: 0.2, alpha: 1), roughness: 1),
-        ])
-    }
-
-    /// Up to `count` spots on the land, `distances` from the middle of the
-    /// lot and at least `spacing` apart, where `fits` says a tree would grow.
-    private static func scatter(
-        count: Int,
-        spacing: Float,
-        distances: ClosedRange<Float>,
-        random: inout SceneryRandom,
-        fits: ((bearing: Float, distance: Float), Float) -> Bool
-    ) -> [(SIMD3<Float>, Float)] {
-        var spots: [(SIMD3<Float>, Float)] = []
+    /// Up to `count` spots round the walls, at least `spacing` apart and
+    /// clear of the corners, where `fits` says a tree would grow.
+    private static func scatter(count: Int, spacing: Float, random: inout SceneryRandom, fits: (Float) -> Bool) -> [Float] {
+        var spots: [Float] = []
         for _ in 0..<(count * 8) where spots.count < count {
-            let bearing = random.next(in: 0...(2 * .pi))
-            let distance = random.next(in: distances)
-            let point = HorizonPlan.point(bearing: bearing, distance: distance)
-            let height = HorizonPlan.height(x: point.x, z: point.z)
-            let base = SIMD3<Float>(point.x, height, point.z)
-            guard fits((bearing, distance), height),
-                  !spots.contains(where: { simd_distance($0.0, base) < spacing }) else { continue }
-            spots.append((base, height))
+            let around = random.next(in: 0...HorizonPlan.perimeter)
+            let fromCorner = abs((around + HorizonPlan.halfWidth).truncatingRemainder(dividingBy: 2 * HorizonPlan.halfWidth) - HorizonPlan.halfWidth)
+            guard HorizonPlan.halfWidth - fromCorner > 1.5, fits(around),
+                  !spots.contains(where: { abs($0 - around) < spacing }) else { continue }
+            spots.append(around)
         }
         return spots
     }
 
-    /// A giant redwood: a tall, thick red trunk, bare for its lower third,
-    /// under a narrow dark crown.
-    private static func addRedwood(at base: SIMD3<Float>, height: Float, to batch: inout MeshBatch, random: inout SceneryRandom) {
-        let turn = random.next(in: 0...1)
-        let trunk = height * random.next(in: 0.045...0.06)
-        batch.addTube(at: base - [0, 3, 0], rings: [(0, trunk * 1.3), (3 + height * 0.1, trunk), (3 + height * 0.92, trunk * 0.3)], sides: 7, turn: turn, part: 0)
-        let crown = height * random.next(in: 0.14...0.18)
-        batch.addTube(at: base, rings: [
-            (height * 0.36, 0), (height * 0.42, crown * 0.7), (height * 0.58, crown),
-            (height * 0.76, crown * 0.85), (height * 0.92, crown * 0.45), (height, 0),
-        ], sides: 7, turn: turn, part: 1)
+    /// Giant redwoods at the mountains' feet: tall red trunks, bare for
+    /// their lower third, under narrow dark crowns, lit on the left.
+    private static func paintRedwoods(with painter: inout WallPainter, random: inout SceneryRandom) {
+        let spots = scatter(count: 40, spacing: 1.6, random: &random) { HorizonPlan.regions(around: $0).mountains > 0.6 }
+        for around in spots {
+            let height = random.next(in: 10...19)
+            let inset = random.next(in: Layer.trees)
+            let trunk = height * random.next(in: 0.035...0.045)
+            painter.fill([[around - trunk, 0], [around, 0], [around, height * 0.9], [around - trunk * 0.3, height * 0.9]], inset: inset, part: Paint.trunkLit.rawValue)
+            painter.fill([[around, 0], [around + trunk, 0], [around + trunk * 0.3, height * 0.9], [around, height * 0.9]], inset: inset, part: Paint.trunkShade.rawValue)
+            let crown = height * random.next(in: 0.1...0.13)
+            let rings: [(Float, Float)] = [(0.34, 0), (0.42, 0.7), (0.58, 1), (0.76, 0.85), (0.92, 0.45), (1, 0)]
+            for (low, high) in zip(rings, rings.dropFirst()) {
+                let bottom = height * low.0, top = height * high.0
+                let inner = inset + 0.005
+                painter.fill([[around - crown * low.1, bottom], [around, bottom], [around, top], [around - crown * high.1, top]], inset: inner, part: Paint.redwoodLit.rawValue)
+                painter.fill([[around, bottom], [around + crown * low.1, bottom], [around + crown * high.1, top], [around, top]], inset: inner, part: Paint.redwoodShade.rawValue)
+            }
+        }
     }
 
-    /// A pine on the hills: a short trunk under two tiers of cone.
-    private static func addPine(at base: SIMD3<Float>, height: Float, to batch: inout MeshBatch, random: inout SceneryRandom) {
-        let turn = random.next(in: 0...1)
-        batch.addTube(at: base - [0, 1, 0], rings: [(0, height * 0.035), (height * 0.35, height * 0.025)], sides: 5, turn: turn, part: 0)
-        let width = height * random.next(in: 0.22...0.3)
-        batch.addTube(at: base, rings: [(height * 0.15, width), (height * 0.7, width * 0.35), (height * 0.55, width * 0.75), (height, 0)], sides: 6, turn: turn, part: 2)
+    /// Pines all over the hills: a short trunk under two tiers.
+    private static func paintPines(with painter: inout WallPainter, random: inout SceneryRandom) {
+        let spots = scatter(count: 170, spacing: 0.7, random: &random) { HorizonPlan.regions(around: $0).hills > 0.35 }
+        for around in spots {
+            let land = HorizonPlan.nearLand(around: around)
+            let base = random.next(in: 0.2...max(0.3, land - 0.4))
+            let height = random.next(in: 1.6...3.2)
+            let inset = random.next(in: Layer.trees)
+            let width = height * random.next(in: 0.2...0.26)
+            painter.rect(from: [around - 0.06, base], to: [around + 0.06, base + height * 0.3], inset: inset, part: Paint.trunkShade.rawValue)
+            for (bottom, top, spread) in [(Float(0.2), Float(0.7), Float(1)), (0.5, 1, 0.7)] {
+                let low = base + height * bottom, high = base + height * top
+                painter.fill([[around - width * spread, low], [around, low], [around, high]], inset: inset + 0.003, part: Paint.pineLit.rawValue)
+                painter.fill([[around, low], [around + width * spread, low], [around, high]], inset: inset + 0.003, part: Paint.pineShade.rawValue)
+            }
+        }
+    }
+}
+
+/// Paints flat shapes on the insides of the walls, all into one mesh with a
+/// part for each colour. Shapes are given in the walls' own terms: metres
+/// round them (see `HorizonPlan.wallSpot`), metres up, and how far in from
+/// the wall they are.
+struct WallPainter {
+    private var batch: MeshBatch
+
+    init(parts: Int) {
+        batch = MeshBatch(parts: parts)
+    }
+
+    /// A shape with these corners, (around, up), in order round its edge.
+    /// It should be convex, and on one wall.
+    mutating func fill(_ corners: [SIMD2<Float>], inset: Float, part: Int) {
+        guard corners.count >= 3 else { return }
+        let middle = corners.reduce(.zero, +) / Float(corners.count)
+        let inward = HorizonPlan.wallSpot(around: middle.x).wall.inward
+        let points = corners.map { HorizonPlan.wallPoint(around: $0.x, height: $0.y, inset: inset) }
+        for index in 1..<(points.count - 1) {
+            batch.addTriangle(points[0], points[index], points[index + 1], facing: inward, part: part)
+        }
+    }
+
+    /// A rectangle from its bottom left corner to its top right.
+    mutating func rect(from low: SIMD2<Float>, to high: SIMD2<Float>, inset: Float, part: Int) {
+        fill([low, [high.x, low.y], high, [low.x, high.y]], inset: inset, part: part)
+    }
+
+    /// The part of a convex shape under the line through `line`.
+    static func clip(_ shape: [SIMD2<Float>], below line: (SIMD2<Float>, SIMD2<Float>)) -> [SIMD2<Float>] {
+        clip(shape) { point in
+            let share = (point.x - line.0.x) / (line.1.x - line.0.x)
+            return line.0.y + (line.1.y - line.0.y) * share - point.y
+        }
+    }
+
+    /// The part of a convex shape over the line through `line`.
+    static func clip(_ shape: [SIMD2<Float>], above line: (SIMD2<Float>, SIMD2<Float>)) -> [SIMD2<Float>] {
+        clip(shape) { point in
+            let share = (point.x - line.0.x) / (line.1.x - line.0.x)
+            return point.y - (line.0.y + (line.1.y - line.0.y) * share)
+        }
+    }
+
+    /// The part of a convex shape where `side` isn't negative. `side`
+    /// should change evenly across the shape, as it does either side of a
+    /// straight line.
+    private static func clip(_ shape: [SIMD2<Float>], keeping side: (SIMD2<Float>) -> Float) -> [SIMD2<Float>] {
+        var kept: [SIMD2<Float>] = []
+        for (index, point) in shape.enumerated() {
+            let next = shape[(index + 1) % shape.count]
+            let here = side(point), there = side(next)
+            if here >= 0 { kept.append(point) }
+            if (here >= 0) != (there >= 0) {
+                kept.append(point + (next - point) * (here / (here - there)))
+            }
+        }
+        return kept
+    }
+
+    /// The mesh, painted in `colors` (in full daylight) for its parts in
+    /// order, as one entity.
+    func makeEntity(named name: String, colors: [SIMD3<Float>]) -> ModelEntity {
+        let entity = batch.makeEntity(named: name, materials: colors.map { UnlitMaterial(color: PlatformColor($0)) })
+        entity.components.set(PaintComponent(colors: colors))
+        return entity
     }
 }
 
@@ -221,38 +308,8 @@ struct MeshBatch {
         addTriangle(a, c, d, awayFrom: centre, part: part)
     }
 
-    /// The sides of a round tube standing at `base`, with `sides` faces round
-    /// it, through `rings` of (height, radius) from the bottom up. A ring of
-    /// radius 0 makes a point. `turn` turns it round, as a share of a face.
-    mutating func addTube(at base: SIMD3<Float>, rings: [(height: Float, radius: Float)], sides: Int, turn: Float = 0, part: Int) {
-        func corner(_ ring: (height: Float, radius: Float), _ side: Int) -> SIMD3<Float> {
-            let angle = (Float(side) + turn) / Float(sides) * 2 * .pi
-            return base + [sin(angle) * ring.radius, ring.height, cos(angle) * ring.radius]
-        }
-        for (low, high) in zip(rings, rings.dropFirst()) {
-            // A little below the middle, so a flat step faces up.
-            let axis = base + [0, (low.height + high.height) / 2 - 0.1, 0]
-            for side in 0..<sides {
-                let a = corner(low, side), b = corner(low, side + 1), c = corner(high, side + 1), d = corner(high, side)
-                if low.radius > 0 { addTriangle(a, b, c, awayFrom: axis, part: part) }
-                if high.radius > 0 { addTriangle(a, c, d, awayFrom: axis, part: part) }
-            }
-        }
-    }
-
-    /// A box from `low` to `high`, its sides lined up with x and z, with no
-    /// floor: it stands on something.
-    mutating func addBox(from low: SIMD3<Float>, to high: SIMD3<Float>, part: Int) {
-        let centre = (low + high) / 2
-        let corners = [SIMD3(low.x, 0, low.z), SIMD3(high.x, 0, low.z), SIMD3(high.x, 0, high.z), SIMD3(low.x, 0, high.z)]
-        for (a, b) in zip(corners, corners.dropFirst() + [corners[0]]) {
-            addQuad(a + [0, low.y, 0], b + [0, low.y, 0], b + [0, high.y, 0], a + [0, high.y, 0], awayFrom: centre, part: part)
-        }
-        addQuad(corners[0] + [0, high.y, 0], corners[1] + [0, high.y, 0], corners[2] + [0, high.y, 0], corners[3] + [0, high.y, 0], awayFrom: centre, part: part)
-    }
-
-    /// The mesh, with `materials` for its parts in order, as one entity.
-    func makeEntity(named name: String, materials: [any Material]) -> ModelEntity {
+    /// The mesh, its parts in order, or `nil` if there is nothing in it.
+    func makeMesh(named name: String) -> MeshResource? {
         var descriptors: [MeshDescriptor] = []
         for (index, part) in parts.enumerated() where !part.indices.isEmpty {
             var descriptor = MeshDescriptor(name: "\(name) \(index)")
@@ -262,9 +319,15 @@ struct MeshBatch {
             descriptor.materials = .allFaces(UInt32(index))
             descriptors.append(descriptor)
         }
+        guard !descriptors.isEmpty else { return nil }
+        return try? MeshResource.generate(from: descriptors)
+    }
+
+    /// The mesh, with `materials` for its parts in order, as one entity.
+    func makeEntity(named name: String, materials: [any Material]) -> ModelEntity {
         let entity = ModelEntity()
         entity.name = name
-        if let mesh = try? MeshResource.generate(from: descriptors) {
+        if let mesh = makeMesh(named: name) {
             entity.model = ModelComponent(mesh: mesh, materials: materials)
         }
         return entity

@@ -18,14 +18,28 @@ struct NightLightsComponent: Component {
     }
 }
 
-/// Keeps the sky with the camera every frame, and twice a second brings the
-/// day up to date from `DayClock`: the sun crossing the sky from east to
-/// west, warm at dawn and dusk, the moon and the stars coming out at night
-/// with a dim blue moonlight, the sky's colours, and the city's windows
-/// lighting up.
+/// The world painted on the walls (see `Horizon`): a mesh whose parts are
+/// painted in these colours by day, and dimmer, warmer or bluer as the
+/// light changes.
+struct PaintComponent: Component {
+    /// The colour of each part, in full daylight.
+    var colors: [SIMD3<Float>]
+    /// The light it was last painted in.
+    var light: SIMD3<Float> = [-1, -1, -1]
+
+    init(colors: [SIMD3<Float>]) {
+        self.colors = colors
+    }
+}
+
+/// Twice a second, brings the day up to date from `DayClock`: the sun
+/// crossing the sky from east to west, warm at dawn and dusk, the moon and
+/// the stars coming out at night with a dim blue moonlight, the sky's
+/// colours, the light on the world painted on the walls, and the city's
+/// windows lighting up.
 struct DaySystem: System {
     private static let skies = EntityQuery(where: .has(SkyComponent.self))
-    private static let cameras = EntityQuery(where: .has(PerspectiveCameraComponent.self))
+    private static let paintings = EntityQuery(where: .has(PaintComponent.self))
     private static let nightLights = EntityQuery(where: .has(NightLightsComponent.self))
     /// How often the day is brought up to date, in seconds. A day lasts five
     /// hours, so the sun moves only a little in between.
@@ -38,64 +52,77 @@ struct DaySystem: System {
     init(scene: RealityKit.Scene) {}
 
     func update(context: SceneUpdateContext) {
-        let camera = context.entities(matching: Self.cameras, updatingSystemWhen: .rendering).first { _ in true }
-        var night: Float?
+        var current: Sky?
 
         for entity in context.entities(matching: Self.skies, updatingSystemWhen: .rendering) {
-            if let camera {
-                entity.setPosition(camera.position(relativeTo: nil), relativeTo: nil)
-            }
             guard var state = entity.components[SkyComponent.self] else { continue }
             let now = Date()
             if let updated = state.updated, now.timeIntervalSince(updated) < Self.interval { continue }
             state.updated = now
-            entity.components.set(state)
 
             let sky = state.clock.sky(at: now)
-            show(sky, in: state)
-            night = 1 - Float(sky.daylight)
+            show(sky, in: &state)
+            entity.components.set(state)
+            current = sky
         }
 
-        guard let night else { return }
+        guard let current else { return }
+        let light = SkyBox.paintLight(in: current)
+        for entity in context.entities(matching: Self.paintings, updatingSystemWhen: .rendering) {
+            guard var paint = entity.components[PaintComponent.self],
+                  simd_distance(paint.light, light) > 0.005,
+                  let model = entity as? ModelEntity else { continue }
+            paint.light = light
+            model.model?.materials = paint.colors.map { UnlitMaterial(color: PlatformColor($0 * light)) }
+            entity.components.set(paint)
+        }
+
+        let night = 1 - Float(current.daylight)
         for entity in context.entities(matching: Self.nightLights, updatingSystemWhen: .rendering) {
             guard var lights = entity.components[NightLightsComponent.self],
                   abs(lights.level - night) > 0.01,
                   let model = entity as? ModelEntity else { continue }
             lights.level = night
-            let lit = SkyDome.mix(lights.off, lights.on, SkyDome.smoothstep(0.2, 0.9, night))
+            let lit = SkyBox.mix(lights.off, lights.on, SkyBox.smoothstep(0.2, 0.9, night))
             model.model?.materials = [UnlitMaterial(color: PlatformColor(lights.off)), UnlitMaterial(color: PlatformColor(lit))]
             entity.components.set(lights)
         }
     }
 
-    private func show(_ sky: Sky, in state: SkyComponent) {
+    private func show(_ sky: Sky, in state: inout SkyComponent) {
         let sun = Self.scene(sky.sun), moon = Self.scene(sky.moon)
         let sunElevation = Float(sky.sun.elevation) * 180 / .pi
         let daylight = Float(sky.daylight), moonlight = Float(sky.moonlight)
 
         // The sky's colours.
-        if let gradient = state.gradient, let image = SkyDome.gradientImage(for: sky) {
+        if let gradient = state.gradient, let image = SkyBox.gradientImage(for: sky) {
             try? gradient.replace(withImage: image, options: .init(semantic: .color, mipmapsMode: .none))
         }
 
-        // The sun's disc, and the moon's.
+        // The sun's disc, and the moon's, painted on the sky.
         state.sun.isEnabled = sunElevation > -5
-        state.sun.position = sun * SkyDome.bodyDistance
+        SkyBox.paint(state.sun, toward: sun, size: SkyBox.sunSize)
         var sunMaterial = UnlitMaterial(applyPostProcessToneMap: false)
-        sunMaterial.color = .init(tint: PlatformColor(SkyDome.sunColor(in: sky)))
+        sunMaterial.color = .init(tint: PlatformColor(SkyBox.sunColor(in: sky)))
         state.sun.model?.materials = [sunMaterial]
 
         state.moon.isEnabled = sunElevation < 5
-        state.moon.position = moon * SkyDome.bodyDistance
+        SkyBox.paint(state.moon, toward: moon, size: SkyBox.moonSize)
         var moonMaterial = UnlitMaterial(applyPostProcessToneMap: false)
         moonMaterial.color = .init(tint: PlatformColor(SIMD3(0.92, 0.93, 0.98)))
         moonMaterial.blending = .transparent(opacity: .init(floatLiteral: 1 - 0.75 * daylight))
         state.moon.model?.materials = [moonMaterial]
 
-        // The stars, turning round the pole with the sun.
+        // The stars, turning round the pole with the sun. They are painted
+        // again each time they have turned a little further.
         let starlight = Float(sky.starlight)
         state.stars.isEnabled = starlight > 0.01
-        state.stars.orientation = simd_quatf(angle: Float(sky.turn), axis: Self.scene(Sky.pole))
+        let turn = Float(sky.turn)
+        if state.stars.isEnabled, state.starTurn.map({ abs($0 - turn) > 0.004 }) ?? true,
+           let mesh = SkyBox.makeStars(turn: simd_quatf(angle: turn, axis: Self.scene(Sky.pole))) {
+            state.stars.model?.mesh = mesh
+            state.starTurn = turn
+        }
         if var material = state.stars.model?.materials.first as? UnlitMaterial {
             material.blending = .transparent(opacity: .init(floatLiteral: starlight))
             state.stars.model?.materials = [material]
@@ -114,11 +141,11 @@ struct DaySystem: System {
         let direction = flat * cos(elevation) + [0, sin(elevation), 0]
         light.look(at: .zero, from: direction * 10, relativeTo: light.parent)
         if isSunlit {
-            let height = SkyDome.smoothstep(0, 35, sunElevation)
+            let height = SkyBox.smoothstep(0, 35, sunElevation)
             light.light.intensity = Self.sunlight * (0.4 + 0.6 * height) * daylight
-            light.light.color = PlatformColor(SkyDome.mix(SIMD3(1, 0.68, 0.45), SIMD3(1, 0.98, 0.94), SkyDome.smoothstep(2, 25, sunElevation)))
+            light.light.color = PlatformColor(SkyBox.mix(SIMD3(1, 0.68, 0.45), SIMD3(1, 0.98, 0.94), SkyBox.smoothstep(2, 25, sunElevation)))
         } else {
-            light.light.intensity = Self.moonlight * moonlight * SkyDome.smoothstep(-6, -12, sunElevation)
+            light.light.intensity = Self.moonlight * moonlight * SkyBox.smoothstep(-6, -12, sunElevation)
             light.light.color = PlatformColor(SIMD3(0.62, 0.72, 1))
         }
 
