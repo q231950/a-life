@@ -61,6 +61,7 @@ struct WorldView: View {
         .overlay(alignment: .bottom) {
             AgentPanel(selectedID: $selectedID)
                 .environment(\.shirts, shirts)
+                .environment(\.narrator, narrator)
                 .padding()
         }
         .sheet(isPresented: $showsSettings) {
@@ -88,8 +89,10 @@ struct WorldView: View {
                 id: session.id,
                 name: session.name,
                 color: session.color,
-                isAtWork: session.status == .running || session.isWaitingForYou,
+                // It stays at its desk until you've heard it out.
+                isAtWork: session.isOnTheJob || narrator?.hasSomethingToSay(session.id) == true,
                 isWaitingForYou: session.isWaitingForYou,
+                isCalling: narrator?.isCalling(session.id) == true,
                 subagents: session.subagents.map(\.id)
             )
         }
@@ -97,17 +100,18 @@ struct WorldView: View {
 
     // MARK: Voices
 
-    /// What each character has said lately, for the narrator.
+    /// What each character has said lately, and whether it's still on the
+    /// job, for the narrator.
     private var speakers: [Narrator.Speaker] {
-        server.sessions.map { Narrator.Speaker(id: $0.id, messages: $0.newMessages) }
+        server.sessions.map { Narrator.Speaker(id: $0.id, messages: $0.newMessages, isWorking: $0.isOnTheJob) }
     }
 
     /// Keeps an ear on who is close enough to hear, as you and the
     /// characters walk about, so a character you walk away from stops
-    /// talking.
+    /// talking, and calls you with the rest once its job is done.
     private func keepEarshot() async {
         let narrator = Narrator(engine: voices)
-        narrator.listen(to: speakers, inEarshot: []) // what was said before is let go
+        narrator.letGo(of: speakers) // what was said before you came
         self.narrator = narrator
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))

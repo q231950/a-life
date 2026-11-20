@@ -71,6 +71,7 @@ struct AgentPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let session = server.session(selectedBy: selectedID) {
+                IncomingCallBar(take: take(callFrom:))
                 HStack(spacing: 6) {
                     if server.sessions.count > 1 {
                         CharacterPicker(selectedID: session.id) { id in
@@ -112,6 +113,59 @@ struct AgentPanel: View {
         .padding(12)
         .frame(maxWidth: 520)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Answers a character's call: shows its conversation and plays what
+    /// you missed in its voice.
+    private func take(callFrom id: String) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selectedID = id
+            isExpanded = true
+        }
+        narrator?.take(callFrom: id)
+    }
+
+    @Environment(\.narrator) private var narrator
+}
+
+/// The first character calling you, with a button to take the call, and how
+/// many more are holding after it.
+private struct IncomingCallBar: View {
+    @Environment(ServerConnection.self) private var server
+    @Environment(\.narrator) private var narrator
+    let take: (String) -> Void
+
+    var body: some View {
+        if let calls = narrator?.calls, let first = calls.first {
+            let name = server.sessions.first { $0.id == first.speakerID }?.name ?? first.speakerID
+            HStack(spacing: 8) {
+                Image(systemName: "phone.arrow.down.left.fill")
+                    .foregroundStyle(.green)
+                    .symbolEffect(.wiggle, options: .repeat(.periodic(delay: 0.6)))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Incoming call from \(name)")
+                        .font(.footnote.bold())
+                    if calls.count > 1 {
+                        Text("\(calls.count - 1) more holding")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                Button("Take", systemImage: "phone.fill") {
+                    take(first.speakerID)
+                }
+                .font(.footnote)
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .accessibilityHint("Plays what \(name) said while you were away")
+            }
+            .padding(8)
+            .background(Color.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityElement(children: .combine)
+        }
     }
 }
 
@@ -251,6 +305,8 @@ extension EnvironmentValues {
     /// Each character's shirt on the lot, by session, for the panel to show
     /// them in. A character missing from it hasn't reached the lot yet.
     @Entry var shirts: [String: PlatformColor] = [:]
+    /// Says the characters' lines out loud, and keeps their calls.
+    @Entry var narrator: Narrator? = nil
 }
 
 extension Image {
@@ -302,6 +358,7 @@ private struct CharacterStatus: View {
 /// The conversation with one character.
 private struct ConversationView: View {
     @Environment(ServerConnection.self) private var server
+    @Environment(\.narrator) private var narrator
     let session: AgentSession
     @State private var draft = ""
 
@@ -373,6 +430,8 @@ private struct ConversationView: View {
         let text = draft
         guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         draft = ""
+        // Something new to do: whatever it rang about can wait.
+        narrator?.hangUp(on: session.id)
         Task { await session.send(text) }
     }
 }
@@ -568,6 +627,9 @@ extension ServerConnection {
 }
 
 extension AgentSession {
+    /// Working, or waiting for you in the middle of its work.
+    var isOnTheJob: Bool { status == .running || isWaitingForYou }
+
     var statusText: String {
         if isWaitingForYou { return "Waiting for you" }
         switch status {

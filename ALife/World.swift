@@ -95,10 +95,14 @@ final class World {
         let name: String
         /// Its shirt's colour as `#RRGGBB`, if the server gives it one.
         let color: String?
-        /// Working, or waiting for you in the middle of its work.
+        /// Working, waiting for you in the middle of its work, or with
+        /// something still to tell you: a call, or lines yet to be said.
         let isAtWork: Bool
         /// A tool call is waiting for your yes or no.
         let isWaitingForYou: Bool
+        /// It finished a job while you were out of earshot, and is calling
+        /// you about it.
+        let isCalling: Bool
         /// The ids of the helpers (subagents) it has out working right now.
         let subagents: [String]
     }
@@ -112,15 +116,17 @@ final class World {
         let shirt: PlatformColor
         var name: String
         var isWaitingForYou = false
+        var isCalling = false
     }
 
     /// The lawn in front of the door: where agents wait.
     private static let lawn = LotPlan.lawn.tiles.map { Tile(x: $0.x, z: $0.y) }
 
     /// Makes the scene match the sessions: one character each, in its room
-    /// in the office while it works (or waits for you mid-task) and out on
-    /// the lawn otherwise, with a ring under the one you are talking to, and
-    /// a sheep in its room for each helper it has out.
+    /// in the office while it works (or waits for you mid-task, or has
+    /// something left to tell you) and out on the lawn otherwise, with a
+    /// ring under the one you are talking to, a phone ringing over the ones
+    /// calling you, and a sheep in its room for each helper it has out.
     func show(_ residents: [Resident], selectedID: String?) {
         let current = Set(residents.map(\.id))
         for (id, gone) in agentCharacters where !current.contains(id) {
@@ -137,6 +143,12 @@ final class World {
             if shown.isWaitingForYou != resident.isWaitingForYou {
                 shown.isWaitingForYou = resident.isWaitingForYou
                 Self.setWaitingMarker(resident.isWaitingForYou, on: shown.entity)
+            }
+            // The "!" goes first: a phone can wait, a request can't.
+            let isRinging = resident.isCalling && !resident.isWaitingForYou
+            if shown.isCalling != isRinging {
+                shown.isCalling = isRinging
+                Self.setCallingMarker(isRinging, on: shown.entity)
             }
             shown.entity.findEntity(named: "Selection")?.isEnabled = resident.id == selectedID
 
@@ -282,6 +294,19 @@ final class World {
         marker.position = [0, 1.3, 0]
         marker.components.set(BillboardComponent())
         marker.addChild(text)
+        character.addChild(marker)
+    }
+
+    /// A phone ringing over the character's head while it calls you.
+    private static func setCallingMarker(_ isShown: Bool, on character: Entity) {
+        character.findEntity(named: "Calling")?.removeFromParent()
+        guard isShown else { return }
+
+        let marker = Entity()
+        marker.name = "Calling"
+        marker.position = [0, 1.3, 0]
+        marker.components.set(BillboardComponent())
+        marker.addChild(Phone.makeRingingHandset())
         character.addChild(marker)
     }
 

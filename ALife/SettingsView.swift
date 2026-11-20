@@ -70,7 +70,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Voices")
                 } footer: {
-                    Text("Each character says what it has to say out loud, in a voice of its own, while you stand within \(Int(Earshot.distance)) tiles of it. Nothing said yet, with the voices ready, means no character has had anything to say near you. The voice model comes from the server once, and speaks on this device. See Voices in a-life-server/README.md.")
+                    Text("Each character says what it has to say out loud, in a voice of its own, while you stand within \(Int(Earshot.distance)) tiles of it. If you were further away, it calls you once its job is done, and you can take the call to hear what you missed. Nothing said yet, with the voices ready, means no character has had anything to say near you. The voice model comes from the server once, and speaks on this device. See Voices in a-life-server/README.md.")
                 }
             }
             .formStyle(.grouped)
