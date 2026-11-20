@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Something that can say a character's lines out loud. The app's speaks
 /// with Phonon; the tests use one that only writes down what it was asked.
@@ -27,24 +28,43 @@ public enum Earshot {
 }
 
 /// Says the characters' lines out loud, in a voice each, while you stand
-/// close enough to hear them, and keeps quiet otherwise.
+/// close enough to hear them, and rings you about the rest.
 ///
 /// Only what a character says to you is spoken, not your own messages, its
-/// tool calls or its errors. A line said out of earshot is let go rather
-/// than saved for later. Lines are said one at a time, in the order they
-/// came; walking away from a character cuts it off.
+/// tool calls or its errors. Lines are said one at a time, in the order they
+/// came; walking away from a character cuts it off. What a character says
+/// while you are out of earshot, or hadn't heard yet when you walked off, is
+/// kept for it, and once its job is done it calls you with it: take the call
+/// to hear the lot in its voice, wherever you are, or hang up.
 @MainActor
+@Observable
 public final class Narrator {
     /// One character, as the narrator hears it.
     public struct Speaker: Equatable {
         public let id: String
         /// What was said in its session lately, oldest first.
         public let messages: [Message]
+        /// Whether it is still on the job. Once it isn't, whatever you
+        /// missed of what it said turns into a call.
+        public let isWorking: Bool
 
-        public init(id: String, messages: [Message]) {
+        public init(id: String, messages: [Message], isWorking: Bool = false) {
             self.id = id
             self.messages = messages
+            self.isWorking = isWorking
         }
+    }
+
+    /// A character calling you, because it finished a job while you were too
+    /// far away to hear what it had to say.
+    public struct Call: Equatable, Identifiable {
+        /// The character calling, by session.
+        public let speakerID: String
+        /// What you missed, oldest first, as it will be said.
+        public internal(set) var lines: [String]
+        let voice: Int
+
+        public var id: String { speakerID }
     }
 
     /// A line waiting to be said, or being said.
@@ -52,11 +72,19 @@ public final class Narrator {
         let speakerID: String
         let voice: Int
         let text: String
+        /// Part of a call you took, so said wherever you stand.
+        var isCall = false
     }
 
-    private let engine: any SpeechEngine
-    /// The messages already heard (spoken or let go), by speaker.
-    private var heard: [String: Set<String>] = [:]
+    @ObservationIgnored private let engine: any SpeechEngine
+    /// The messages already heard (spoken, kept or let go), by speaker.
+    @ObservationIgnored private var heard: [String: Set<String>] = [:]
+    /// Who was still on the job when last heard from.
+    @ObservationIgnored private var working: Set<String> = []
+    /// The lines you missed from characters still on the job, by speaker.
+    private(set) var missed: [String: [Line]] = [:]
+    /// The characters calling you, in the order they rang, one call each.
+    public private(set) var calls: [Call] = []
     private(set) var waiting: [Line] = []
     private(set) var speaking: Line?
 
@@ -66,36 +94,113 @@ public final class Narrator {
 
     /// Takes in what the characters have said lately. Each character's voice
     /// is its place in `speakers`. Its new lines are said if it is in
-    /// `inEarshot`, and let go if not.
+    /// `inEarshot`, and kept for a call if not.
     public func listen(to speakers: [Speaker], inEarshot: Set<String>) {
         for (voice, speaker) in speakers.enumerated() {
             var heard = heard[speaker.id] ?? []
             for message in speaker.messages where !heard.contains(message.id) {
                 heard.insert(message.id)
-                guard message.kind == .agent, inEarshot.contains(speaker.id) else { continue }
+                guard message.kind == .agent else { continue }
                 let text = SpokenText.from(message.text)
                 guard !text.isEmpty else { continue }
-                waiting.append(Line(speakerID: speaker.id, voice: voice, text: text))
+                let line = Line(speakerID: speaker.id, voice: voice, text: text)
+                if inEarshot.contains(speaker.id) {
+                    waiting.append(line)
+                } else {
+                    missed[speaker.id, default: []].append(line)
+                }
             }
             // Only the ones still listed can come round again.
             self.heard[speaker.id] = heard.intersection(speaker.messages.map(\.id))
         }
+        working = Set(speakers.filter(\.isWorking).map(\.id))
+        ring()
         sayNext()
     }
 
+    /// Marks everything the characters have said so far as heard, without
+    /// saying it or keeping it for a call: what was said before you came.
+    public func letGo(of speakers: [Speaker]) {
+        for speaker in speakers {
+            heard[speaker.id, default: []].formUnion(speaker.messages.map(\.id))
+        }
+    }
+
     /// You or the characters moved: lines from those now out of earshot are
-    /// dropped, and one being said is cut off.
+    /// kept for a call, and one being said is cut off and kept too. A call
+    /// you took carries on wherever you go.
     public func listenerMoved(inEarshot: Set<String>) {
-        waiting.removeAll { !inEarshot.contains($0.speakerID) }
-        if let speaking, !inEarshot.contains(speaking.speakerID) {
+        let outOfEarshot = waiting.filter { !$0.isCall && !inEarshot.contains($0.speakerID) }
+        guard !outOfEarshot.isEmpty || speaking.map({ !$0.isCall && !inEarshot.contains($0.speakerID) }) == true else { return }
+        waiting.removeAll { !$0.isCall && !inEarshot.contains($0.speakerID) }
+        var kept = outOfEarshot
+        if let speaking, !speaking.isCall, !inEarshot.contains(speaking.speakerID) {
+            kept.insert(speaking, at: 0)
             engine.stop()
         }
+        for line in kept {
+            missed[line.speakerID, default: []].append(line)
+        }
+        ring()
+    }
+
+    /// Answers `speakerID`'s call: what you missed is said next, in its
+    /// voice, wherever you stand.
+    public func take(callFrom speakerID: String) {
+        guard let index = calls.firstIndex(where: { $0.speakerID == speakerID }) else { return }
+        let call = calls.remove(at: index)
+        let lines = call.lines.map { Line(speakerID: speakerID, voice: call.voice, text: $0, isCall: true) }
+        // Ahead of anything else waiting, after any other call you took.
+        let place = waiting.lastIndex(where: \.isCall).map { $0 + 1 } ?? 0
+        waiting.insert(contentsOf: lines, at: place)
+        sayNext()
+    }
+
+    /// Hangs up on `speakerID` without hearing it out: its call, and
+    /// anything kept for one, are let go, and a call you took stops.
+    public func hangUp(on speakerID: String) {
+        calls.removeAll { $0.speakerID == speakerID }
+        missed[speakerID] = nil
+        waiting.removeAll { $0.isCall && $0.speakerID == speakerID }
+        if let speaking, speaking.isCall, speaking.speakerID == speakerID {
+            engine.stop()
+        }
+    }
+
+    /// Whether `speakerID` still has something for you: a call, lines kept
+    /// for one, or lines waiting to be said or being said. Until it hasn't,
+    /// it stays at its desk.
+    public func hasSomethingToSay(_ speakerID: String) -> Bool {
+        calls.contains { $0.speakerID == speakerID }
+            || missed[speakerID]?.isEmpty == false
+            || waiting.contains { $0.speakerID == speakerID }
+            || speaking?.speakerID == speakerID
+    }
+
+    /// Whether `speakerID` is calling you.
+    public func isCalling(_ speakerID: String) -> Bool {
+        calls.contains { $0.speakerID == speakerID }
     }
 
     /// Stops talking and forgets what was waiting to be said.
     public func hush() {
         waiting = []
         if speaking != nil { engine.stop() }
+    }
+
+    /// Each character done with its job, with lines you missed, calls you,
+    /// or adds them to the call it has already made.
+    private func ring() {
+        let done = missed.filter { !working.contains($0.key) && !$0.value.isEmpty }
+        // In the characters' order, when several finish at once.
+        for (speakerID, lines) in done.sorted(by: { $0.value[0].voice < $1.value[0].voice }) {
+            missed[speakerID] = nil
+            if let index = calls.firstIndex(where: { $0.speakerID == speakerID }) {
+                calls[index].lines += lines.map(\.text)
+            } else {
+                calls.append(Call(speakerID: speakerID, lines: lines.map(\.text), voice: lines[0].voice))
+            }
+        }
     }
 
     private func sayNext() {

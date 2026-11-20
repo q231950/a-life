@@ -71,14 +71,14 @@ final class NarratorTests: XCTestCase {
         XCTAssertEqual(notebook.said.map(\.text), ["They're blooming. See the bed."])
     }
 
-    func testALineSaidOutOfEarshotIsLetGo() async {
+    func testALineSaidOutOfEarshotIsntSaidWhenYouWalkOver() async {
         let notebook = Notebook()
         let narrator = Narrator(engine: notebook)
-        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Far away.")])], inEarshot: [])
-        // Walking over afterwards doesn't bring it back.
-        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Far away.")])], inEarshot: ["gardener"])
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Far away.")], isWorking: true)], inEarshot: [])
+        // Walking over afterwards doesn't say it there and then.
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Far away.")], isWorking: true)], inEarshot: ["gardener"])
         narrator.listen(
-            to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Far away."), agent("2", "Close by.")])],
+            to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Far away."), agent("2", "Close by.")], isWorking: true)],
             inEarshot: ["gardener"]
         )
         await wait(for: "the line") { notebook.isSaying }
@@ -123,6 +123,132 @@ final class NarratorTests: XCTestCase {
         notebook.finishLine()
         await wait(for: "quiet") { narrator.speaking == nil }
         XCTAssertTrue(narrator.waiting.isEmpty)
+    }
+
+    // MARK: Calls
+
+    func testLinesYouMissedTurnIntoACallWhenTheJobEnds() {
+        let narrator = Narrator(engine: Notebook())
+        let said = [agent("1", "Planting."), agent("2", "**Done**.")]
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: Array(said.prefix(1)), isWorking: true)], inEarshot: [])
+        XCTAssertTrue(narrator.calls.isEmpty) // still on the job
+        XCTAssertTrue(narrator.hasSomethingToSay("gardener"))
+
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: said, isWorking: false)], inEarshot: [])
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["gardener"])
+        XCTAssertEqual(narrator.calls.first?.lines, ["Planting.", "Done."])
+        XCTAssertTrue(narrator.isCalling("gardener"))
+        XCTAssertTrue(narrator.hasSomethingToSay("gardener"))
+    }
+
+    func testLinesYouWalkAwayFromAreKeptForTheCall() async {
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook)
+        let gardener = Narrator.Speaker(id: "gardener", messages: [agent("g1", "Roses."), agent("g2", "And tulips.")], isWorking: true)
+        narrator.listen(to: [gardener], inEarshot: ["gardener"])
+        await wait(for: "the first line") { notebook.isSaying }
+
+        narrator.listenerMoved(inEarshot: [])
+        let done = Narrator.Speaker(id: "gardener", messages: gardener.messages, isWorking: false)
+        narrator.listen(to: [done], inEarshot: [])
+        XCTAssertEqual(narrator.calls.first?.lines, ["Roses.", "And tulips."])
+    }
+
+    func testNoCallForLinesYouHeard() async {
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook)
+        let working = Narrator.Speaker(id: "gardener", messages: [agent("1", "Roses.")], isWorking: true)
+        narrator.listen(to: [working], inEarshot: ["gardener"])
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: working.messages)], inEarshot: ["gardener"])
+        await wait(for: "the line") { notebook.isSaying }
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertTrue(narrator.hasSomethingToSay("gardener")) // still saying it
+
+        notebook.finishLine()
+        await wait(for: "quiet") { narrator.speaking == nil }
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+    }
+
+    func testWhatWasSaidBeforeYouCameIsLetGo() {
+        let narrator = Narrator(engine: Notebook())
+        let gardener = Narrator.Speaker(id: "gardener", messages: [agent("1", "Long ago.")])
+        narrator.letGo(of: [gardener])
+        narrator.listen(to: [gardener], inEarshot: [])
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+    }
+
+    func testTakingACallSaysWhatYouMissedWhereverYouAre() async {
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook)
+        let builder = Narrator.Speaker(id: "builder", messages: [agent("b1", "Bricks.")])
+        let gardener = Narrator.Speaker(id: "gardener", messages: [agent("g1", "Roses."), agent("g2", "Tulips.")])
+        narrator.listen(to: [builder, gardener], inEarshot: [])
+
+        narrator.take(callFrom: "gardener")
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["builder"])
+        await wait(for: "the first line") { notebook.isSaying }
+        narrator.listenerMoved(inEarshot: []) // far away, and it carries on
+        XCTAssertEqual(notebook.stops, 0)
+        XCTAssertTrue(narrator.hasSomethingToSay("gardener"))
+
+        notebook.finishLine()
+        await wait(for: "the second line") { notebook.said.count == 2 && notebook.isSaying }
+        notebook.finishLine()
+        await wait(for: "quiet") { narrator.speaking == nil }
+        XCTAssertEqual(notebook.said.map(\.text), ["Roses.", "Tulips."])
+        XCTAssertEqual(notebook.said.map(\.voice), [1, 1])
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+        XCTAssertTrue(narrator.hasSomethingToSay("builder")) // still ringing
+    }
+
+    func testHangingUpLetsTheCallGoUnsaid() async {
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook)
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Roses.")])], inEarshot: [])
+        narrator.hangUp(on: "gardener")
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+        await Task.yield()
+        XCTAssertTrue(notebook.said.isEmpty)
+
+        // Lines kept while it's still at work go too.
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("2", "Tulips.")], isWorking: true)], inEarshot: [])
+        narrator.hangUp(on: "gardener")
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("2", "Tulips.")])], inEarshot: [])
+        XCTAssertTrue(narrator.calls.isEmpty)
+    }
+
+    func testHangingUpStopsACallYouTook() async {
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook)
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Roses."), agent("2", "Tulips.")])], inEarshot: [])
+        narrator.take(callFrom: "gardener")
+        await wait(for: "the first line") { notebook.isSaying }
+        narrator.hangUp(on: "gardener")
+        XCTAssertEqual(notebook.stops, 1)
+        await wait(for: "quiet") { narrator.speaking == nil }
+        XCTAssertEqual(notebook.said.map(\.text), ["Roses."])
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+    }
+
+    func testSeveralCallsQueueOneForEachCharacter() {
+        let narrator = Narrator(engine: Notebook())
+        let builder = Narrator.Speaker(id: "builder", messages: [agent("b1", "Bricks.")], isWorking: true)
+        let gardener = Narrator.Speaker(id: "gardener", messages: [agent("g1", "Roses.")])
+        narrator.listen(to: [builder, gardener], inEarshot: [])
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["gardener"])
+
+        let builderDone = Narrator.Speaker(id: "builder", messages: builder.messages)
+        narrator.listen(to: [builderDone, gardener], inEarshot: [])
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["gardener", "builder"])
+
+        // Another job done before you answered adds to the same call.
+        let gardenerAgain = Narrator.Speaker(id: "gardener", messages: [agent("g1", "Roses."), agent("g2", "Tulips.")])
+        narrator.listen(to: [builderDone, gardenerAgain], inEarshot: [])
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["gardener", "builder"])
+        XCTAssertEqual(narrator.calls.first?.lines, ["Roses.", "Tulips."])
     }
 
     // MARK: How it sounds
