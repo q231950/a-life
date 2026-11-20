@@ -9,10 +9,10 @@ typealias PlatformColor = UIColor
 #endif
 
 /// Builds the lot (floor tiles, the office in the middle, some bushes, your
-/// character), turns taps on tiles into walks, shows one character per
-/// session on the server, with a room of its own in the office and a little
-/// sheep for each helper it has sent off, and shows what the characters
-/// have built and planted.
+/// character) with the land, the sea and the sky round it, turns taps on
+/// tiles into walks, shows one character per session on the server, with a
+/// room of its own in the office and a little sheep for each helper it has
+/// sent off, and shows what the characters have built and planted.
 @MainActor
 final class World {
     let root = Entity()
@@ -63,7 +63,10 @@ final class World {
         marker.isEnabled = false
         root.addChild(marker)
 
-        root.addChild(Self.makeSun())
+        let sun = Self.makeSun()
+        root.addChild(sun)
+        root.addChild(Horizon.make())
+        root.addChild(SkyDome.make(sunlight: sun, root: root))
         root.addChild(camera.root)
         camera.focus(on: lot.position(of: Tile(x: LotPlan.house.x + LotPlan.house.width / 2, z: LotPlan.house.y + LotPlan.house.depth)))
     }
@@ -537,7 +540,9 @@ final class World {
         return sheep
     }
 
-    private static func makeSun() -> Entity {
+    /// The sunlight, which `DaySystem` moves across the sky and turns into
+    /// moonlight at night.
+    private static func makeSun() -> DirectionalLight {
         let sun = DirectionalLight()
         sun.light.intensity = 4000
         sun.shadow = DirectionalLightComponent.Shadow(maximumDistance: 80, depthBias: 2)
