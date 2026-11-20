@@ -59,16 +59,9 @@ struct WorldView: View {
                 .padding()
         }
         .overlay(alignment: .bottom) {
-            VStack(spacing: 8) {
-                AgentPanel(selectedID: $selectedID)
-                    .environment(\.shirts, shirts)
-                Text(hint)
-                    .font(.footnote)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.thinMaterial, in: Capsule())
-            }
-            .padding()
+            AgentPanel(selectedID: $selectedID)
+                .environment(\.shirts, shirts)
+                .padding()
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
@@ -153,8 +146,6 @@ struct WorldView: View {
     }
 
     #if os(macOS)
-    private let hint = "Click a character to talk to it · click the grass to walk · drag to orbit · scroll or pinch to zoom"
-
     /// SwiftUI has no scroll-wheel gesture, so listen for the events directly,
     /// and zoom only when you scroll over the lot itself, not over the panel,
     /// the buttons or anything else laid over it.
@@ -176,8 +167,6 @@ struct WorldView: View {
         }
         scrollMonitor = nil
     }
-    #else
-    private let hint = "Tap a character to talk to it · tap the grass to walk · drag to orbit · pinch to zoom"
     #endif
 }
 
