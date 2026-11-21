@@ -1,5 +1,6 @@
 import ALifeAPI
 import Foundation
+import simd
 
 /// The lot in its box: four walls standing on the lot's edges, with a world
 /// painted on their insides, and a flat sky over the top. Behind the office,
@@ -93,6 +94,55 @@ public enum HorizonPlan {
         let spot = wallSpot(around: around)
         return bearing(x: spot.x, z: spot.z)
     }
+
+    // MARK: The edges
+
+    /// One of the box's twelve edges, where two of its sides meet: two walls
+    /// at a corner, a wall and the sky at the top, or a wall and the lot at
+    /// the bottom.
+    public struct Edge: Equatable, Sendable {
+        /// Its two ends.
+        public var from: SIMD3<Float>
+        public var to: SIMD3<Float>
+        /// Which way each of the two sides it joins faces: into the box.
+        public var sides: (SIMD3<Float>, SIMD3<Float>)
+
+        public static func == (a: Edge, b: Edge) -> Bool {
+            a.from == b.from && a.to == b.to && a.sides.0 == b.sides.0 && a.sides.1 == b.sides.1
+        }
+    }
+
+    /// Which way each of the box's six sides faces, into the box: the lot,
+    /// the sky, and the four walls.
+    public static let sides: [SIMD3<Float>] = [[0, 1, 0], [0, -1, 0]] + Wall.allCases.map(\.inward)
+
+    /// The box's twelve edges.
+    public static let edges: [Edge] = {
+        let middle = SIMD3<Float>(0, wallHeight / 2, 0)
+        let extent = SIMD3<Float>(halfWidth, wallHeight / 2, halfWidth)
+        var edges: [Edge] = []
+        for (index, first) in sides.enumerated() {
+            for second in sides[(index + 1)...] where simd_dot(first, second) == 0 {
+                // Back from the middle to both sides, and along the third
+                // way to both ends.
+                let corner = middle - first * extent - second * extent
+                let along = simd_abs(simd_cross(first, second))
+                edges.append(Edge(from: corner - along * extent, to: corner + along * extent, sides: (first, second)))
+            }
+        }
+        return edges
+    }()
+
+    /// How much the box's sides are shaded `distance` metres from one of its
+    /// edges, from `seamShade` right at the edge to nothing `width` metres
+    /// out, softly, as in the inside corner of a real box.
+    public static func seamShade(at distance: Float, width: Float) -> Float {
+        let t = max(0, min(1, distance / width))
+        return seamShade * (1 - t) * (1 - t)
+    }
+
+    /// How much the box's sides are shaded right at an edge.
+    public static let seamShade: Float = 0.42
 
     // MARK: What the walls show
 

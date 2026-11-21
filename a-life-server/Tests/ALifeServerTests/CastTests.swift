@@ -38,12 +38,15 @@ final class CastTests: XCTestCase {
 
     // MARK: The shipped file
 
-    func testTheShippedFileHasTheGardenerTheBuilderTheEngineerTheFlamingoEngineerAndTheTeamLead() throws {
+    func testTheShippedFileStartsWithTheGardenerTheBuilderTheEngineerTheFlamingoEngineerAndTheTeamLead() throws {
         let cast = try Cast.load(contentsOf: Cast.shippedFile)
-        XCTAssertEqual(cast.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer", "team-lead"])
-        XCTAssertEqual(cast.map(\.name), ["Gardener", "Builder", "Engineer", "Flamingo Engineer", "Team Lead"])
-        XCTAssertEqual(cast.map(\.color), ["#D9594D", "#F2A633", "#8050C8", "#F27BA8", "#2A9D8F"])
-        XCTAssertEqual(cast.map(\.permissionMode), ["acceptEdits", "default", "default", "default", "default"])
+        // The Team Lead adds agents after the last one, so the file can grow,
+        // but these five always come first, as they are.
+        let founders = Array(cast.prefix(5))
+        XCTAssertEqual(founders.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer", "team-lead"])
+        XCTAssertEqual(founders.map(\.name), ["Gardener", "Builder", "Engineer", "Flamingo Engineer", "Team Lead"])
+        XCTAssertEqual(founders.map(\.color), ["#D9594D", "#F2A633", "#8050C8", "#F27BA8", "#2A9D8F"])
+        XCTAssertEqual(founders.map(\.permissionMode), ["acceptEdits", "default", "default", "default", "default"])
         // The Engineer works on a*life itself, in its checkout, and the
         // Flamingo Engineer on the three repositories of Flamingo Chess.
         let flamingoChess = Project(id: "flamingo-engineer", source: .repositories([
@@ -51,10 +54,10 @@ final class CastTests: XCTestCase {
             Project.Repository(address: "git@github.com:q231950/flamingo-chess-light.git"),
             Project.Repository(address: "git@github.com:q231950/neoneon.git"),
         ]))
-        XCTAssertEqual(cast.map(\.workspace), [.lot, .lot, .aLife, .project(flamingoChess), .lot])
-        XCTAssertEqual(cast.map(\.changesThings), [false, true, true, true, true])
-        XCTAssertEqual(cast.map(\.helper.name), ["planter", "construction-worker", "a-life-expert", "flamingo-expert", "recruiter"])
-        XCTAssertEqual(cast.map(\.helper.tools), [
+        XCTAssertEqual(founders.map(\.workspace), [.lot, .lot, .aLife, .project(flamingoChess), .lot])
+        XCTAssertEqual(founders.map(\.changesThings), [false, true, true, true, true])
+        XCTAssertEqual(founders.map(\.helper.name), ["planter", "construction-worker", "a-life-expert", "flamingo-expert", "recruiter"])
+        XCTAssertEqual(founders.map(\.helper.tools), [
             ["Read", "Glob", "Grep", "Write", "Edit"],
             ["Read", "Glob", "Grep", "Write", "Edit"],
             ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
@@ -64,6 +67,11 @@ final class CastTests: XCTestCase {
             ["Read", "Glob", "Grep", "Bash"],
         ])
 
+        // Every agent, the five and any added since, has a name and a helper
+        // of its own, and a role and helper that say who they are.
+        XCTAssertEqual(Set(cast.map(\.id)).count, cast.count)
+        XCTAssertEqual(Set(cast.map(\.name)).count, cast.count)
+        XCTAssertEqual(Set(cast.map(\.helper.name)).count, cast.count)
         for character in cast {
             XCTAssertTrue(character.role.hasPrefix("You are the \(character.name), a character in a*life, a little life sim."))
             // Each paragraph of a role is one line, as Claude Code is given it.

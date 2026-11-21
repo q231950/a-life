@@ -1,14 +1,17 @@
 import ALifeClient
 import CoreGraphics
 import Foundation
+import Metal
 import RealityKit
 
 /// The sky in the lot's box: painted on the walls, behind the world on them
 /// (see `Horizon`), and on a flat sky over the top, coloured from the
-/// horizon up, with the sun crossing it by day and the moon and the stars
-/// by night. Each is painted where you would see it from the middle of the
-/// lot (`HorizonPlan.skyPoint`). `DaySystem` keeps it, the sunlight and the
-/// world on the walls in step with the time of day, from `DayClock`.
+/// horizon up, with the sun crossing it by day, the moon, with a soft glow
+/// round it, and the stars by night, and a few soft clouds drifting across
+/// it (see `Clouds`). Each is painted where you would see it from the
+/// middle of the lot (`HorizonPlan.skyPoint`). `DaySystem` keeps it, the
+/// sunlight and the world on the walls in step with the time of day, from
+/// `DayClock`.
 @MainActor
 enum SkyBox {
     /// How wide the sun and the moon look, in radians, from the middle of
@@ -19,6 +22,16 @@ enum SkyBox {
     /// in front of the sky but behind the world on the walls.
     nonisolated static let bodyInset: Float = 0.03
     nonisolated static let starInset: Float = 0.02
+    /// The clouds are in front of the sun, the moon and the stars, and
+    /// behind the world on the walls, which starts 5 cm in.
+    nonisolated static let cloudInset: Float = 0.04
+    /// How wide the moon's glow is, as many times the moon's own size.
+    nonisolated static let moonGlowSize: Float = 3.2
+
+    /// The order the sky's see-through parts are drawn in, back to front:
+    /// the stars, the moon's glow, the sun and the moon, the clouds, and
+    /// the shading along the box's edges (see `BoxEdges`).
+    static let order = ModelSortGroup()
 
     /// The sky, which lights the lot with `sunlight`, and with a soft light
     /// from all round that every entity under `root` takes in.
@@ -41,6 +54,8 @@ enum SkyBox {
         let moon = ModelEntity(mesh: disc, materials: [UnlitMaterial(applyPostProcessToneMap: false)])
         moon.name = "Moon"
         sky.addChild(moon)
+        let moonGlow = makeMoonGlow()
+        moon.addChild(moonGlow)
 
         var starMaterial = UnlitMaterial(applyPostProcessToneMap: false)
         starMaterial.color = .init(tint: PlatformColor(SIMD3(0.95, 0.96, 1)))
@@ -50,6 +65,17 @@ enum SkyBox {
         stars.model = ModelComponent(mesh: .generatePlane(width: 0.01, height: 0.01), materials: [starMaterial])
         stars.isEnabled = false
         sky.addChild(stars)
+
+        let clouds = makeClouds()
+        sky.addChild(clouds)
+
+        // The stars first, then the moon's glow, the sun and the moon, and
+        // the clouds in front of them all.
+        stars.components.set(ModelSortGroupComponent(group: order, order: 0))
+        for body in [sun, moon, moonGlow] {
+            body.components.set(ModelSortGroupComponent(group: order, order: body === moonGlow ? 1 : 2))
+        }
+        clouds.components.set(ModelSortGroupComponent(group: order, order: 3))
 
         // A soft light from all round, the sky's and the ground's, which
         // dims at night.
@@ -68,7 +94,9 @@ enum SkyBox {
             gradient: gradient,
             sun: sun,
             moon: moon,
+            moonGlow: moonGlow,
             stars: stars,
+            clouds: clouds,
             ambience: ambience
         ))
         return sky
@@ -96,6 +124,15 @@ enum SkyBox {
     /// The colour of the sun's disc: white when high, orange near the horizon.
     nonisolated static func sunColor(in sky: Sky) -> SIMD3<Float> {
         mix(SIMD3(1, 0.5, 0.22), SIMD3(1, 0.97, 0.86), smoothstep(0, 20, Float(sky.sun.elevation) * 180 / .pi))
+    }
+
+    /// The colour the clouds are lit in: white by day, warm at dawn and
+    /// dusk, and a dark moonlit blue at night.
+    nonisolated static func cloudColor(in sky: Sky) -> SIMD3<Float> {
+        let daylight = Float(sky.daylight), glow = Float(sky.glow)
+        let night = SIMD3<Float>(0.13, 0.15, 0.24)
+        let warm = SIMD3<Float>(1, 0.62, 0.48)
+        return mix(mix(night, SIMD3(1, 1, 1), daylight), warm, glow * 0.85)
     }
 
     /// The light the world on the walls is painted in: full by day, warm at
@@ -257,17 +294,160 @@ enum SkyBox {
         inward.z < -0.5 ? simd_quatf(angle: .pi, axis: [0, 1, 0]) : simd_quatf(from: [0, 0, 1], to: inward)
     }
 
+    /// A soft glow round the moon, as a child of its disc, a little behind
+    /// it.
+    private static func makeMoonGlow() -> ModelEntity {
+        var material = UnlitMaterial(applyPostProcessToneMap: false)
+        material.color = .init(tint: PlatformColor(SIMD3(0.75, 0.8, 1)))
+        let size = 64
+        let falloff = makeGrey(width: size, height: size) { column, row in
+            let x = (Float(column) + 0.5) / Float(size) * 2 - 1, y = (Float(row) + 0.5) / Float(size) * 2 - 1
+            let t = min(1, (x * x + y * y).squareRoot())
+            return (1 - t) * (1 - t)
+        }
+        if let falloff {
+            material.blending = .transparent(opacity: .init(scale: 0, texture: .init(falloff)))
+        }
+        let glow = ModelEntity(mesh: .generatePlane(width: 2 * moonGlowSize, height: 2 * moonGlowSize), materials: [material])
+        glow.name = "Moon glow"
+        glow.position = [0, 0, -0.004]
+        return glow
+    }
+
+    // MARK: Clouds
+
+    /// The clouds, painted on the inside of the box like the sky, in front
+    /// of it, with a texture of them all round the sky by azimuth and
+    /// elevation (see `Clouds`). They drift by sliding the texture round,
+    /// so the mesh is built only once.
+    private static func makeClouds() -> ModelEntity {
+        let clouds = ModelEntity()
+        clouds.name = "Clouds"
+        guard let mesh = makeCloudMesh() else { return clouds }
+
+        let width = 512, height = 128
+        /// The azimuth and elevation of a pixel; the top row is straight up.
+        func spot(_ column: Int, _ row: Int) -> (azimuth: Double, elevation: Double) {
+            ((Double(column) + 0.5) / Double(width) * 2 * .pi, (1 - (Double(row) + 0.5) / Double(height)) * .pi / 2)
+        }
+        let light = makeGrey(width: width, height: height) { column, row in
+            let (azimuth, elevation) = spot(column, row)
+            return Float(Clouds.light(azimuth: azimuth, elevation: elevation))
+        }
+        let cover = makeGrey(width: width, height: height) { column, row in
+            let (azimuth, elevation) = spot(column, row)
+            return Float(Clouds.cover(azimuth: azimuth, elevation: elevation))
+        }
+        let sampler = MTLSamplerDescriptor()
+        sampler.minFilter = .linear
+        sampler.magFilter = .linear
+        sampler.sAddressMode = .repeat
+        sampler.tAddressMode = .clampToEdge
+        var material = UnlitMaterial(applyPostProcessToneMap: false)
+        material.writesDepth = false
+        if let light {
+            material.color = .init(tint: .white, texture: .init(light, sampler: .init(sampler)))
+        }
+        if let cover {
+            material.blending = .transparent(opacity: .init(scale: 1, texture: .init(cover, sampler: .init(sampler))))
+        }
+        clouds.model = ModelComponent(mesh: mesh, materials: [material])
+        return clouds
+    }
+
+    /// The part of the box's inside where clouds can be, a little in front
+    /// of the sky, with each spot's azimuth and elevation, seen from the
+    /// middle of the lot, as its texture coordinates.
+    private static func makeCloudMesh() -> MeshResource? {
+        let half = HorizonPlan.halfWidth, top = HorizonPlan.wallHeight
+        var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = [], coordinates: [SIMD2<Float>] = []
+
+        /// Where a spot on the box shows in the clouds' texture.
+        func coordinate(_ spot: SIMD3<Float>) -> SIMD2<Float> {
+            [HorizonPlan.bearing(x: spot.x, z: spot.z) / (2 * .pi), HorizonPlan.skyElevation(at: spot) / (.pi / 2)]
+        }
+        let lowest = Float(Clouds.lowest) / (.pi / 2) - 0.01, highest = Float(Clouds.highest) / (.pi / 2) + 0.01
+        func addTriangle(_ corners: [SIMD3<Float>], inward: SIMD3<Float>) {
+            var uv = corners.map(coordinate)
+            // Only where there may be clouds.
+            guard uv.contains(where: { $0.y > lowest }), uv.contains(where: { $0.y < highest }) else { return }
+            // Across north, where the azimuth goes from all the way round
+            // back to 0, carry on past 1 instead; the texture repeats.
+            if (uv.map(\.x).max() ?? 0) - (uv.map(\.x).min() ?? 0) > 0.5 {
+                uv = uv.map { $0.x < 0.5 ? [$0.x + 1, $0.y] : $0 }
+            }
+            var points = corners.map { $0 + inward * cloudInset }
+            // Wound to face `inward`.
+            if simd_dot(simd_cross(points[1] - points[0], points[2] - points[0]), inward) < 0 {
+                points.swapAt(1, 2)
+                uv.swapAt(1, 2)
+            }
+            positions += points
+            normals += [inward, inward, inward]
+            coordinates += uv
+        }
+        /// A grid of `columns` by `rows` cells, with corners at `point`.
+        func addGrid(columns: Int, rows: Int, inward: SIMD3<Float>, point: (Int, Int) -> SIMD3<Float>) {
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    let a = point(column, row), b = point(column + 1, row)
+                    let c = point(column, row + 1), d = point(column + 1, row + 1)
+                    addTriangle([a, b, c], inward: inward)
+                    addTriangle([b, d, c], inward: inward)
+                }
+            }
+        }
+
+        // Finer than the sky's, so the clouds keep their shape.
+        let steps = 32, rows = 24
+        for start in stride(from: Float(0), to: HorizonPlan.perimeter, by: 2 * half) {
+            let corner = start + half
+            let inward = HorizonPlan.wallSpot(around: corner + half).wall.inward
+            addGrid(columns: steps, rows: rows, inward: inward) { column, row in
+                HorizonPlan.wallPoint(around: corner + Float(column) / Float(steps) * 2 * half, height: Float(row) / Float(rows) * top)
+            }
+        }
+        addGrid(columns: steps, rows: steps, inward: [0, -1, 0]) { column, row in
+            [-half + Float(column) / Float(steps) * 2 * half, top, -half + Float(row) / Float(steps) * 2 * half]
+        }
+
+        var descriptor = MeshDescriptor(name: "Clouds")
+        descriptor.positions = MeshBuffers.Positions(positions)
+        descriptor.normals = MeshBuffers.Normals(normals)
+        descriptor.textureCoordinates = MeshBuffers.TextureCoordinates(coordinates)
+        descriptor.primitives = .triangles((0..<UInt32(positions.count)).map { $0 })
+        return try? MeshResource.generate(from: [descriptor])
+    }
+
+    /// A grey image, `value(column, row)` from 0 to 1 for each pixel, from
+    /// the top row down, as a texture.
+    nonisolated static func makeGrey(width: Int, height: Int, value: (Int, Int) -> Float) -> TextureResource? {
+        var pixels = [UInt8](repeating: 255, count: width * height * 4)
+        for row in 0..<height {
+            for column in 0..<width {
+                let level = UInt8(max(0, min(1, value(column, row))) * 255)
+                let index = (row * width + column) * 4
+                pixels[index] = level
+                pixels[index + 1] = level
+                pixels[index + 2] = level
+            }
+        }
+        guard let image = makeImage(pixels, width: width, height: height) else { return nil }
+        return try? TextureResource(image: image, options: .init(semantic: .raw, mipmapsMode: .none))
+    }
+
     // MARK: Stars
 
-    /// About 1,600 stars all round the sky, by the way each is seen from the
-    /// middle of the lot at midnight, and how big it looks, in radians.
+    /// About 2,000 stars all round the sky, by the way each is seen from the
+    /// middle of the lot at midnight, and how big it looks, in radians: big
+    /// enough to show on the walls from across the lot, too.
     nonisolated static let starField: [(direction: SIMD3<Float>, size: Float)] = {
         var random = SceneryRandom(seed: 3)
-        return (0..<1600).map { _ in
+        return (0..<2000).map { _ in
             let up = random.next(in: -1...1), angle = random.next(in: 0...(2 * .pi))
             let across = (1 - up * up).squareRoot()
             let direction = SIMD3<Float>(across * sin(angle), up, across * cos(angle))
-            let size = random.next(in: 0...1) < 0.06 ? random.next(in: 0.0047...0.007) : random.next(in: 0.0021...0.0042)
+            let size = random.next(in: 0...1) < 0.07 ? random.next(in: 0.0065...0.0095) : random.next(in: 0.003...0.0055)
             return (direction, size)
         }
     }()
@@ -300,7 +480,10 @@ struct SkyComponent: Component {
     let gradient: TextureResource?
     let sun: ModelEntity
     let moon: ModelEntity
+    /// The soft glow round the moon.
+    let moonGlow: ModelEntity
     let stars: ModelEntity
+    let clouds: ModelEntity
     /// The soft light from all round.
     let ambience: Entity
     /// When the sky was last brought up to date.

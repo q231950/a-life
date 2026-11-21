@@ -107,6 +107,51 @@ final class HorizonPlanTests: XCTestCase {
         }
     }
 
+    // MARK: The edges
+
+    func testTheBoxHasTwelveEdgesWhereItsSidesMeet() {
+        let edges = HorizonPlan.edges
+        XCTAssertEqual(edges.count, 12)
+        XCTAssertEqual(HorizonPlan.sides.count, 6)
+        var corners: [SIMD3<Float>: Int] = [:]
+        for edge in edges {
+            // Along the box's own lines: as long as a wall is wide, or tall.
+            let length = simd_distance(edge.from, edge.to)
+            XCTAssertTrue(abs(length - 2 * half) < 1e-4 || abs(length - HorizonPlan.wallHeight) < 1e-4, "\(length)")
+            // Between two sides at right angles, lying on both of them.
+            XCTAssertEqual(simd_dot(edge.sides.0, edge.sides.1), 0)
+            XCTAssertEqual(simd_dot(edge.to - edge.from, edge.sides.0), 0, accuracy: 1e-4)
+            XCTAssertEqual(simd_dot(edge.to - edge.from, edge.sides.1), 0, accuracy: 1e-4)
+            for end in [edge.from, edge.to] {
+                XCTAssertEqual(max(abs(end.x), abs(end.z)), half, accuracy: 1e-4)
+                XCTAssertTrue(end.y == 0 || end.y == HorizonPlan.wallHeight)
+                corners[end, default: 0] += 1
+            }
+        }
+        // Three edges meet at each of the box's eight corners.
+        XCTAssertEqual(corners.count, 8)
+        XCTAssertTrue(corners.values.allSatisfy { $0 == 3 })
+        // Four along the lot, four under the sky, and four up the corners.
+        XCTAssertEqual(edges.filter { $0.from.y == 0 && $0.to.y == 0 }.count, 4)
+        XCTAssertEqual(edges.filter { $0.from.y == HorizonPlan.wallHeight && $0.to.y == HorizonPlan.wallHeight }.count, 4)
+        XCTAssertEqual(edges.filter { $0.from.y != $0.to.y }.count, 4)
+    }
+
+    func testTheSeamsShadeSoftlyAwayFromTheEdges() {
+        XCTAssertEqual(HorizonPlan.seamShade(at: 0, width: 2), HorizonPlan.seamShade)
+        XCTAssertGreaterThan(HorizonPlan.seamShade, 0)
+        XCTAssertLessThan(HorizonPlan.seamShade, 0.5, "gently")
+        XCTAssertEqual(HorizonPlan.seamShade(at: 2, width: 2), 0)
+        XCTAssertEqual(HorizonPlan.seamShade(at: 5, width: 2), 0)
+        var previous = HorizonPlan.seamShade(at: 0, width: 2)
+        for distance in stride(from: Float(0.01), through: 2, by: 0.01) {
+            let shade = HorizonPlan.seamShade(at: distance, width: 2)
+            XCTAssertLessThan(shade, previous)
+            XCTAssertLessThan(previous - shade, 0.01, "no hard line")
+            previous = shade
+        }
+    }
+
     // MARK: The camera
 
     /// Every camera the rig allows, round pivots all over the lot, at a

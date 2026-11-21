@@ -28,6 +28,7 @@ struct ALifeApp: App {
         SkyComponent.registerComponent()
         NightLightsComponent.registerComponent()
         PaintComponent.registerComponent()
+        BoxEdgesComponent.registerComponent()
         CameraRigComponent.registerComponent()
         WalkSystem.registerSystem()
         SheepSystem.registerSystem()
