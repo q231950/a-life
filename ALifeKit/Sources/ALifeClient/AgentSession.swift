@@ -39,6 +39,9 @@ public final class AgentSession {
     /// A tool call is waiting for your yes or no. Until it has one, the
     /// character can't be told anything else.
     public var isWaitingForYou: Bool { !state.approvals.isEmpty }
+    /// Whether the character's tool calls are allowed without asking you.
+    /// Only this session's: each character has its own.
+    public var autoApprove: Bool { state.autoApprove }
 
     /// What was said in the session since this front end caught up with it,
     /// oldest first, as it happened: not what was said before and replayed
@@ -77,6 +80,16 @@ public final class AgentSession {
     /// Answers a tool call that is waiting for approval.
     public func respond(to approval: Approval, allow: Bool) async {
         await perform { try await $0.decide(approvalID: approval.id, allow: allow, in: self.id) }
+    }
+
+    /// Turns auto approve on or off for this character, for every front end.
+    /// Turning it on also allows whatever is waiting for you. The switch
+    /// shows the change straight away, and goes back if the server says no.
+    public func setAutoApprove(_ enabled: Bool) async {
+        let was = state.autoApprove
+        state.autoApprove = enabled
+        await perform { try await $0.setAutoApprove(enabled, in: self.id) }
+        if lastError != nil, state.autoApprove == enabled { state.autoApprove = was }
     }
 
     /// Ends the conversation and starts an empty one, for every front end.

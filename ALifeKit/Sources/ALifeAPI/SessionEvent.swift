@@ -23,6 +23,10 @@ public enum SessionEvent: Equatable, Sendable {
     case subagentStarted(Subagent)
     /// The helper reported back to the character, or was stopped.
     case subagentFinished(subagentID: String)
+    /// Auto approve was turned on or off in the session. While it is on,
+    /// every tool call that asks is allowed straight away, and settled as
+    /// `autoApproved`.
+    case autoApproveChanged(Bool)
     /// An event type this version doesn't know. It is skipped.
     case unknown(type: String)
 
@@ -38,6 +42,7 @@ public enum SessionEvent: Equatable, Sendable {
         case .approvalResolved: return "approval.resolved"
         case .subagentStarted: return "subagent.started"
         case .subagentFinished: return "subagent.finished"
+        case .autoApproveChanged: return "session.auto_approve"
         case .unknown(let type): return type
         }
     }
@@ -51,6 +56,7 @@ extension SessionEvent: Codable {
         case stopReason = "stop_reason"
         case approvalID = "approval_id"
         case subagentID = "subagent_id"
+        case autoApprove = "auto_approve"
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,6 +87,8 @@ extension SessionEvent: Codable {
             self = .subagentStarted(try container.decode(Subagent.self, forKey: .subagent))
         case "subagent.finished":
             self = .subagentFinished(subagentID: try container.decode(String.self, forKey: .subagentID))
+        case "session.auto_approve":
+            self = .autoApproveChanged(try container.decode(Bool.self, forKey: .autoApprove))
         default:
             self = .unknown(type: type)
         }
@@ -110,6 +118,8 @@ extension SessionEvent: Codable {
             try container.encode(subagent, forKey: .subagent)
         case .subagentFinished(let subagentID):
             try container.encode(subagentID, forKey: .subagentID)
+        case .autoApproveChanged(let autoApprove):
+            try container.encode(autoApprove, forKey: .autoApprove)
         case .unknown:
             break
         }
@@ -162,6 +172,9 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     /// The helpers out working for the character right now. One that has
     /// reported back is no longer listed.
     public var subagents: [Subagent] = []
+    /// Whether tool calls that ask are allowed without asking you. Each
+    /// session has its own; it is off until someone turns it on.
+    public var autoApprove = false
     /// Sequence number of the last event applied.
     public var lastSeq = 0
 
@@ -174,6 +187,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     public mutating func apply(_ envelope: EventEnvelope) {
         switch envelope.event {
         case .conversationStarted(let conversationID):
+            // Auto approve goes too. A server that keeps it on across the
+            // new conversation says so again straight after.
             self = SessionState(id: id, name: name, color: color)
             self.conversationID = conversationID
             status = .idle
@@ -222,6 +237,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
             }
         case .subagentFinished(let subagentID):
             subagents.removeAll { $0.id == subagentID }
+        case .autoApproveChanged(let autoApprove):
+            self.autoApprove = autoApprove
         case .unknown:
             break
         }
@@ -230,6 +247,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, color, status, activity, messages, approvals, conversation, subagents
+        case autoApprove = "auto_approve"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
         case lastSeq = "last_seq"
@@ -263,6 +281,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         }
         // Servers from before there were helpers don't send any.
         subagents = try container.decodeIfPresent([Subagent].self, forKey: .subagents) ?? []
+        // Nor from before there was auto approve.
+        autoApprove = try container.decodeIfPresent(Bool.self, forKey: .autoApprove) ?? false
         lastSeq = try container.decode(Int.self, forKey: .lastSeq)
     }
 }

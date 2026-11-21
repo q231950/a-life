@@ -89,6 +89,7 @@ struct AgentPanel: View {
                     } else if !isExpanded {
                         CharacterStatus(session: session)
                     }
+                    AutoApproveToggle(session: session)
                     Spacer(minLength: 0)
                     Button(isExpanded ? "Hide the conversation" : "Show the conversation",
                            systemImage: isExpanded ? "chevron.down" : "chevron.up") {
@@ -128,6 +129,30 @@ struct AgentPanel: View {
     }
 
     @Environment(\.narrator) private var narrator
+}
+
+/// Auto approve for the character you're talking to: while it's on, its
+/// tool calls go ahead without asking you, and show in the conversation as
+/// auto approved. Each character has its own, kept on the server.
+private struct AutoApproveToggle: View {
+    @Environment(ServerConnection.self) private var server
+    let session: AgentSession
+
+    var body: some View {
+        Toggle("Auto approve", systemImage: session.autoApprove ? "checkmark.shield.fill" : "checkmark.shield",
+               isOn: Binding(
+                   get: { session.autoApprove },
+                   set: { enabled in Task { await session.setAutoApprove(enabled) } }
+               ))
+            .toggleStyle(.button)
+            .buttonStyle(.bordered)
+            .tint(session.autoApprove ? .mint : .gray)
+            .font(.footnote)
+            .lineLimit(1)
+            .fixedSize()
+            .disabled(server.phase != .live)
+            .accessibilityHint("Lets \(session.name) use its tools without asking you")
+    }
 }
 
 /// The first character calling you, with a button to take the call, and how
@@ -596,6 +621,7 @@ extension ApprovalOutcome {
         switch self {
         case .allowed: return "Allowed"
         case .denied: return "Denied"
+        case .autoApproved: return "Auto approved"
         case .withdrawn: return "No longer needed"
         case .unknown: return "Answered"
         }
@@ -605,6 +631,7 @@ extension ApprovalOutcome {
         switch self {
         case .allowed: return "checkmark.circle.fill"
         case .denied: return "xmark.circle.fill"
+        case .autoApproved: return "checkmark.shield.fill"
         case .withdrawn: return "minus.circle"
         case .unknown: return "circle"
         }
@@ -614,6 +641,7 @@ extension ApprovalOutcome {
         switch self {
         case .allowed: return .green
         case .denied: return .red
+        case .autoApproved: return .mint
         default: return .secondary
         }
     }

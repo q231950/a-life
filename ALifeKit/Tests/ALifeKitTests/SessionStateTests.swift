@@ -16,6 +16,8 @@ final class SessionStateTests: XCTestCase {
             .toolUsed(ToolUse(id: "t1", toolName: "Read", input: "lot.md")),
             .subagentStarted(Subagent(id: "s1", task: "Search the flower beds")),
             .subagentFinished(subagentID: "s1"),
+            .autoApproveChanged(true),
+            .approvalResolved(approvalID: "p1", outcome: .autoApproved),
         ]
         for (index, event) in events.enumerated() {
             let envelope = EventEnvelope(seq: index + 1, event: event)
@@ -176,6 +178,47 @@ final class SessionStateTests: XCTestCase {
         let newer = #"{"id":"builder","name":"Builder","status":"idle","messages":[],"approvals":[],"conversation":[{"type":"weather","sky":"rain"},{"type":"approval","approval":{"id":"p1","tool_name":"bash","input":"ls"},"outcome":"shrugged"}],"last_seq":3}"#
         let later = try JSONDecoder().decode(SessionState.self, from: Data(newer.utf8))
         XCTAssertEqual(later.conversation, [.approval(Approval(id: "p1", toolName: "bash", input: "ls"), outcome: .unknown)])
+    }
+
+    func testAutoApproveIsTheSessionsOwnAndTravelsAsSnakeCase() throws {
+        let event = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SessionEvent.autoApproveChanged(true))) as? [String: Any]
+        XCTAssertEqual(event?["type"] as? String, "session.auto_approve")
+        XCTAssertEqual(event?["auto_approve"] as? Bool, true)
+        let resolved = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SessionEvent.approvalResolved(approvalID: "p1", outcome: .autoApproved))) as? [String: Any]
+        XCTAssertEqual(resolved?["outcome"] as? String, "auto_approved")
+
+        // Off until it's turned on, in each session on its own.
+        var builder = SessionState(id: "builder", name: "Builder")
+        let gardener = SessionState(id: "gardener", name: "Gardener")
+        XCTAssertFalse(builder.autoApprove)
+        let approval = Approval(id: "p1", toolName: "Bash", input: "ls")
+        let events: [SessionEvent] = [
+            .conversationStarted(conversationID: "c1"),
+            .autoApproveChanged(true),
+            .approvalRequested(approval),
+            .approvalResolved(approvalID: "p1", outcome: .autoApproved),
+        ]
+        for (index, event) in events.enumerated() {
+            builder.apply(EventEnvelope(seq: index + 1, event: event))
+        }
+        XCTAssertTrue(builder.autoApprove)
+        XCTAssertFalse(gardener.autoApprove)
+        // The request stays in the conversation, settled as auto approved.
+        XCTAssertTrue(builder.approvals.isEmpty)
+        XCTAssertEqual(builder.conversation, [.approval(approval, outcome: .autoApproved)])
+
+        // It survives a snapshot, and an older one without it is off.
+        let snapshot = try JSONSerialization.jsonObject(with: JSONEncoder().encode(builder)) as? [String: Any]
+        XCTAssertEqual(snapshot?["auto_approve"] as? Bool, true)
+        XCTAssertEqual(try JSONDecoder().decode(SessionState.self, from: JSONEncoder().encode(builder)), builder)
+        let old = #"{"id":"builder","name":"Builder","status":"idle","messages":[],"approvals":[],"last_seq":3}"#
+        XCTAssertFalse(try JSONDecoder().decode(SessionState.self, from: Data(old.utf8)).autoApprove)
+
+        // A new conversation starts with it off; the server says again if it isn't.
+        builder.apply(EventEnvelope(seq: 5, event: .conversationStarted(conversationID: "c2")))
+        XCTAssertFalse(builder.autoApprove)
+        builder.apply(EventEnvelope(seq: 6, event: .autoApproveChanged(false)))
+        XCTAssertFalse(builder.autoApprove)
     }
 
     func testApplyingEventsBuildsTheState() {

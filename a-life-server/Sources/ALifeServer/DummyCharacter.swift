@@ -63,13 +63,16 @@ actor DummyCharacter: SessionBackend {
     }
 
     func decide(approvalID: String, allow: Bool) async throws {
-        guard let pending = pendingApproval, pending.id == approvalID else {
+        guard await answer(approvalID, allow: allow, as: allow ? .allowed : .denied) else {
             throw Abort(.notFound, reason: "No such approval")
         }
-        pendingApproval = nil
-        await hub.emit(.approvalResolved(approvalID: approvalID, outcome: allow ? .allowed : .denied))
-        pending.answer.yield(allow)
-        pending.answer.finish()
+    }
+
+    func setAutoApprove(_ enabled: Bool) async {
+        await hub.setAutoApprove(enabled)
+        if enabled, let pending = pendingApproval {
+            _ = await answer(pending.id, allow: true, as: .autoApproved)
+        }
     }
 
     func reset() async {
@@ -168,18 +171,37 @@ actor DummyCharacter: SessionBackend {
         }
     }
 
-    /// Asks for approval of a tool call and waits until a front end answers.
+    /// Asks for approval of a tool call and waits until a front end answers,
+    /// or allows it straight away if auto approve is on.
     private func ask(_ approval: Approval) async throws -> Bool {
         let (answers, continuation) = AsyncStream<Bool>.makeStream()
         pendingApproval = (approval.id, continuation)
         try await post(.activityChanged(nil))
         try await post(.approvalRequested(approval))
-        try await post(.statusChanged(.idle, stopReason: .requiresAction))
-        for await allowed in answers { // `decide` has already resolved the approval
-            try await post(.statusChanged(.running, stopReason: nil))
+        let waits = await !hub.state.autoApprove
+        if waits {
+            try await post(.statusChanged(.idle, stopReason: .requiresAction))
+        } else {
+            _ = await answer(approval.id, allow: true, as: .autoApproved)
+        }
+        for await allowed in answers { // the approval has been resolved already
+            if waits {
+                try await post(.statusChanged(.running, stopReason: nil))
+            }
             return allowed
         }
         throw CancellationError() // the stream ended without an answer
+    }
+
+    /// Answers the approval waiting, if `approvalID` is it, and says how it
+    /// was settled. Returns `false` if it isn't waiting.
+    private func answer(_ approvalID: String, allow: Bool, as outcome: ApprovalOutcome) async -> Bool {
+        guard let pending = pendingApproval, pending.id == approvalID else { return false }
+        pendingApproval = nil
+        await hub.emit(.approvalResolved(approvalID: approvalID, outcome: outcome))
+        pending.answer.yield(allow)
+        pending.answer.finish()
+        return true
     }
 
     private func finish(_ reply: String) async throws {

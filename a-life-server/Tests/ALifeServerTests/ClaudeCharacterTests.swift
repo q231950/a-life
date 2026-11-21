@@ -281,6 +281,42 @@ final class ClaudeCharacterTests: XCTestCase {
         }
     }
 
+    func testAutoApproveAllowsWithoutAsking() async throws {
+        let (builder, hub, claudeCode) = await make(.builder)
+        try await builder.handleMessage("Knock down the shed")
+        let cli = try XCTUnwrap(claudeCode.clis.first)
+        let asksToRemove = #"{"type":"control_request","request_id":"request-rm","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -r buildings/shed.md"},"tool_use_id":"toolu_rm"}}"#
+        let approval = Approval(id: "request-rm", toolName: "Bash", input: "rm -r buildings/shed.md", toolUseID: "toolu_rm")
+
+        // Turned on while it waits, it lets that one through.
+        cli.say(asksToRemove)
+        await until(hub, "the approval") { !$0.approvals.isEmpty }
+        await builder.setAutoApprove(true)
+        var state = await hub.state
+        XCTAssertTrue(state.autoApprove)
+        XCTAssertTrue(state.approvals.isEmpty)
+        XCTAssertEqual(state.status, .running)
+        XCTAssertEqual(state.conversation.last, .approval(approval, outcome: .autoApproved))
+        XCTAssertEqual(cli.sent.last?["response"]?["request_id"], "request-rm")
+        XCTAssertEqual(cli.sent.last?["response"]?["response"]?["behavior"], "allow")
+
+        // Afterwards, nothing waits for you, but each request is still shown.
+        cli.say(asksToRemove.replacingOccurrences(of: "request-rm", with: "request-rm-2").replacingOccurrences(of: "toolu_rm", with: "toolu_rm_2"))
+        state = await until(hub, "the second approval") { $0.conversation.count == 3 }
+        let again = Approval(id: "request-rm-2", toolName: "Bash", input: "rm -r buildings/shed.md", toolUseID: "toolu_rm_2")
+        XCTAssertEqual(state.conversation.last, .approval(again, outcome: .autoApproved))
+        XCTAssertTrue(state.approvals.isEmpty)
+        XCTAssertNotEqual(state.stopReason, .requiresAction)
+        XCTAssertEqual(cli.sent.last?["response"]?["request_id"], "request-rm-2")
+        XCTAssertEqual(cli.sent.last?["response"]?["response"]?["behavior"], "allow")
+        do {
+            try await builder.decide(approvalID: "request-rm-2", allow: false)
+            XCTFail("expected a 404")
+        } catch let abort as Abort {
+            XCTAssertEqual(abort.status, .notFound)
+        }
+    }
+
     func testEverythingTheCharacterSaysAndDoesIsInTheConversation() async throws {
         let (builder, hub, claudeCode) = await make(.builder)
         try await builder.handleMessage("What's on the lot?")

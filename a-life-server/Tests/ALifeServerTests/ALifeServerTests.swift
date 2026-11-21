@@ -115,6 +115,56 @@ final class ALifeServerTests: XCTestCase {
         latecomer.disconnect()
     }
 
+    func testAutoApproveIsEachCharactersOwn() async throws {
+        let (server, gardener, builder) = try await connect()
+        XCTAssertFalse(builder.autoApprove)
+
+        await builder.setAutoApprove(true)
+        XCTAssertNil(builder.lastError)
+        await wait(for: "auto approve") { builder.state.autoApprove }
+        XCTAssertFalse(gardener.autoApprove)
+        let engineer = try XCTUnwrap(server.session("engineer"))
+        XCTAssertFalse(engineer.autoApprove)
+
+        // The Builder goes ahead without waiting, and its request is in the
+        // conversation, settled as auto approved.
+        await builder.send("Tidy the lot")
+        await wait(for: "the end of the turn") { builder.stopReason == .endTurn }
+        XCTAssertTrue(builder.transcript.last?.text.hasPrefix("Moved the shed") == true)
+        XCTAssertTrue(builder.conversation.contains {
+            if case .approval(let approval, .autoApproved) = $0 { return approval.toolName == "bash" }
+            return false
+        })
+
+        // The Engineer still asks.
+        await engineer.send("Tidy the lot")
+        await wait(for: "the Engineer's approval") { engineer.stopReason == .requiresAction }
+        XCTAssertTrue(engineer.isWaitingForYou)
+        // Turning it on for the Engineer lets through what is waiting.
+        await engineer.setAutoApprove(true)
+        await wait(for: "the Engineer to finish") { engineer.stopReason == .endTurn }
+        XCTAssertTrue(engineer.conversation.contains {
+            if case .approval(_, .autoApproved) = $0 { return true }
+            return false
+        })
+
+        // Starting over keeps it on, for a front end joining late too.
+        await builder.startOver()
+        let (latecomer, _, lateBuilder) = try await connect()
+        await wait(for: "the reset") { builder.transcript.isEmpty && lateBuilder.state == builder.state }
+        XCTAssertTrue(builder.autoApprove)
+        XCTAssertTrue(lateBuilder.autoApprove)
+
+        // And turning it off asks again.
+        await builder.setAutoApprove(false)
+        await wait(for: "auto approve off") { !builder.autoApprove && !lateBuilder.autoApprove }
+        await builder.send("Tidy the lot")
+        await wait(for: "the approval") { builder.stopReason == .requiresAction }
+
+        server.disconnect()
+        latecomer.disconnect()
+    }
+
     func testInterruptingStopsOnlyThatCharacter() async throws {
         let (server, gardener, builder) = try await connect()
 

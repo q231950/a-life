@@ -73,6 +73,14 @@ func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, voice: U
         return .accepted
     }
 
+    // Auto approve, on or off, for this session only.
+    one.put("auto-approve") { request -> HTTPStatus in
+        let backend = try session(request).backend
+        let setting = try request.content.decode(AutoApproveRequest.self)
+        await backend.setAutoApprove(setting.enabled)
+        return .accepted
+    }
+
     one.post("reset") { request -> HTTPStatus in
         try await session(request).backend.reset()
         return .accepted

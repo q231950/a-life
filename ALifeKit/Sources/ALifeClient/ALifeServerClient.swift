@@ -52,6 +52,12 @@ public struct ALifeServerClient: Sendable {
         try await send("POST", path(sessionID, "approvals", approvalID), body: ApprovalDecision(allow: allow))
     }
 
+    /// Turns auto approve on or off in one session: while it's on, the
+    /// session's tool calls are allowed without asking.
+    public func setAutoApprove(_ enabled: Bool, in sessionID: String) async throws {
+        try await send("PUT", path(sessionID, "auto-approve"), body: AutoApproveRequest(enabled: enabled))
+    }
+
     /// Ends a session's conversation and starts an empty one.
     public func startOver(_ sessionID: String) async throws {
         try await send("POST", path(sessionID, "reset"))
