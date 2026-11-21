@@ -27,6 +27,9 @@ struct ALifeApp: App {
         RingComponent.registerComponent()
         SkyComponent.registerComponent()
         NightLightsComponent.registerComponent()
+        PaintComponent.registerComponent()
+        BoxEdgesComponent.registerComponent()
+        CameraRigComponent.registerComponent()
         WalkSystem.registerSystem()
         SheepSystem.registerSystem()
         CommuteSystem.registerSystem()
@@ -35,6 +38,7 @@ struct ALifeApp: App {
         BarnSystem.registerSystem()
         RingSystem.registerSystem()
         DaySystem.registerSystem()
+        CameraRigSystem.registerSystem()
     }
 
     // Spelled out because RealityKit has a `Scene` type too.
