@@ -18,10 +18,21 @@ actor SessionHub {
         state = SessionState(id: id, name: name, color: color)
     }
 
-    /// Ends the current conversation and begins an empty one.
+    /// Ends the current conversation and begins an empty one. Auto approve
+    /// stays as it was: it is the session's, not the conversation's.
     func startConversation() {
+        let autoApprove = state.autoApprove
         log = [] // older events belong to a conversation nobody can ask for any more
         emit(.conversationStarted(conversationID: UUID().uuidString))
+        if autoApprove {
+            emit(.autoApproveChanged(true))
+        }
+    }
+
+    /// Turns auto approve on or off, saying so only if that changes it.
+    func setAutoApprove(_ enabled: Bool) {
+        guard state.autoApprove != enabled else { return }
+        emit(.autoApproveChanged(enabled))
     }
 
     func emit(_ event: SessionEvent) {

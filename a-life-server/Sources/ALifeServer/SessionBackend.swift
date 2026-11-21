@@ -15,6 +15,10 @@ protocol SessionBackend: Sendable {
     /// Answers a tool call that is waiting for approval. Throws if there is
     /// no such approval.
     func decide(approvalID: String, allow: Bool) async throws
+    /// Turns auto approve on or off in the session. While it's on, each tool
+    /// call that asks is allowed straight away and settled as
+    /// `autoApproved`; turning it on settles any waiting that way, too.
+    func setAutoApprove(_ enabled: Bool) async
     /// Drops the conversation and begins an empty one.
     func reset() async
     /// The server is stopping: stops anything the session runs.

@@ -80,6 +80,8 @@ public enum ApprovalOutcome: String, Codable, Sendable {
     case allowed
     /// You said no.
     case denied
+    /// Said yes for you, because auto approve was on in the session.
+    case autoApproved = "auto_approved"
     /// Nobody answered: the character was stopped or started over, or no
     /// longer needed it.
     case withdrawn
@@ -204,4 +206,11 @@ public struct ApprovalDecision: Codable, Equatable, Sendable {
     public var allow: Bool
 
     public init(allow: Bool) { self.allow = allow }
+}
+
+/// `PUT /v1/sessions/{id}/auto-approve`
+public struct AutoApproveRequest: Codable, Equatable, Sendable {
+    public var enabled: Bool
+
+    public init(enabled: Bool) { self.enabled = enabled }
 }

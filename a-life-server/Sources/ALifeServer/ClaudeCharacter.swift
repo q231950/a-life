@@ -133,14 +133,20 @@ actor ClaudeCharacter: SessionBackend {
     }
 
     func decide(approvalID: String, allow: Bool) async throws {
-        guard let input = approvals.removeValue(forKey: approvalID) else {
+        guard await settle(approvalID, allow: allow, as: allow ? .allowed : .denied) else {
             throw Abort(.notFound, reason: "No such approval")
         }
-        let decision: JSONValue = allow
-            ? ["behavior": "allow", "updatedInput": input]
-            : ["behavior": "deny", "message": "The person you're working for said no to this."]
-        try? connection?.send(Self.controlResponse(to: approvalID, decision))
-        await hub.emit(.approvalResolved(approvalID: approvalID, outcome: allow ? .allowed : .denied))
+        if approvals.isEmpty, turnActive {
+            await hub.emit(.statusChanged(.running, stopReason: nil))
+        }
+    }
+
+    func setAutoApprove(_ enabled: Bool) async {
+        await hub.setAutoApprove(enabled)
+        guard enabled, !approvals.isEmpty else { return }
+        for id in approvals.keys {
+            _ = await settle(id, allow: true, as: .autoApproved)
+        }
         if approvals.isEmpty, turnActive {
             await hub.emit(.statusChanged(.running, stopReason: nil))
         }
@@ -346,10 +352,25 @@ actor ClaudeCharacter: SessionBackend {
         let startsWaiting = approvals.isEmpty
         approvals[requestID] = request["input"] ?? [:]
         let approval = Approval(id: requestID, toolName: toolName, input: input, toolUseID: request["tool_use_id"]?.string)
+        // Asked in the conversation all the same, so you can see what was let through.
         await hub.emit(.approvalRequested(approval))
-        if startsWaiting {
+        if await hub.state.autoApprove {
+            _ = await settle(requestID, allow: true, as: .autoApproved)
+        } else if startsWaiting {
             await hub.emit(.statusChanged(.idle, stopReason: .requiresAction))
         }
+    }
+
+    /// Gives Claude Code the answer to a tool call that waits for one, and
+    /// says how it was settled. Returns `false` if it no longer waits.
+    private func settle(_ approvalID: String, allow: Bool, as outcome: ApprovalOutcome) async -> Bool {
+        guard let input = approvals.removeValue(forKey: approvalID) else { return false }
+        let decision: JSONValue = allow
+            ? ["behavior": "allow", "updatedInput": input]
+            : ["behavior": "deny", "message": "The person you're working for said no to this."]
+        try? connection?.send(Self.controlResponse(to: approvalID, decision))
+        await hub.emit(.approvalResolved(approvalID: approvalID, outcome: outcome))
+        return true
     }
 
     /// Claude Code no longer needs an answer, such as after an interrupt.
