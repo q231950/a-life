@@ -117,7 +117,8 @@ enum Players: Sendable {
 
     /// Where the server keeps what it must remember between starts, such as
     /// the characters waiting for the usage limit to reset
-    /// (`continues.json`): `ALIFE_STATE_DIR`, or `~/a-life-state` unless it
+    /// (`continues.json`) and the last usage reading (`usage.json`):
+    /// `ALIFE_STATE_DIR`, or `~/a-life-state` unless it
     /// is set. It is made when there is something to keep.
     static func stateDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         environment["ALIFE_STATE_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
@@ -197,6 +198,16 @@ func configure(
         app.logger.notice("Waiting for the usage limit to reset, from \(file.path): \(waiting.keys.sorted().joined(separator: ", "))")
     }
 
+    // How much of the 5-hour usage window is used, as the characters' runs
+    // say, and as it was when the server stopped. The dummies' made-up
+    // readings aren't kept.
+    var usageFile: URL?
+    if case .claudeCode = players { usageFile = stateDirectory?.appendingPathComponent("usage.json") }
+    let usage = UsageHub(file: usageFile, logger: app.logger)
+    if let file = usageFile, let window = await usage.usage.window {
+        app.logger.notice("The last usage reading, from \(file.path): \(window.utilization.map { "\(Int(($0 * 100).rounded()))%" } ?? "unknown") used, resetting at \(window.resetsAt)")
+    }
+
     var sessions: [HostedSession] = []
     for character in cast {
         let hub = SessionHub(id: character.id, name: character.name, color: character.color)
@@ -204,9 +215,9 @@ func configure(
         let backend: any SessionBackend
         switch players {
         case .claudeCode(let claudeCode):
-            backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: app.logger, continues: continues)
+            backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: app.logger, continues: continues, usage: usage)
         case .dummies(let step):
-            backend = DummyCharacter(character, hub: hub, step: step)
+            backend = DummyCharacter(character, hub: hub, step: step, usage: usage)
         }
         await backend.reset() // starts the first conversation, and forgets what it waited for
         if let claude = backend as? ClaudeCharacter, let entry = waiting[character.id] {
@@ -215,8 +226,8 @@ func configure(
         sessions.append(HostedSession(id: character.id, hub: hub, backend: backend))
     }
 
-    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot))
-    routes(app, sessions: sessions, lot: lot, voice: voiceDirectory)
+    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot, usage: usage))
+    routes(app, sessions: sessions, lot: lot, usage: usage, voice: voiceDirectory)
 }
 
 /// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
@@ -234,9 +245,11 @@ private func loadCast(logger: Logger) throws -> [Character] {
 private struct EndSessionsOnShutdown: LifecycleHandler {
     let sessions: [HostedSession]
     let lot: LotHub
+    let usage: UsageHub
 
     func shutdownAsync(_ application: Application) async {
         await lot.stop()
+        await usage.stop()
         for session in sessions {
             await session.hub.closeStreams()
             await session.backend.shutdown()

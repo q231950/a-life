@@ -20,10 +20,15 @@ import Vapor
 /// doing, and the work carries on. Something said while it waits for an
 /// approval is refused: answer the approval first. Anything said after the
 /// last step becomes the next instruction.
+///
+/// Each instruction also uses up a little of a made-up 5-hour window, so the
+/// front ends' gauge and the lot's day can be tried without a model.
 actor DummyCharacter: SessionBackend {
     private let profile: Character
     private let hub: SessionHub
     private let step: Duration
+    /// Where the made-up usage goes.
+    private let usage: UsageHub?
 
     /// What was said and not yet taken up, oldest first.
     private var inbox: [String] = []
@@ -34,10 +39,11 @@ actor DummyCharacter: SessionBackend {
     /// The helpers that are out and haven't reported back yet, by id.
     private var helpersOut: [String] = []
 
-    init(_ profile: Character, hub: SessionHub, step: Duration) {
+    init(_ profile: Character, hub: SessionHub, step: Duration, usage: UsageHub? = nil) {
         self.profile = profile
         self.hub = hub
         self.step = step
+        self.usage = usage
     }
 
     // MARK: SessionBackend
@@ -47,6 +53,7 @@ actor DummyCharacter: SessionBackend {
             throw Abort(.conflict, reason: "\(profile.name) is waiting for an answer to its request")
         }
         await hub.emit(.message(Message(kind: .user, speaker: "You", text: text)))
+        await usage?.recordMadeUpUse(at: Date())
         inbox.append(text)
         if worker == nil {
             let generation = generation

@@ -33,6 +33,9 @@ import Vapor
 /// it anything yourself, stopping it or starting it over calls that off.
 /// Who is waiting is kept in `PendingContinues`, so it outlasts a restart.
 /// The weekly limits are only reported.
+///
+/// What Claude Code says about the 5-hour window on every turn goes to the
+/// `UsageHub`, for the front ends' gauge and the lot's day.
 actor ClaudeCharacter: SessionBackend {
     /// What a*life says to a character once the usage limit has reset.
     static let pleaseContinue = "please continue"
@@ -49,6 +52,8 @@ actor ClaudeCharacter: SessionBackend {
     private let logger: Logger
     private let continues: PendingContinues
     private let clock: any WakeClock
+    /// Where what Claude Code says about the 5-hour window goes.
+    private let usage: UsageHub?
 
     /// The CLI playing the character in this conversation, once started.
     private var connection: (any ClaudeCodeConnection)?
@@ -95,7 +100,8 @@ actor ClaudeCharacter: SessionBackend {
         claudeCode: any ClaudeCodeLauncher,
         logger: Logger,
         continues: PendingContinues = PendingContinues(file: nil),
-        clock: any WakeClock = SystemWakeClock()
+        clock: any WakeClock = SystemWakeClock(),
+        usage: UsageHub? = nil
     ) {
         self.character = character
         self.hub = hub
@@ -103,6 +109,7 @@ actor ClaudeCharacter: SessionBackend {
         self.logger = logger
         self.continues = continues
         self.clock = clock
+        self.usage = usage
     }
 
     /// The CLI's arguments, apart from the model, which the launcher adds.
@@ -311,7 +318,12 @@ actor ClaudeCharacter: SessionBackend {
         }
         switch message["type"]?.string {
         case "rate_limit_event":
-            if let info = UsageLimit.Info(message["rate_limit_info"]) { rateLimit = info }
+            if let info = UsageLimit.Info(message["rate_limit_info"]) {
+                rateLimit = info
+                if let reading = info.fiveHourWindow(readAt: clock.now()) {
+                    await usage?.record(reading)
+                }
+            }
         case "assistant": await handleAssistant(message)
         case "user": await handleToolResults(message)
         case "system": await handleSystem(message)
@@ -452,6 +464,7 @@ actor ClaudeCharacter: SessionBackend {
         {
             let at = resetsAt.addingTimeInterval(Self.afterReset)
             await wait(until: at, for: PendingContinues.Entry(character: character.id, claudeSessionID: claudeSessionID, resetsAt: resetsAt))
+            await usage?.record(UsageWindow(utilization: 1, resetsAt: resetsAt, readAt: clock.now())) // all used
             logger.notice("\(character.name) ran into the 5-hour usage limit, which resets at \(resetsAt), and carries on at \(at)")
             resumesAt = at
         } else {

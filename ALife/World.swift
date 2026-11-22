@@ -36,6 +36,8 @@ final class World {
     /// The office, and the shirts of the characters whose rooms it has, by
     /// slot, to build it again when they change.
     private var office = Entity()
+    /// The sky, whose clock follows the usage window.
+    private var sky: Entity?
     private var officeShirts: [Int: PlatformColor]?
 
     init() {
@@ -66,10 +68,23 @@ final class World {
         let sun = Self.makeSun()
         root.addChild(sun)
         root.addChild(Horizon.make())
-        root.addChild(SkyBox.make(sunlight: sun, root: root))
+        let sky = SkyBox.make(sunlight: sun, root: root)
+        self.sky = sky
+        root.addChild(sky)
         root.addChild(BoxEdges.make())
         root.addChild(camera.root)
         camera.focus(on: lot.position(of: Tile(x: LotPlan.house.x + LotPlan.house.width / 2, z: LotPlan.house.y + LotPlan.house.depth)))
+    }
+
+    // MARK: The day
+
+    /// Has the sky follow `clock` from now on: easing over to it from where
+    /// it is if `eases`, or straight away if not.
+    func setDayClock(_ clock: DayClock, eases: Bool = true) {
+        guard let sky, var state = sky.components[SkyComponent.self] else { return }
+        state.clock.change(to: clock, at: Date(), eases: eases)
+        state.updated = nil // now, rather than in a moment
+        sky.components.set(state)
     }
 
     // MARK: Walking

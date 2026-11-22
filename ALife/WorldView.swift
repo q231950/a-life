@@ -15,6 +15,9 @@ struct WorldView: View {
     @State private var selectedID: String?
     @State private var showsSettings = false
     @State private var showsLog = false
+    /// How wide the usage panel at the top left is while it shows, so the
+    /// status pill keeps clear of it.
+    @State private var usagePanelWidth: CGFloat = 0
     /// Whether the agent panel shows the conversation, as the panel keeps it.
     @AppStorage("agentPanelIsExpanded") private var panelIsExpanded = true
     /// Each character's shirt on the lot, for the panel to show them in.
@@ -26,6 +29,7 @@ struct WorldView: View {
     var body: some View {
         RealityView { content in
             let world = World()
+            world.setDayClock(.lot(for: server.usage), eases: false)
             world.show(server.lot, popsUp: false)
             world.show(residents, selectedID: selected?.id)
             content.add(world.root)
@@ -62,8 +66,20 @@ struct WorldView: View {
             // pops up, not what was on the lot when it connected.
             world?.show(new, popsUp: old.revision > 0 && new.revision > old.revision)
         }
+        .onChange(of: server.usage) { _, usage in
+            // The lot's day is the usage window; the sky eases over to a
+            // new one.
+            world?.setDayClock(.lot(for: usage))
+        }
         .overlay(alignment: .top) {
             SessionStatusBar(showsSettings: $showsSettings, showsLog: $showsLog)
+                // Kept clear of the usage panel on both sides, so it stays
+                // centred.
+                .padding(.horizontal, usagePanelWidth > 0 ? usagePanelWidth + 8 : 0)
+                .padding()
+        }
+        .overlay(alignment: .topLeading) {
+            UsagePanel(width: $usagePanelWidth)
                 .padding()
         }
         .overlay(alignment: .bottom) {

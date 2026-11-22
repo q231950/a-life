@@ -79,7 +79,7 @@ All optional, as environment variables:
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
-| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
+| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`, and the last usage reading, in `usage.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
 | `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id (with a clone of each repository in it, for a project of several). `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
 
 ```sh
@@ -150,6 +150,8 @@ A session's `{id}` is its character's, such as `builder` or `engineer`, and neve
 | `POST` | `/v1/sessions/{id}/reset` | | Ends the session's conversation and starts an empty one, for every front end. The other sessions carry on. |
 | `GET` | `/v1/lot` | | Everything built and planted on the lot. See [below](#the-lot-and-its-stream). |
 | `GET` | `/v1/lot/events` | | The lot's stream (server-sent events): the lot as it is now, then again each time it changes. |
+| `GET` | `/v1/usage` | | How much of Claude's 5-hour usage window is used, as the server last heard. See [below](#the-usage-and-its-stream). |
+| `GET` | `/v1/usage/events` | | The usage's stream (server-sent events): the usage as it is now, then again each time it changes. |
 | `GET` | `/v1/voice/{path}` | | The voice model's files, as they are in `ALIFE_VOICE_DIR`: `bundle.json`, then each file it lists. `404` for anything else, and for everything if there's no model. See [Voices](#voices). |
 
 An unknown session id gets a `404`. The `POST` and `PUT` routes answer `202 Accepted` as soon as the request is taken; what happens next arrives on the event stream. Errors look like `{"error": true, "reason": "…"}`.
@@ -220,6 +222,31 @@ data: {"revision":3,"items":[…],"problems":[]}
 
 There is nothing to catch up on: a client that reconnects is sent the lot as it is. Older front ends don't ask for the lot, and newer ones carry on without it if a server doesn't have one.
 
+### The usage and its stream
+
+`GET /v1/usage` answers with the last reading of Claude's 5-hour usage window, which the app shows as a ring and a countdown, and which its day follows:
+
+```json
+{
+  "revision": 4,
+  "window": {"utilization": 0.46, "resets_at": 1795366800, "started_at": 1795348800, "read_at": 1795359600}
+}
+```
+
+`utilization` is how much of the window is used, from 0 to 1, and is left out if the reading only said when the window resets. `resets_at` is when it resets, `started_at` five hours before, and `read_at` when the reading came in, all in seconds since 1970. With nothing read yet, there's no `window`, and `revision` is 0. The window stays after it resets, until a run reports a new one, so the app knows its day is over.
+
+The server reads it from what Claude Code says on every turn of a character's run (see [The usage limit](#the-usage-limit)), so it only hears while one of the characters is running: what your other Claude sessions use isn't seen until the next run here. The latest reading wins, whichever character it came from, and it is kept in `usage.json` in `ALIFE_STATE_DIR`, so a restart still knows it. The dummy characters make up a little use each time they're told something, in a window of their own that isn't kept.
+
+`GET /v1/usage/events` sends the usage as one `usage` event when it connects, and again each time it changes:
+
+```
+id: 4
+event: usage
+data: {"revision":4,"window":{…}}
+```
+
+Older front ends don't ask for it, and newer ones carry on without it if a server doesn't have it.
+
 ## Voices
 
 The app says what the characters say out loud, while you stand near them, with [Phonon](https://github.com/gradium-ai/xn-ptts) text to speech on the device. It needs a voice model, which it downloads from the server the first time: Phonon 31m, English, under the Apache 2.0 licence, with several dozen voices, a few of which go to the characters. Fetch it onto this Mac once:
@@ -282,6 +309,8 @@ When a character's turn ends on Claude's 5-hour usage limit, it doesn't give up:
   }
 ]
 ```
+
+- **How much is used.** Every turn, even an ordinary one, Claude Code 2.1 writes a `rate_limit_event` from the `anthropic-ratelimit-unified-*` headers of its responses, and its `rate_limit_info` has `unifiedWindows`: for `five_hour` and `seven_day`, `utilization` (a share: 0.46 is 46%), `resetsAt` and `status`. The `five_hour` window becomes the server's usage reading (see [The usage and its stream](#the-usage-and-its-stream)); without it, a `five_hour` `rateLimitType` gives when it resets, and how much is used stays as it was for that window. A turn that ends on the 5-hour limit reads as all used. `seven_day` is read, but not shown yet.
 
 ### The Engineer and the a\*life checkout
 
@@ -490,17 +519,18 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | File | What it does |
 |---|---|
 | `entrypoint.swift` | Starts Vapor, or runs `add-agent` without it. |
-| `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, and the routes. |
+| `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, the usage's hub, and the routes. |
 | `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode and its helper. See [The agents file](#the-agents-file). |
 | `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`, and adds a new agent after the last one without changing the others. |
 | `AddAgent.swift` | The `add-agent` command, which the Team Lead's recruiter runs to add an agent to the agents file. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). |
-| `routes.swift` | The HTTP API, including the event streams and the lot's, and the voice model's files. |
+| `routes.swift` | The HTTP API, including the event streams, the lot's and the usage's, and the voice model's files. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many animals fit in a bed, and writes `lot.md`, with the animals the app draws. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
 | `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects, and waits out the 5-hour usage limit before it carries on. |
-| `UsageLimit.swift` | Reads what Claude Code says about its usage limits, tells the 5-hour limit from the weekly ones and when it resets, and `WakeClock`, the clock a character waits on. |
+| `UsageLimit.swift` | Reads what Claude Code says about its usage limits, and the 5-hour window from its `unifiedWindows`, tells the 5-hour limit from the weekly ones and when it resets, and `WakeClock`, the clock a character waits on. |
+| `Usage.swift` | `UsageHub`: the last reading of the 5-hour usage window, from the characters' runs (or made up by the dummies), kept in `usage.json` and sent to the clients following it when it changes. |
 | `PendingContinues.swift` | The characters waiting for the usage limit to reset, kept in `continues.json` so they outlast a restart. |
 | `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, with the agents file and the server's command in its environment, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
@@ -515,7 +545,7 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Conservationist's foals, bears, polar bears, birds, unicorns, pegasuses and dinosaurs and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the keeper being told where the house is, the keeper being told about every animal the app draws, and a front end seeing a restaurant and an oak appear.
 

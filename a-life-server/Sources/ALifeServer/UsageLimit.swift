@@ -1,3 +1,4 @@
+import ALifeAPI
 import Foundation
 
 /// Claude's usage limits, as Claude Code reports running into one, and
@@ -26,6 +27,19 @@ enum UsageLimit {
         var resetsAt: Date?
         /// Which limit, such as `five_hour` or `seven_day`.
         var type: String?
+        /// How each window is doing, by name (`five_hour`, `seven_day`), from
+        /// `unifiedWindows`, which Claude Code 2.1 fills from the
+        /// `anthropic-ratelimit-unified-*` headers of every response.
+        var windows: [String: Window] = [:]
+
+        /// One of `unifiedWindows`.
+        struct Window: Equatable, Sendable {
+            /// How much of it is used, from 0 to 1.
+            var utilization: Double?
+            var resetsAt: Date?
+            /// `allowed`, `allowed_warning` or `rejected`.
+            var status: String?
+        }
 
         /// From a `rate_limit_event`'s `rate_limit_info`, or `nil` if it
         /// isn't one.
@@ -34,12 +48,38 @@ enum UsageLimit {
             status = json["status"]?.string
             resetsAt = json["resetsAt"]?.number.map(Date.init(timeIntervalSince1970:))
             type = json["rateLimitType"]?.string
+            if case .object(let windows) = json["unifiedWindows"] {
+                for (name, window) in windows {
+                    guard case .object = window else { continue }
+                    self.windows[name] = Window(
+                        utilization: window["utilization"]?.number,
+                        resetsAt: window["resetsAt"]?.number.map(Date.init(timeIntervalSince1970:)),
+                        status: window["status"]?.string
+                    )
+                }
+            }
         }
 
-        init(status: String?, resetsAt: Date?, type: String?) {
+        init(status: String?, resetsAt: Date?, type: String?, windows: [String: Window] = [:]) {
             self.status = status
             self.resetsAt = resetsAt
             self.type = type
+            self.windows = windows
+        }
+
+        /// What it says about the 5-hour window, as a reading taken at
+        /// `readAt`: from `unifiedWindows.five_hour` if it is there, or else
+        /// from a `five_hour` limit and when it resets, with how much is used
+        /// unknown, unless it is refusing. `nil` if it says nothing about it.
+        func fiveHourWindow(readAt: Date) -> UsageWindow? {
+            if let window = windows["five_hour"], let resetsAt = window.resetsAt {
+                let utilization = window.utilization ?? (window.status == "rejected" ? 1 : nil)
+                return UsageWindow(utilization: utilization, resetsAt: resetsAt, readAt: readAt)
+            }
+            if type == "five_hour", let resetsAt {
+                return UsageWindow(utilization: status == "rejected" ? 1 : nil, resetsAt: resetsAt, readAt: readAt)
+            }
+            return nil
         }
     }
 

@@ -8,6 +8,10 @@ import Foundation
 /// the way through, standing in the south at noon halfway through, and
 /// setting in the west three quarters of the way through, as on a spring
 /// day some way north of the equator. The moon stands opposite the sun.
+///
+/// Anchored to a 5-hour usage window (`init(window:)`), a day is the
+/// window: midnight as it starts and as it resets, after which the lot
+/// holds at midnight (`until`) until a new window is read.
 public struct DayClock: Equatable, Sendable {
     /// How long a day on the lot lasts in real time: five hours.
     public static let dayLength: TimeInterval = 5 * 60 * 60
@@ -17,15 +21,26 @@ public struct DayClock: Equatable, Sendable {
     /// A moment at which a day began, at midnight. Every day since and
     /// before is the same length.
     public let midnight: Date
+    /// When the lot stops at midnight, for a day that is a usage window:
+    /// the window's reset. `nil` for days that go on one after another.
+    public let until: Date?
 
-    public init(length: TimeInterval = DayClock.dayLength, midnight: Date = Date(timeIntervalSinceReferenceDate: 0)) {
+    public init(length: TimeInterval = DayClock.dayLength, midnight: Date = Date(timeIntervalSinceReferenceDate: 0), until: Date? = nil) {
         self.length = length
         self.midnight = midnight
+        self.until = until
     }
 
     /// How far through its day the lot is at `date`, from 0 at midnight up
-    /// to, but not including, 1 at the next midnight.
+    /// to, but not including, 1 at the next midnight. 0 from `until` on.
     public func phase(at date: Date) -> Double {
+        if let until, date >= until { return 0 }
+        return runningPhase(at: date)
+    }
+
+    /// The phase as if the days went on one after another, past `until`:
+    /// for the clouds, which keep drifting while the lot holds at midnight.
+    public func runningPhase(at date: Date) -> Double {
         let elapsed = date.timeIntervalSince(midnight).truncatingRemainder(dividingBy: length)
         let phase = (elapsed < 0 ? elapsed + length : elapsed) / length
         return phase < 1 ? phase : 0
@@ -34,6 +49,74 @@ public struct DayClock: Equatable, Sendable {
     /// The sky over the lot at `date`.
     public func sky(at date: Date) -> Sky {
         Sky(phase: phase(at: date))
+    }
+}
+
+/// The time of day as the sky shows it: a `DayClock`, and, for a little
+/// while after it is swapped for another, an ease from where the sky was to
+/// where the new clock says, so the sun sweeps across rather than leaping
+/// when a new usage window turns up.
+public struct SkyClock: Equatable, Sendable {
+    /// How long the sky takes to catch up with a new clock, in seconds.
+    public static let easing: TimeInterval = 10
+
+    /// The clock the sky follows, once it has caught up.
+    public private(set) var clock: DayClock
+    private var ease: Ease?
+
+    /// Where the sky was when the clock changed, and when that was.
+    private struct Ease: Equatable, Sendable {
+        var start: Date
+        var phase: Double
+        var clouds: Double
+    }
+
+    public init(_ clock: DayClock = DayClock()) {
+        self.clock = clock
+    }
+
+    /// Follows `clock` from `date` on, easing over from where the sky is
+    /// then if `eases`, or straight away if not. The same clock again
+    /// changes nothing.
+    public mutating func change(to clock: DayClock, at date: Date, eases: Bool = true) {
+        guard clock != self.clock else { return }
+        let from = Ease(start: date, phase: phase(at: date), clouds: cloudPhase(at: date))
+        self.clock = clock
+        ease = eases ? from : nil
+    }
+
+    /// Whether the sky is still catching up at `date`.
+    public func isEasing(at date: Date) -> Bool {
+        guard let ease else { return false }
+        let elapsed = date.timeIntervalSince(ease.start)
+        return elapsed >= 0 && elapsed < Self.easing
+    }
+
+    /// How far through its day the sky shows the lot at `date`.
+    public func phase(at date: Date) -> Double {
+        eased(from: ease?.phase, to: clock.phase(at: date), at: date)
+    }
+
+    /// How far round its days the sky shows the clouds' drift at `date`,
+    /// which carries on while the lot holds at midnight.
+    public func cloudPhase(at date: Date) -> Double {
+        eased(from: ease?.clouds, to: clock.runningPhase(at: date), at: date)
+    }
+
+    /// The sky over the lot at `date`.
+    public func sky(at date: Date) -> Sky {
+        Sky(phase: phase(at: date))
+    }
+
+    /// The short way round from `from` to `to`, as far along as the ease
+    /// is at `date`, gently at either end.
+    private func eased(from: Double?, to target: Double, at date: Date) -> Double {
+        guard let from, let ease, isEasing(at: date) else { return target }
+        var delta = (target - from).truncatingRemainder(dividingBy: 1)
+        if delta > 0.5 { delta -= 1 } else if delta < -0.5 { delta += 1 }
+        let progress = smoothstep(0, 1, date.timeIntervalSince(ease.start) / Self.easing)
+        let phase = (from + delta * progress).truncatingRemainder(dividingBy: 1)
+        return phase < 0 ? phase + 1 : phase
     }
 }
 

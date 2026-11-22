@@ -93,6 +93,21 @@ public struct ALifeServerClient: Sendable {
         return try await EventStreamConnection<Lot>().open(request, configuration: urlSession.configuration)
     }
 
+    /// How much of Claude's 5-hour usage window is used, as the server last
+    /// heard from its characters.
+    public func usage() async throws -> Usage {
+        try JSONDecoder().decode(Usage.self, from: await send("GET", "/v1/usage"))
+    }
+
+    /// Follows the usage: the server sends it as it is now, then again each
+    /// time it changes. Returns once the server has accepted the connection.
+    public func usageChanges() async throws -> AsyncThrowingStream<Usage, Error> {
+        var request = makeRequest("GET", "/v1/usage/events")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 60 // as for a session's events
+        return try await EventStreamConnection<Usage>().open(request, configuration: urlSession.configuration)
+    }
+
     /// Where the server offers the voice model the characters speak with:
     /// a Phonon model bundle, its `bundle.json` and every file it lists, at
     /// the same paths under this address. The server answers 404 for all of
