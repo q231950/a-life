@@ -36,7 +36,7 @@ actor SessionHub {
     }
 
     func emit(_ event: SessionEvent) {
-        let envelope = EventEnvelope(seq: nextSeq, event: event)
+        let envelope = EventEnvelope(seq: nextSeq, event: event, time: Date())
         nextSeq += 1
         log.append(envelope)
         state.apply(envelope)

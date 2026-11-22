@@ -32,15 +32,23 @@ public final class ServerConnection {
     /// the server says, and for servers from before there was anything to
     /// build.
     public private(set) var lot = Lot()
+    /// What the characters have been up to, to look back on, including what
+    /// they did while you were away.
+    public let log: EventLog
 
     @ObservationIgnored private let serverURLStore: any ServerURLStoring
     @ObservationIgnored private let urlSession: URLSession
     @ObservationIgnored private var client: ALifeServerClient?
     @ObservationIgnored private var runTask: Task<Void, Never>?
 
-    public init(serverURLStore: any ServerURLStoring = UserDefaultsServerURLStore(), urlSession: URLSession = .shared) {
+    public init(
+        serverURLStore: any ServerURLStoring = UserDefaultsServerURLStore(),
+        urlSession: URLSession = .shared,
+        logSeenStore: any LogSeenStoring = UserDefaultsLogSeenStore()
+    ) {
         self.serverURLStore = serverURLStore
         self.urlSession = urlSession
+        log = EventLog(seenStore: logSeenStore)
         serverURL = serverURLStore.load()
     }
 
@@ -98,6 +106,7 @@ public final class ServerConnection {
         disconnect()
         sessions = []
         lot = Lot()
+        log.clear()
         connect()
         return true
     }
@@ -186,6 +195,7 @@ public final class ServerConnection {
     private func adopt(_ listed: [SessionState]) {
         sessions = listed.map { entry in
             let kept = session(entry.id) ?? AgentSession(SessionState(id: entry.id, name: entry.name, color: entry.color))
+            kept.log = log
             kept.update(from: entry)
             kept.client = client
             return kept

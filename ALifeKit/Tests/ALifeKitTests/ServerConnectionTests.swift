@@ -13,7 +13,12 @@ final class ServerConnectionTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubServer.self]
         let store = InMemoryServerURLStore(url)
-        return (ServerConnection(serverURLStore: store, urlSession: URLSession(configuration: configuration)), store)
+        let server = ServerConnection(
+            serverURLStore: store,
+            urlSession: URLSession(configuration: configuration),
+            logSeenStore: InMemoryLogSeenStore()
+        )
+        return (server, store)
     }
 
     private func wait(
@@ -164,6 +169,97 @@ final class ServerConnectionTests: XCTestCase {
         StubServer.push(EventEnvelope(seq: 4, event: .message(after)), to: "gardener") // live
         await wait(for: "the live message") { gardener.transcript.count == 2 }
         XCTAssertEqual(gardener.newMessages, [after])
+
+        server.disconnect()
+    }
+
+    /// Says nothing, and writes down what it was asked to.
+    private final class Silence: SpeechEngine {
+        var said: [String] = []
+        func say(_ text: String, voice: Int) async { said.append(text) }
+        func stop() {}
+    }
+
+    func testWhatHappenedWhileYouWereAwayIsLoggedButNeitherSaidNorRung() async throws {
+        let (server, _) = makeConnection()
+        // The Gardener was busy when this front end connected, with a helper
+        // out that reports back moments later.
+        var gardenerListed = SessionState(id: "gardener", name: "Gardener")
+        gardenerListed.status = .running
+        gardenerListed.lastSeq = 3
+        StubServer.roster = [gardenerListed]
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        XCTAssertTrue(gardener.isCatchingUp)
+
+        let silence = Silence()
+        let narrator = Narrator(engine: silence, log: server.log)
+        func listen() {
+            let speakers = server.sessions.map {
+                Narrator.Speaker(id: $0.id, name: $0.name, messages: $0.newMessages, isWorking: $0.status == .running)
+            }
+            narrator.listen(to: speakers, inEarshot: [])
+        }
+
+        let away = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3600).rounded()) // an hour ago
+        let helper = Subagent(id: "s1", task: "Count the snails")
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1"), time: away), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil), time: away), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 3, event: .subagentStarted(helper), time: away), to: "gardener") // replayed
+        await wait(for: "the replay") { gardener.state.lastSeq == 3 }
+        listen()
+        StubServer.push(EventEnvelope(seq: 4, event: .subagentFinished(subagentID: "s1")), to: "gardener") // live, but still the old job
+        StubServer.push(EventEnvelope(seq: 5, event: .message(Message(id: "m1", kind: .agent, speaker: "Gardener", text: "Twelve snails."))), to: "gardener")
+        await wait(for: "the report") { gardener.transcript.count == 1 }
+        listen()
+        StubServer.push(EventEnvelope(seq: 6, event: .statusChanged(.idle, stopReason: .endTurn)), to: "gardener")
+        await wait(for: "the job to end") { gardener.status == .idle }
+        listen()
+
+        XCTAssertFalse(gardener.isCatchingUp)
+        XCTAssertTrue(gardener.newMessages.isEmpty)
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+        await Task.yield()
+        XCTAssertTrue(silence.said.isEmpty)
+        XCTAssertEqual(server.log.entries.map(\.kind), [.helperSent, .helperBack, .reply, .jobDone])
+        XCTAssertTrue(server.log.entries.allSatisfy(\.isWhileAway))
+        XCTAssertEqual(server.log.entries.first?.time, away)
+        XCTAssertEqual(server.log.entries.first?.text, "Sent a helper off: Count the snails")
+
+        // The next job, while you're here, is said or rung as ever.
+        StubServer.push(EventEnvelope(seq: 7, event: .statusChanged(.running, stopReason: nil)), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 8, event: .message(Message(id: "m2", kind: .agent, speaker: "Gardener", text: "The roses are in."))), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 9, event: .statusChanged(.idle, stopReason: .endTurn)), to: "gardener")
+        await wait(for: "the second job") { gardener.state.lastSeq == 9 }
+        listen()
+        XCTAssertEqual(gardener.newMessages.map(\.id), ["m2"])
+        XCTAssertEqual(narrator.calls.first?.lines, ["The roses are in."])
+        XCTAssertEqual(server.log.entries.suffix(3).map(\.kind), [.reply, .jobDone, .call])
+        XCTAssertTrue(server.log.entries.suffix(3).allSatisfy { !$0.isWhileAway })
+
+        server.disconnect()
+    }
+
+    func testAnsweringACharacterEndsCatchingUp() async throws {
+        let (server, _) = makeConnection()
+        var builderListed = SessionState(id: "builder", name: "Builder")
+        builderListed.status = .running
+        builderListed.lastSeq = 2
+        StubServer.roster = [builderListed]
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let builder = try XCTUnwrap(server.session("builder"))
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
+        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil)), to: "builder")
+        await wait(for: "the replay") { builder.state.lastSeq == 2 }
+        XCTAssertTrue(builder.isCatchingUp)
+
+        await builder.send("Make it a café instead.")
+        XCTAssertFalse(builder.isCatchingUp)
+        StubServer.push(EventEnvelope(seq: 3, event: .message(Message(id: "m1", kind: .agent, speaker: "Builder", text: "A café it is."))), to: "builder")
+        await wait(for: "the answer") { builder.newMessages.count == 1 }
 
         server.disconnect()
     }

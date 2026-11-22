@@ -14,6 +14,9 @@ struct WorldView: View {
     /// The character you are talking to. `nil` means the first one.
     @State private var selectedID: String?
     @State private var showsSettings = false
+    @State private var showsLog = false
+    /// Whether the agent panel shows the conversation, as the panel keeps it.
+    @AppStorage("agentPanelIsExpanded") private var panelIsExpanded = true
     /// Each character's shirt on the lot, for the panel to show them in.
     @State private var shirts: [String: PlatformColor] = [:]
     #if os(macOS)
@@ -55,7 +58,7 @@ struct WorldView: View {
             world?.show(new, popsUp: old.revision > 0 && new.revision > old.revision)
         }
         .overlay(alignment: .top) {
-            SessionStatusBar(showsSettings: $showsSettings)
+            SessionStatusBar(showsSettings: $showsSettings, showsLog: $showsLog)
                 .padding()
         }
         .overlay(alignment: .bottom) {
@@ -66,6 +69,13 @@ struct WorldView: View {
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showsLog) {
+            EventLogView { id in
+                selectedID = id
+                panelIsExpanded = true
+            }
+            .environment(\.shirts, shirts)
         }
         .task {
             server.connect()
@@ -101,17 +111,21 @@ struct WorldView: View {
     // MARK: Voices
 
     /// What each character has said lately, and whether it's still on the
-    /// job, for the narrator.
+    /// job, for the narrator. Only what it said since you came: what it did
+    /// while you were away, or while finishing a job it had before, is left
+    /// out of `newMessages`, and only goes to the log.
     private var speakers: [Narrator.Speaker] {
-        server.sessions.map { Narrator.Speaker(id: $0.id, messages: $0.newMessages, isWorking: $0.isOnTheJob) }
+        server.sessions.map {
+            Narrator.Speaker(id: $0.id, name: $0.name, messages: $0.newMessages, isWorking: $0.isOnTheJob)
+        }
     }
 
     /// Keeps an ear on who is close enough to hear, as you and the
     /// characters walk about, so a character you walk away from stops
-    /// talking, and calls you with the rest once its job is done.
+    /// talking, and calls you with the rest once its job is done. Its calls
+    /// go in the log too.
     private func keepEarshot() async {
-        let narrator = Narrator(engine: voices)
-        narrator.letGo(of: speakers) // what was said before you came
+        let narrator = Narrator(engine: voices, log: server.log)
         self.narrator = narrator
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))

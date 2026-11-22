@@ -295,6 +295,9 @@ final class ALifeServerTests: XCTestCase {
         var firstMissed: Int?
         for try await envelope in try await client.events(of: "builder", conversationID: state.conversationID, after: seen) {
             firstMissed = firstMissed ?? envelope.seq
+            // Each says when it happened, so a front end catching up can tell.
+            let time = try XCTUnwrap(envelope.time)
+            XCTAssertLessThan(abs(time.timeIntervalSinceNow), 60)
             state.apply(envelope)
             if state.stopReason == .endTurn { break }
         }

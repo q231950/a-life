@@ -35,21 +35,29 @@ public enum Earshot {
 /// came; walking away from a character cuts it off. What a character says
 /// while you are out of earshot, or hadn't heard yet when you walked off, is
 /// kept for it, and once its job is done it calls you with it: take the call
-/// to hear the lot in its voice, wherever you are, or hang up.
+/// to hear the lot in its voice, wherever you are, or hang up. Each call is
+/// written down in the log too, so hanging up loses nothing.
+///
+/// What happened while you were away never reaches it: an `AgentSession`'s
+/// `newMessages` leave out what was replayed on connecting, and what a
+/// character said while finishing a job it had before you came.
 @MainActor
 @Observable
 public final class Narrator {
     /// One character, as the narrator hears it.
     public struct Speaker: Equatable {
         public let id: String
+        /// Its name, for the log. Its id if it has none.
+        public let name: String
         /// What was said in its session lately, oldest first.
         public let messages: [Message]
         /// Whether it is still on the job. Once it isn't, whatever you
         /// missed of what it said turns into a call.
         public let isWorking: Bool
 
-        public init(id: String, messages: [Message], isWorking: Bool = false) {
+        public init(id: String, name: String? = nil, messages: [Message], isWorking: Bool = false) {
             self.id = id
+            self.name = name ?? id
             self.messages = messages
             self.isWorking = isWorking
         }
@@ -77,6 +85,10 @@ public final class Narrator {
     }
 
     @ObservationIgnored private let engine: any SpeechEngine
+    /// Where each call is written down.
+    @ObservationIgnored private weak var log: EventLog?
+    /// Each speaker's name, for the log.
+    @ObservationIgnored private var names: [String: String] = [:]
     /// The messages already heard (spoken, kept or let go), by speaker.
     @ObservationIgnored private var heard: [String: Set<String>] = [:]
     /// Who was still on the job when last heard from.
@@ -88,8 +100,9 @@ public final class Narrator {
     private(set) var waiting: [Line] = []
     private(set) var speaking: Line?
 
-    public init(engine: any SpeechEngine) {
+    public init(engine: any SpeechEngine, log: EventLog? = nil) {
         self.engine = engine
+        self.log = log
     }
 
     /// Takes in what the characters have said lately. Each character's voice
@@ -97,6 +110,7 @@ public final class Narrator {
     /// `inEarshot`, and kept for a call if not.
     public func listen(to speakers: [Speaker], inEarshot: Set<String>) {
         for (voice, speaker) in speakers.enumerated() {
+            names[speaker.id] = speaker.name
             var heard = heard[speaker.id] ?? []
             for message in speaker.messages where !heard.contains(message.id) {
                 heard.insert(message.id)
@@ -116,14 +130,6 @@ public final class Narrator {
         working = Set(speakers.filter(\.isWorking).map(\.id))
         ring()
         sayNext()
-    }
-
-    /// Marks everything the characters have said so far as heard, without
-    /// saying it or keeping it for a call: what was said before you came.
-    public func letGo(of speakers: [Speaker]) {
-        for speaker in speakers {
-            heard[speaker.id, default: []].formUnion(speaker.messages.map(\.id))
-        }
     }
 
     /// You or the characters moved: lines from those now out of earshot are
@@ -189,12 +195,14 @@ public final class Narrator {
     }
 
     /// Each character done with its job, with lines you missed, calls you,
-    /// or adds them to the call it has already made.
+    /// or adds them to the call it has already made, and writes it down in
+    /// the log.
     private func ring() {
         let done = missed.filter { !working.contains($0.key) && !$0.value.isEmpty }
         // In the characters' order, when several finish at once.
         for (speakerID, lines) in done.sorted(by: { $0.value[0].voice < $1.value[0].voice }) {
             missed[speakerID] = nil
+            log?.record(.call, "Called you: " + lines.map(\.text).joined(separator: " "), sessionID: speakerID, name: names[speakerID] ?? speakerID)
             if let index = calls.firstIndex(where: { $0.speakerID == speakerID }) {
                 calls[index].lines += lines.map(\.text)
             } else {
