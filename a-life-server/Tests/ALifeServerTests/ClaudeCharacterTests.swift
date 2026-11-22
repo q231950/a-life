@@ -819,7 +819,7 @@ final class LiveClaudeCodeTests: XCTestCase {
                 helpers.append(helper)
             case .approvalRequested(let approval):
                 try await builder.decide(approvalID: approval.id, allow: true)
-            case .statusChanged(.idle, stopReason: .endTurn?):
+            case .statusChanged(.idle, stopReason: .endTurn?, _):
                 break events
             default:
                 break

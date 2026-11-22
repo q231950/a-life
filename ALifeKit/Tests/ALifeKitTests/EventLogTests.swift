@@ -15,6 +15,26 @@ final class EventLogTests: XCTestCase {
         XCTAssertEqual(Set(log.entries.map(\.id)).count, 3)
     }
 
+    func testWaitingForTheUsageLimitAndCarryingOnAreLogged() {
+        let log = EventLog(seenStore: InMemoryLogSeenStore())
+        var state = SessionState(id: "builder", name: "Builder")
+        state.apply(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "c1")))
+        let builder = AgentSession(state)
+        builder.log = log
+        let resumesAt = start + 3 * 3600
+        builder.apply(EventEnvelope(seq: 2, event: .statusChanged(.idle, stopReason: .usageLimit, resumesAt: resumesAt), time: start))
+        XCTAssertEqual(builder.resumesAt, resumesAt)
+        builder.apply(EventEnvelope(seq: 3, event: .message(Message(kind: .user, speaker: Message.aLife, text: "please continue")), time: resumesAt))
+        builder.apply(EventEnvelope(seq: 4, event: .statusChanged(.running, stopReason: nil), time: resumesAt))
+        XCTAssertNil(builder.resumesAt)
+        // What you say yourself isn't logged.
+        builder.apply(EventEnvelope(seq: 5, event: .message(Message(kind: .user, speaker: "You", text: "Thanks")), time: resumesAt + 1))
+
+        XCTAssertEqual(log.entries.map(\.kind), [.usageLimit, .continued])
+        XCTAssertTrue(log.entries[0].text.hasPrefix("Hit the 5-hour usage limit. Back at "))
+        XCTAssertEqual(log.entries[1].text, "Told to carry on: please continue")
+    }
+
     func testEntriesAreOneShortPlainLine() {
         let log = EventLog(seenStore: InMemoryLogSeenStore())
         log.record(.reply, "## Done\n\nI built a **café**.", sessionID: "builder", name: "Builder", time: start)

@@ -29,6 +29,10 @@ public final class EventLog {
             case jobDone
             /// Someone stopped it.
             case stopped
+            /// It ran into the 5-hour usage limit, and waits for it to reset.
+            case usageLimit
+            /// a*life told it to carry on once the usage limit had reset.
+            case continued
             /// It asked you about a tool call.
             case waitingForYou
             /// It called you about what you missed.

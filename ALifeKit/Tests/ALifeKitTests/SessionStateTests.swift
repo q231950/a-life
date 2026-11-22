@@ -64,6 +64,37 @@ final class SessionStateTests: XCTestCase {
         XCTAssertEqual(snapshot?["last_seq"] as? Int, 2)
     }
 
+    func testWaitingForTheUsageLimitSaysWhenItCarriesOn() throws {
+        // As the server sends it: seconds since 1970.
+        let json = #"{"seq":4,"event":{"type":"session.status","status":"idle","stop_reason":"usage_limit","resumes_at":1800010860}}"#
+        let envelope = try JSONDecoder().decode(EventEnvelope.self, from: Data(json.utf8))
+        let resumesAt = Date(timeIntervalSince1970: 1_800_010_860)
+        XCTAssertEqual(envelope.event, .statusChanged(.idle, stopReason: .usageLimit, resumesAt: resumesAt))
+        XCTAssertEqual(try JSONDecoder().decode(EventEnvelope.self, from: JSONEncoder().encode(envelope)), envelope)
+
+        var state = SessionState(id: "builder", name: "Builder")
+        state.apply(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "c1")))
+        state.apply(envelope)
+        XCTAssertEqual(state.stopReason, .usageLimit)
+        XCTAssertEqual(state.resumesAt, resumesAt)
+        // In the snapshot too, in seconds since 1970, whatever the encoder's dates.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let snapshot = try JSONSerialization.jsonObject(with: encoder.encode(state)) as? [String: Any]
+        XCTAssertEqual(snapshot?["stop_reason"] as? String, "usage_limit")
+        XCTAssertEqual(snapshot?["resumes_at"] as? Double, 1_800_010_860)
+        XCTAssertEqual(try JSONDecoder().decode(SessionState.self, from: encoder.encode(state)), state)
+
+        // Carrying on, it no longer waits.
+        state.apply(EventEnvelope(seq: 5, event: .statusChanged(.running, stopReason: nil)))
+        XCTAssertNil(state.resumesAt)
+
+        // Servers from before it don't say when, and older front ends don't
+        // know the stop reason.
+        let old = #"{"seq":4,"event":{"type":"session.status","status":"idle","stop_reason":"end_turn"}}"#
+        XCTAssertEqual(try JSONDecoder().decode(EventEnvelope.self, from: Data(old.utf8)).event, .statusChanged(.idle, stopReason: .endTurn))
+    }
+
     func testUnknownEventsAndValuesAreTolerated() throws {
         let json = #"[{"seq":1,"event":{"type":"weather.changed","sky":"rain"}},{"seq":2,"event":{"type":"session.status","status":"napping","stop_reason":"bored"}}]"#
         let envelopes = try JSONDecoder().decode([EventEnvelope].self, from: Data(json.utf8))

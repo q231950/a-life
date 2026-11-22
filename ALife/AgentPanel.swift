@@ -50,6 +50,10 @@ struct SessionStatusBar: View {
     private var unseen: Int { server.log.unseen.count }
     private var waiting: [String] { server.sessions.filter { $0.isWaitingForYou }.map { $0.name } }
     private var working: [String] { server.sessions.filter { $0.status == .running }.map { $0.name } }
+    /// Who is waiting for the usage limit to reset, and when the first is back.
+    private var resting: [AgentSession] {
+        server.sessions.filter { $0.resumesAt != nil }.sorted { $0.resumesAt! < $1.resumesAt! }
+    }
 
     private var statusText: String {
         switch server.phase {
@@ -64,6 +68,10 @@ struct SessionStatusBar: View {
         }
         if !working.isEmpty {
             return "\(ListFormatter.localizedString(byJoining: working)) \(working.count == 1 ? "is" : "are") working"
+        }
+        if let first = resting.first, let back = first.resumesAt {
+            let names = ListFormatter.localizedString(byJoining: resting.map(\.name))
+            return "\(names) \(resting.count == 1 ? "is" : "are") waiting for the usage limit, back at \(back.formatted(date: .omitted, time: .shortened))"
         }
         return "Everyone is idle"
     }
@@ -720,7 +728,9 @@ extension AgentSession {
         switch status {
         case .running: return activity.map { "Working: \($0)" } ?? "Working"
         case .terminated: return "Session ended"
-        default: return stopReason == .interrupted ? "Stopped" : "Idle"
+        default:
+            if let resumesAt { return "Back at \(resumesAt.formatted(date: .omitted, time: .shortened))" }
+            return stopReason == .interrupted ? "Stopped" : "Idle"
         }
     }
 
@@ -733,6 +743,7 @@ extension AgentSession {
     /// character's shirt colour rather than the status's.
     var statusSymbol: String {
         if isWaitingForYou { return "exclamationmark.circle.fill" }
+        if resumesAt != nil { return "hourglass.circle" }
         return status == .running ? "circle.fill" : "circle"
     }
 }

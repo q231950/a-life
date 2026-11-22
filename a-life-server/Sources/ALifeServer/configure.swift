@@ -115,6 +115,15 @@ enum Players: Sendable {
         return lot
     }
 
+    /// Where the server keeps what it must remember between starts, such as
+    /// the characters waiting for the usage limit to reset
+    /// (`continues.json`): `ALIFE_STATE_DIR`, or `~/a-life-state` unless it
+    /// is set. It is made when there is something to keep.
+    static func stateDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        environment["ALIFE_STATE_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("a-life-state", isDirectory: true)
+    }
+
     /// Where the voice model the front ends speak with is: `ALIFE_VOICE_DIR`,
     /// or `~/a-life-voice` unless it is set. It may not be there at all.
     static func voiceDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -132,23 +141,27 @@ struct ConfigurationError: Error, CustomStringConvertible {
 }
 
 /// Sets the server up with a session per character in `cast`, played by
-/// `players`, the lot in `lotDirectory`, and the voice model in
-/// `voiceDirectory`. Each is as the environment says if `nil`: the cast is
+/// `players`, the lot in `lotDirectory`, the voice model in
+/// `voiceDirectory`, and what it remembers between starts in
+/// `stateDirectory`. Each is as the environment says if `nil`: the cast is
 /// read from the agents file, `ALIFE_AGENTS_FILE` or the checkout's
-/// `agents.yaml`, the lot is `ALIFE_LOT_DIR` and the voice model
-/// `ALIFE_VOICE_DIR`. Given `players` but no `lotDirectory`, the lot stays
-/// empty, and with no `voiceDirectory` there's no voice model either.
+/// `agents.yaml`, the lot is `ALIFE_LOT_DIR`, the voice model
+/// `ALIFE_VOICE_DIR` and the state `ALIFE_STATE_DIR`. Given `players` but no
+/// `lotDirectory`, the lot stays empty, with no `voiceDirectory` there's no
+/// voice model either, and with no `stateDirectory` nothing is remembered.
 func configure(
     _ app: Application,
     players playersGiven: Players? = nil,
     cast: [Character]? = nil,
     lotDirectory: URL? = nil,
     voiceDirectory: URL? = nil,
+    stateDirectory: URL? = nil,
     lotSurveyInterval: Duration = .seconds(1)
 ) async throws {
     let cast = try cast ?? loadCast(logger: app.logger)
     var lotDirectory = lotDirectory
     var voiceDirectory = voiceDirectory
+    var stateDirectory = stateDirectory
     let players: Players
     if let given = playersGiven {
         players = given
@@ -156,6 +169,7 @@ func configure(
         let directory = try lotDirectory ?? Players.lotDirectory()
         lotDirectory = directory
         voiceDirectory = voiceDirectory ?? Players.voiceDirectory()
+        stateDirectory = stateDirectory ?? Players.stateDirectory()
         players = try Players.fromEnvironment(for: cast, lot: directory, logger: app.logger)
     }
 
@@ -176,6 +190,13 @@ func configure(
         await lot.watch(every: lotSurveyInterval)
     }
 
+    // Who was waiting for the usage limit to reset when the server stopped.
+    let continues = PendingContinues(file: stateDirectory?.appendingPathComponent("continues.json"), logger: app.logger)
+    let waiting = await continues.all
+    if let file = continues.file, !waiting.isEmpty {
+        app.logger.notice("Waiting for the usage limit to reset, from \(file.path): \(waiting.keys.sorted().joined(separator: ", "))")
+    }
+
     var sessions: [HostedSession] = []
     for character in cast {
         let hub = SessionHub(id: character.id, name: character.name, color: character.color)
@@ -183,11 +204,14 @@ func configure(
         let backend: any SessionBackend
         switch players {
         case .claudeCode(let claudeCode):
-            backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: app.logger)
+            backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: app.logger, continues: continues)
         case .dummies(let step):
             backend = DummyCharacter(character, hub: hub, step: step)
         }
-        await backend.reset() // starts the first conversation
+        await backend.reset() // starts the first conversation, and forgets what it waited for
+        if let claude = backend as? ClaudeCharacter, let entry = waiting[character.id] {
+            await claude.carryOn(after: entry)
+        }
         sessions.append(HostedSession(id: character.id, hub: hub, backend: backend))
     }
 
