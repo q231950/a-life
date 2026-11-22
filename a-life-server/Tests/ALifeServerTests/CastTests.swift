@@ -38,15 +38,15 @@ final class CastTests: XCTestCase {
 
     // MARK: The shipped file
 
-    func testTheShippedFileStartsWithTheGardenerTheBuilderTheEngineerTheFlamingoEngineerAndTheTeamLead() throws {
+    func testTheShippedFileStartsWithTheBuilderTheEngineerTheFlamingoEngineerAndTheTeamLead() throws {
         let cast = try Cast.load(contentsOf: Cast.shippedFile)
         // The Team Lead adds agents after the last one, so the file can grow,
-        // but these five always come first, as they are.
-        let founders = Array(cast.prefix(5))
-        XCTAssertEqual(founders.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer", "team-lead"])
-        XCTAssertEqual(founders.map(\.name), ["Gardener", "Builder", "Engineer", "Flamingo Engineer", "Team Lead"])
-        XCTAssertEqual(founders.map(\.color), ["#D9594D", "#F2A633", "#8050C8", "#F27BA8", "#2A9D8F"])
-        XCTAssertEqual(founders.map(\.permissionMode), ["acceptEdits", "default", "default", "default", "default"])
+        // but these four always come first, as they are.
+        let founders = Array(cast.prefix(4))
+        XCTAssertEqual(founders.map(\.id), ["builder", "engineer", "flamingo-engineer", "team-lead"])
+        XCTAssertEqual(founders.map(\.name), ["Builder", "Engineer", "Flamingo Engineer", "Team Lead"])
+        XCTAssertEqual(founders.map(\.color), ["#F2A633", "#8050C8", "#F27BA8", "#2A9D8F"])
+        XCTAssertEqual(founders.map(\.permissionMode), ["default", "default", "default", "default"])
         // The Engineer works on a*life itself, in its checkout, and the
         // Flamingo Engineer on the three repositories of Flamingo Chess.
         let flamingoChess = Project(id: "flamingo-engineer", source: .repositories([
@@ -54,11 +54,10 @@ final class CastTests: XCTestCase {
             Project.Repository(address: "git@github.com:q231950/flamingo-chess-light.git"),
             Project.Repository(address: "git@github.com:q231950/neoneon.git"),
         ]))
-        XCTAssertEqual(founders.map(\.workspace), [.lot, .lot, .aLife, .project(flamingoChess), .lot])
-        XCTAssertEqual(founders.map(\.changesThings), [false, true, true, true, true])
-        XCTAssertEqual(founders.map(\.helper.name), ["planter", "construction-worker", "a-life-expert", "flamingo-expert", "recruiter"])
+        XCTAssertEqual(founders.map(\.workspace), [.lot, .aLife, .project(flamingoChess), .lot])
+        XCTAssertEqual(founders.map(\.changesThings), [true, true, true, true])
+        XCTAssertEqual(founders.map(\.helper.name), ["construction-worker", "a-life-expert", "flamingo-expert", "recruiter"])
         XCTAssertEqual(founders.map(\.helper.tools), [
-            ["Read", "Glob", "Grep", "Write", "Edit"],
             ["Read", "Glob", "Grep", "Write", "Edit"],
             ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
             ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
@@ -67,7 +66,7 @@ final class CastTests: XCTestCase {
             ["Read", "Glob", "Grep", "Bash"],
         ])
 
-        // Every agent, the five and any added since, has a name and a helper
+        // Every agent, the four and any added since, has a name and a helper
         // of its own, and a role and helper that say who they are.
         XCTAssertEqual(Set(cast.map(\.id)).count, cast.count)
         XCTAssertEqual(Set(cast.map(\.name)).count, cast.count)
@@ -82,7 +81,7 @@ final class CastTests: XCTestCase {
         }
 
         // The lines a helper writes at the top of a file keep their lines.
-        XCTAssertTrue(Character.gardener.helper.prompt.contains("garden/rose-bed.md, starting with these lines, which put it on the lot:\n\n---\nkind: rose\ncolor: red\n"))
+        XCTAssertTrue(Character.conservationist.helper.prompt.contains("garden/rose-bed.md, starting with these lines, which put it on the lot:\n\n---\nkind: rose\ncolor: red\n"))
         XCTAssertTrue(Character.builder.helper.prompt.contains("\n---\nkind: restaurant\nx: 38\ny: 22\nwidth: 5\ndepth: 4\n---\n"))
 
         // The Engineer sends its a*life expert for any change to a*life, and
@@ -112,7 +111,7 @@ final class CastTests: XCTestCase {
         // server's command, from what the server tells its session.
         let teamLead = Character.teamLead
         XCTAssertTrue(teamLead.role.contains("`recruiter`"))
-        XCTAssertTrue(teamLead.role.contains("leave the lot to the Builder and the Gardener"))
+        XCTAssertTrue(teamLead.role.contains("leave the lot to the Builder and the Conservationist"))
         XCTAssertTrue(teamLead.helper.description.contains("Use it whenever an agent is to be added."))
         let recruiter = teamLead.helper.prompt
         for part in ["cat \"$ALIFE_AGENTS_FILE\"", "\"$ALIFE_SERVER_COMMAND\" add-agent <<'AGENT'\nid: painter\n", "Never write or edit the file yourself"] {
@@ -354,7 +353,7 @@ final class CastTests: XCTestCase {
             ),
             (
                 amended(replacing: "id: painter", with: "id: The Painter"),
-                "agents.yaml: agents[0].id \"The Painter\" won't do. An id has only lowercase letters, digits and hyphens, such as \"gardener\"."
+                "agents.yaml: agents[0].id \"The Painter\" won't do. An id has only lowercase letters, digits and hyphens, such as \"builder\"."
             ),
             (
                 painter + "\n  - id: painter\n    name: Another\n    role: Again.\n    helper: {name: roller, tools: [Read], description: Rolls., prompt: Roll.}",

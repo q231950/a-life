@@ -22,7 +22,7 @@ struct ALifeApp: App {
         SpinComponent.registerComponent()
         BlinkComponent.registerComponent()
         HorseComponent.registerComponent()
-        FoalComponent.registerComponent()
+        AnimalComponent.registerComponent()
         PenAnimalComponent.registerComponent()
         RingComponent.registerComponent()
         SkyComponent.registerComponent()

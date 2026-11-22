@@ -93,7 +93,7 @@ final class ClaudeCharacterTests: XCTestCase {
         let agents = try JSONValue.decode(Data(XCTUnwrap(value(after: "--agents", in: arguments)).utf8))
         XCTAssertEqual(agents["construction-worker"]?["tools"], ["Read", "Glob", "Grep", "Write", "Edit"])
         XCTAssertEqual(agents["construction-worker"]?["model"], "inherit")
-        XCTAssertNil(agents["planter"])
+        XCTAssertNil(agents["keeper"])
         XCTAssertTrue(try XCTUnwrap(value(after: "--append-system-prompt", in: arguments)).contains("`construction-worker` agent"))
 
         // It is told what you said, after the SDK's handshake.
@@ -162,29 +162,29 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertEqual(state.status, .idle)
     }
 
-    func testTheGardenerSendsItsPlanter() async throws {
-        let (gardener, hub, claudeCode) = await make(.gardener)
-        try await gardener.handleMessage("Plant some roses")
+    func testTheConservationistSendsItsKeeper() async throws {
+        let (conservationist, hub, claudeCode) = await make(.conservationist)
+        try await conservationist.handleMessage("Plant some roses")
 
         // Its edits on the lot go ahead without asking.
         let arguments = try XCTUnwrap(claudeCode.launches.first)
         XCTAssertEqual(value(after: "--permission-mode", in: arguments), "acceptEdits")
         let agents = try JSONValue.decode(Data(XCTUnwrap(value(after: "--agents", in: arguments)).utf8))
-        XCTAssertNotNil(agents["planter"])
+        XCTAssertNotNil(agents["keeper"])
         XCTAssertNil(agents["construction-worker"])
 
         // A helper sent by an older Claude Code's `Task` tool, reporting back
         // with its tool result alone.
         let cli = try XCTUnwrap(claudeCode.clis.first)
-        cli.say(sendsOff("planter", to: "Plant roses").replacingOccurrences(of: #""name":"Agent""#, with: #""name":"Task""#))
-        var state = await until(hub, "the planter") { !$0.subagents.isEmpty }
+        cli.say(sendsOff("keeper", to: "Plant roses").replacingOccurrences(of: #""name":"Agent""#, with: #""name":"Task""#))
+        var state = await until(hub, "the keeper") { !$0.subagents.isEmpty }
         XCTAssertEqual(state.subagents.map(\.task), ["Plant roses"])
         cli.say(helperReport())
-        await until(hub, "the planter to report back") { $0.subagents.isEmpty }
+        await until(hub, "the keeper to report back") { $0.subagents.isEmpty }
         cli.say(says("Roses are in."))
         cli.say(result(text: "Roses are in."))
         state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
-        XCTAssertEqual(transcript(state), ["You: Plant some roses", "Gardener: Roses are in."])
+        XCTAssertEqual(transcript(state), ["You: Plant some roses", "Conservationist: Roses are in."])
     }
 
     func testTheEngineerSendsItsALifeExpertToChangeALife() async throws {

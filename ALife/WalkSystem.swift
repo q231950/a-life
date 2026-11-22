@@ -69,7 +69,9 @@ struct WalkSystem: System {
             let distance = simd_length(toTarget)
             let step = walk.speed * deltaTime
 
-            if distance > 0.001 {
+            // It faces the way it's going across the lot, and keeps its
+            // heading going straight down, as a bird or a pegasus does to land.
+            if simd_length(SIMD2(toTarget.x, toTarget.z)) > 0.001 {
                 // +z is the character's face.
                 entity.orientation = simd_quatf(angle: atan2(toTarget.x, toTarget.z), axis: [0, 1, 0])
             }

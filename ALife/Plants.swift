@@ -2,9 +2,10 @@ import ALifeClient
 import CoreGraphics
 import RealityKit
 
-/// The Gardener's beds, drawn by their kind: flowers in their colour (roses,
-/// tulips, daisies, tall sunflowers, lavender), trees (oak, birch, apple,
-/// cherry, maple, pine, palm), bushes, hedges, grass, and vegetables
+/// The Conservationist's beds of plants, drawn by their kind: flowers in
+/// their colour (roses, tulips, daisies, tall sunflowers, lavender), trees
+/// (oak, birch, apple, cherry, maple, pine, palm), bushes, hedges, grass,
+/// and vegetables
 /// (carrots, lettuces, cabbages, tomatoes, pumpkins). One plant or clump
 /// grows on each tile of a bed; a kind it doesn't know is a little green
 /// plant.

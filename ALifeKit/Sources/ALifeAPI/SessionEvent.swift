@@ -145,10 +145,10 @@ public struct EventEnvelope: Codable, Equatable, Sendable {
 /// Built by applying the session's events in order; the server and the
 /// clients use the same code to do it.
 public struct SessionState: Codable, Equatable, Identifiable, Sendable {
-    /// The session's id, which is also its character's, such as `gardener`.
+    /// The session's id, which is also its character's, such as `builder`.
     /// It never changes; it is what the session's URLs use.
     public let id: String
-    /// The character's name, such as `Gardener`.
+    /// The character's name, such as `Builder`.
     public var name: String
     /// The character's colour, as `#RRGGBB`: the shirt it wears on the lot,
     /// which its helpers wear too. `nil` leaves it to the front end.
