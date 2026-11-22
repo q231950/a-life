@@ -4,11 +4,12 @@ import RealityKit
 /// The animals the Conservationist puts out: a bed whose kind is an animal
 /// (see `LotItem.animal`) has one on each tile, on a patch of long grass:
 /// foals, brown bears, bigger polar bears, small birds, unicorns with a
-/// golden horn, and pegasuses with wings. Each is in the bed's colour or a
-/// coat of its own. They are the bed's children, so they go when it is dug
-/// up, and their parts are named as a horse's are ("Gait", "FrontLeg",
-/// "BackLeg", "Neck", and "Wing" for those that fly), so `BarnSystem` takes
-/// them all playing round their bed the same way.
+/// golden horn, pegasuses with wings, and the dinosaurs and pterosaurs in
+/// `Dinosaurs`. Each is in the bed's colour or a coat of its own. They are
+/// the bed's children, so they go when it is dug up, and their parts are
+/// named as a horse's are ("Gait", "FrontLeg", "BackLeg", "Neck", and
+/// "Wing" for those that fly), so `BarnSystem` takes them all playing round
+/// their bed the same way.
 @MainActor
 enum Animals {
     /// A bed of `item`'s animals, `animal`s, one on each of `tiles`,
@@ -41,6 +42,11 @@ enum Animals {
             case .bird: creature = makeBird(feathers: coat)
             case .unicorn: creature = makeUnicorn(coat: coat, mane: manes[pick % manes.count])
             case .pegasus: creature = makePegasus(coat: coat)
+            case .stegosaurus: creature = Dinosaurs.makeStegosaurus(hide: coat)
+            case .diplodocus: creature = Dinosaurs.makeDiplodocus(hide: coat)
+            case .pterosaur: creature = Dinosaurs.makePterosaur(hide: coat)
+            case .triceratops: creature = Dinosaurs.makeTriceratops(hide: coat)
+            case .tyrannosaurus: creature = Dinosaurs.makeTyrannosaurus(hide: coat)
             }
             creature.position = tile.position
             creature.orientation = simd_quatf(angle: .random(in: 0..<(2 * .pi)), axis: [0, 1, 0])
@@ -93,6 +99,36 @@ enum Animals {
                 PlatformColor(red: 0.97, green: 0.96, blue: 0.94, alpha: 1), // white
                 PlatformColor(red: 0.84, green: 0.85, blue: 0.88, alpha: 1), // silver
                 PlatformColor(red: 0.72, green: 0.71, blue: 0.69, alpha: 1), // grey
+            ]
+        case .stegosaurus:
+            [
+                PlatformColor(red: 0.42, green: 0.48, blue: 0.23, alpha: 1), // olive
+                PlatformColor(red: 0.6, green: 0.5, blue: 0.32, alpha: 1), // sand
+                PlatformColor(red: 0.5, green: 0.32, blue: 0.2, alpha: 1), // rust
+            ]
+        case .diplodocus:
+            [
+                PlatformColor(red: 0.5, green: 0.53, blue: 0.48, alpha: 1), // grey-green
+                PlatformColor(red: 0.43, green: 0.48, blue: 0.53, alpha: 1), // slate
+                PlatformColor(red: 0.66, green: 0.58, blue: 0.42, alpha: 1), // sand
+            ]
+        case .pterosaur:
+            [
+                PlatformColor(red: 0.63, green: 0.36, blue: 0.22, alpha: 1), // rust
+                PlatformColor(red: 0.55, green: 0.53, blue: 0.5, alpha: 1), // grey
+                PlatformColor(red: 0.72, green: 0.58, blue: 0.35, alpha: 1), // ochre
+            ]
+        case .triceratops:
+            [
+                PlatformColor(red: 0.62, green: 0.52, blue: 0.36, alpha: 1), // sand
+                PlatformColor(red: 0.4, green: 0.45, blue: 0.27, alpha: 1), // olive
+                PlatformColor(red: 0.45, green: 0.36, blue: 0.28, alpha: 1), // brown
+            ]
+        case .tyrannosaurus:
+            [
+                PlatformColor(red: 0.3, green: 0.4, blue: 0.24, alpha: 1), // dark green
+                PlatformColor(red: 0.42, green: 0.33, blue: 0.24, alpha: 1), // brown
+                PlatformColor(red: 0.45, green: 0.44, blue: 0.4, alpha: 1), // grey
             ]
         }
     }

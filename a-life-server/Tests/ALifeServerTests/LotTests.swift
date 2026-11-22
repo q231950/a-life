@@ -159,6 +159,23 @@ final class LotTests: XCTestCase {
         XCTAssertEqual(problems, ["garden/herd.md: a bed of pegasuses has a pegasus on each tile, and can have at most 6 of them, not 7 (7 by 1)."])
     }
 
+    func testTheConservationistCanPutOutDinosaurs() throws {
+        try write("---\nkind: stegosaurus\ncolor: olive\nx: 2\ny: 2\nwidth: 2\n---\n# Stegosauruses", to: "garden/stegosauruses.md")
+        try write("---\nkind: diplodocus\nx: 2\ny: 6\n---\n", to: "garden/diplodocus.md")
+        // As the person spells them.
+        try write("---\nkind: pterosaurus\ncolor: rust\nx: 2\ny: 10\nwidth: 3\n---\n", to: "garden/pterosaurs.md")
+        try write("---\nkind: triceratops\ncolor: sand\nx: 2\ny: 14\n---\n", to: "garden/triceratops.md")
+        try write("---\nkind: tyranosaurus\ncolor: slate\nx: 2\ny: 18\n---\n", to: "garden/t-rex.md")
+        // Too many triceratops for one bed.
+        try write("---\nkind: triceratops\nx: 10\ny: 2\nwidth: 4\ndepth: 2\n---\n", to: "garden/herd.md")
+
+        let (items, problems) = survey()
+        XCTAssertEqual(items.map(\.id), ["garden/diplodocus.md", "garden/pterosaurs.md", "garden/stegosauruses.md", "garden/t-rex.md", "garden/triceratops.md"])
+        XCTAssertEqual(items.map(\.animal), [.diplodocus, .pterosaur, .stegosaurus, .tyrannosaurus, .triceratops])
+        XCTAssertEqual(items.map(\.color), [nil, "#A0522D", "#6B7A3A", "#6E7B86", "#C9AE7C"])
+        XCTAssertEqual(problems, ["garden/herd.md: a bed of triceratops has a triceratops on each tile, and can have at most 6 of them, not 8 (4 by 2)."])
+    }
+
     func testTheKeeperIsToldItCanPutOutAnimals() {
         let keeper = Character.conservationist.helper
         XCTAssertTrue(keeper.prompt.contains("at most \(LotPlan.mostAnimals)"), keeper.prompt)
@@ -210,7 +227,7 @@ final class LotTests: XCTestCase {
         XCTAssertTrue(report.contains("## Not on the lot\n\n- buildings/office.md: it isn't on the lot"), report)
         // It says which animals a*life draws, for the Conservationist's keeper.
         XCTAssertTrue(report.contains("## Animals\n\na*life draws these animals in garden/, each in a bed of its own kind with one on each tile, at most 6 to a bed"), report)
-        for kind in ["foal", "bear", "polar-bear", "bird", "unicorn", "pegasus"] {
+        for kind in ["foal", "bear", "polar-bear", "bird", "unicorn", "pegasus", "stegosaurus", "diplodocus", "pterosaur", "triceratops", "tyrannosaurus"] {
             XCTAssertTrue(report.contains("\n- kind: \(kind). "), kind)
         }
 

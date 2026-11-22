@@ -84,6 +84,12 @@ final class LotTests: XCTestCase {
             "bird": .bird, "birds": .bird, "blue bird": .bird,
             "unicorn": .unicorn, "unicorns": .unicorn,
             "pegasus": .pegasus, "pegasuses": .pegasus, "pegasi": .pegasus,
+            "stegosaurus": .stegosaurus, "stegosauruses": .stegosaurus, "Stegosaur": .stegosaurus,
+            "diplodocus": .diplodocus, "diplodocuses": .diplodocus,
+            "pterosaur": .pterosaur, "pterosaurs": .pterosaur, "pterosaurus": .pterosaur, "pterodactyl": .pterosaur,
+            "triceratops": .triceratops, "Triceratopses": .triceratops,
+            "tyrannosaurus": .tyrannosaurus, "tyranosaurus": .tyrannosaurus, "tyrannosaurus rex": .tyrannosaurus,
+            "t-rex": .tyrannosaurus, "T. rex": .tyrannosaurus, "trex": .tyrannosaurus,
         ]
         for (kind, expected) in kinds {
             XCTAssertEqual(animal(kind), expected, kind)
@@ -95,8 +101,14 @@ final class LotTests: XCTestCase {
         XCTAssertNil(animal("bear", .building))
 
         // The kinds a bed of them has, as the Conservationist writes them.
-        XCTAssertEqual(LotItem.Animal.allCases.map(\.kind), ["foal", "bear", "polar-bear", "bird", "unicorn", "pegasus"])
-        XCTAssertEqual(LotItem.Animal.allCases.map(\.plural), ["foals", "bears", "polar bears", "birds", "unicorns", "pegasuses"])
-        XCTAssertEqual(LotItem.Animal.allCases.filter(\.flies), [.bird, .pegasus])
+        XCTAssertEqual(LotItem.Animal.allCases.map(\.kind), [
+            "foal", "bear", "polar-bear", "bird", "unicorn", "pegasus",
+            "stegosaurus", "diplodocus", "pterosaur", "triceratops", "tyrannosaurus",
+        ])
+        XCTAssertEqual(LotItem.Animal.allCases.map(\.plural), [
+            "foals", "bears", "polar bears", "birds", "unicorns", "pegasuses",
+            "stegosauruses", "diplodocuses", "pterosaurs", "triceratops", "tyrannosauruses",
+        ])
+        XCTAssertEqual(LotItem.Animal.allCases.filter(\.flies), [.bird, .pegasus, .pterosaur])
     }
 }

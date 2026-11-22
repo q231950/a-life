@@ -21,7 +21,7 @@ import Yams
 /// An empty file stands for nothing. Without a `width` and `depth`, a building takes 3 by 3 tiles and a plant
 /// one. Plants can have a `color` too, and anything can have a `name`;
 /// without one, the file's first heading names it. A bed whose kind is an
-/// animal (see `LotItem.Animal`), such as a foal, a bear or a bird, has one
+/// animal (see `LotItem.Animal`), such as a foal, a bear or a stegosaurus, has one
 /// on each tile, and no more than `LotPlan.mostAnimals` of them.
 enum LotSurvey {
     /// One file in `buildings/` or `garden/`.
@@ -232,6 +232,16 @@ enum LotSurvey {
             "Horses with a golden horn and a pastel mane, which graze, trot, rear and lie down. Colors such as white, cream, silver, grey, lilac or pink."
         case .pegasus:
             "Horses with wings, which walk, graze and buck, and fly up over the bed, hover and land again. Colors such as white, silver, grey, palomino or black."
+        case .stegosaurus:
+            "Dinosaurs with two rows of plates down their backs and spikes on their tails, which plod about, browse low and swing their tails. Colors such as olive, green, sand, rust or grey."
+        case .diplodocus:
+            "Big dinosaurs with very long necks and tails, which plod about, browse, rear up and lie down. Colors such as grey, olive, sand, slate or green."
+        case .pterosaur:
+            "Flying reptiles with a crest and leathery wings, which waddle and peck about, and fly up over the bed, hover and land again. Colors such as rust, sand, grey, brown or olive."
+        case .triceratops:
+            "Dinosaurs with a frill and three horns, which graze, trot, lower their horns and kick up their heels, and lie down. Colors such as sand, olive, brown, grey or rust."
+        case .tyrannosaurus:
+            "Dinosaurs that walk on two legs, with a big head and small arms, which stalk about, sniff around, roar and lie down. Colors such as green, olive, brown, grey or rust."
         }
     }
 
@@ -294,6 +304,8 @@ enum LotSurvey {
         // Coats, for foals, bears, unicorns and pegasuses.
         "chestnut": "#8C4A23", "bay": "#52321F", "palomino": "#D9B26F", "dun": "#B89A6A",
         "cinnamon": "#9A5B2E", "silver": "#C8CCD2",
+        // Hides, for dinosaurs and pterosaurs.
+        "olive": "#6B7A3A", "sand": "#C9AE7C", "rust": "#A0522D", "slate": "#6E7B86",
     ]
 
     /// A colour given by name, such as `red`, or as `#RRGGBB`, as

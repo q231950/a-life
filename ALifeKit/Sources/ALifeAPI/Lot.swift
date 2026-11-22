@@ -125,6 +125,19 @@ public struct LotItem: Codable, Identifiable, Equatable, Sendable {
         case unicorn
         /// A horse with wings, which both walks and flies.
         case pegasus
+        /// A dinosaur with two rows of plates down its back and spikes on
+        /// its tail.
+        case stegosaurus
+        /// A dinosaur with a very long neck and an even longer tail.
+        case diplodocus
+        /// A flying reptile with a crest and leathery wings, which both
+        /// walks and flies. It also goes by pterosaurus or pterodactyl.
+        case pterosaur
+        /// A dinosaur with a frill and three horns.
+        case triceratops
+        /// A dinosaur that walks on two legs, with a big head and small
+        /// arms. It also goes by T. rex.
+        case tyrannosaurus
 
         /// The kind a bed of them has, such as `polar-bear`.
         public var kind: String { rawValue }
@@ -134,21 +147,26 @@ public struct LotItem: Codable, Identifiable, Equatable, Sendable {
             self == .polarBear ? "polar bear" : rawValue
         }
 
-        /// Several of them, such as `polar bears` or `pegasuses`.
+        /// Several of them, such as `polar bears`, `pegasuses` or `triceratops`.
         public var plural: String {
-            self == .pegasus ? "pegasuses" : name + "s"
+            switch self {
+            case .pegasus, .stegosaurus, .diplodocus, .tyrannosaurus: name + "es"
+            case .triceratops: name
+            default: name + "s"
+            }
         }
 
         /// Whether it flies as well as walks.
         public var flies: Bool {
-            self == .bird || self == .pegasus
+            self == .bird || self == .pegasus || self == .pterosaur
         }
     }
 
     /// The animals it is a bed of, one on each tile, if it is a bed of
     /// animals rather than plants: its kind names one, such as `foal`,
-    /// `bear`, `polar-bear`, `bird`, `unicorn` or `pegasus`. The animals play
-    /// round their bed, so it isn't in anyone's way.
+    /// `bear`, `polar-bear`, `bird`, `unicorn`, `pegasus`, `stegosaurus`,
+    /// `diplodocus`, `pterosaur`, `triceratops` or `tyrannosaurus`. The
+    /// animals play round their bed, so it isn't in anyone's way.
     public var animal: Animal? {
         guard category == .plant else { return nil }
         let words = kind.lowercased().split { !$0.isLetter }.map(String.init)
@@ -158,6 +176,11 @@ public struct LotItem: Codable, Identifiable, Equatable, Sendable {
         if phrase.contains("polar bear") || has(["polarbear", "polarbears"]) { return .polarBear }
         if has(["unicorn", "unicorns"]) { return .unicorn }
         if has(["pegasus", "pegasuses", "pegasi"]) { return .pegasus }
+        if has(Self.stegosaurusWords) { return .stegosaurus }
+        if has(Self.diplodocusWords) { return .diplodocus }
+        if has(Self.pterosaurWords) { return .pterosaur }
+        if has(Self.triceratopsWords) { return .triceratops }
+        if has(Self.tyrannosaurusWords) || " \(phrase) ".contains(" t rex ") { return .tyrannosaurus }
         if has(Self.foalWords) || phrase.contains("baby horse") { return .foal }
         // Only a bear or a bird at the end, so bear's breeches, a bird
         // cherry and a bird of paradise are still plants.
@@ -173,6 +196,16 @@ public struct LotItem: Codable, Identifiable, Equatable, Sendable {
     public var isFoals: Bool { animal == .foal }
 
     private static let foalWords: Set<String> = ["foal", "foals", "colt", "colts", "filly", "fillies", "pony", "ponies"]
+    // The dinosaurs' names, with their plurals and the ways people spell them.
+    private static let stegosaurusWords: Set<String> = ["stegosaurus", "stegosauruses", "stegosauri", "stegosaur", "stegosaurs"]
+    private static let diplodocusWords: Set<String> = ["diplodocus", "diplodocuses", "diplodoci"]
+    private static let pterosaurWords: Set<String> = [
+        "pterosaur", "pterosaurs", "pterosaurus", "pterosauruses", "pterodactyl", "pterodactyls", "pteranodon", "pteranodons",
+    ]
+    private static let triceratopsWords: Set<String> = ["triceratops", "triceratopses", "triceratopes"]
+    private static let tyrannosaurusWords: Set<String> = [
+        "tyrannosaurus", "tyrannosauruses", "tyrannosauri", "tyrannosaur", "tyrannosaurs", "tyranosaurus", "tyranosaurs", "trex",
+    ]
 }
 
 /// Everything on the lot that the characters have built and planted.

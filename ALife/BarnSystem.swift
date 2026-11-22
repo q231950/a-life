@@ -77,16 +77,17 @@ struct HorseComponent: Component {
 ///
 /// It stays near its bed: it grazes (or sniffs about, or pecks) a while,
 /// trots or dashes off to a spot a few tiles away, frisks now and then (a
-/// buck and a kick, a bear or a unicorn rearing up, or a bird fluttering on
-/// the spot), and lies down for a rest. A bird or a pegasus flies, too: up
-/// and round over its bed, then it hovers a moment and comes down to land.
+/// buck and a kick, a bear or a unicorn rearing up, a bird fluttering on
+/// the spot, or a tyrannosaurus roaring), and lies down for a rest. A bird,
+/// a pegasus or a pterosaur flies, too: up and round over its bed, then it
+/// hovers a moment and comes down to land.
 struct AnimalComponent: Component {
     enum Phase {
         /// Standing, head down, nibbling at the grass, sniffing or pecking.
         case grazing
         /// Off to somewhere near the bed, at a trot or a dash.
         case trotting
-        /// Bucking, rearing up or fluttering on the spot.
+        /// Bucking, rearing up, fluttering on the spot or roaring.
         case frisking
         /// Lying down.
         case resting
@@ -387,6 +388,8 @@ struct BarnSystem: System {
             case rear
             /// Wings spread, beating, hopping on the spot.
             case flutter
+            /// Head thrown up and jaw wide open, once.
+            case roar
         }
     }
 
@@ -404,6 +407,19 @@ struct BarnSystem: System {
             Habits(trotSpeed: 1, dashSpeed: 2.4, cadence: 0.9, bounce: 0.05, graze: 0.7, frisk: .rear)
         case .bird:
             Habits(trotSpeed: 0.5, dashSpeed: 0.8, cadence: 2.5, bounce: 0.04, graze: 1, frisk: .flutter, rests: false, flightChance: 0.45, flightSpeed: 2.4, height: 0.9...2.4, flapRate: 30)
+        case .stegosaurus:
+            // Its frisk is a buck that swings its spiked tail.
+            Habits(trotSpeed: 0.8, dashSpeed: 1.8, cadence: 0.8, bounce: 0.03, graze: 0.5)
+        case .diplodocus:
+            // Its long neck comes right down to the grass.
+            Habits(trotSpeed: 0.7, dashSpeed: 1.5, cadence: 0.6, bounce: 0.03, graze: 1.35, frisk: .rear)
+        case .pterosaur:
+            Habits(trotSpeed: 0.6, dashSpeed: 1.2, cadence: 1.6, bounce: 0.04, graze: 0.9, frisk: .flutter, rests: false, flightChance: 0.4, flightSpeed: 3, height: 2...3.6, flapRate: 7)
+        case .triceratops:
+            // Its frisk lowers its horns and kicks up its heels.
+            Habits(trotSpeed: 1, dashSpeed: 2.4, cadence: 0.9, bounce: 0.04, graze: 0.6)
+        case .tyrannosaurus:
+            Habits(trotSpeed: 1.2, dashSpeed: 3, cadence: 0.8, bounce: 0.06, graze: 0.5, frisk: .roar)
         }
     }
 
@@ -453,9 +469,10 @@ struct BarnSystem: System {
 
         let frisking = state.phase == .frisking
         let progress = state.elapsed / Self.friskTime
-        // Two bucks, one after the other, or one long rear.
-        let buck = frisking && habits.frisk != .rear ? max(0, sin(progress * 4 * .pi)) : 0
+        // Two bucks, one after the other, or one long rear or roar.
+        let buck = frisking && (habits.frisk == .buck || habits.frisk == .flutter) ? max(0, sin(progress * 4 * .pi)) : 0
         let rear = frisking && habits.frisk == .rear ? max(0, sin(min(progress, 1) * .pi)) : 0
+        let roar = frisking && habits.frisk == .roar ? max(0, sin(min(progress, 1) * .pi)) : 0
         let wings: Float = state.phase.isAirborne ? 1 : frisking && state.animal.flies ? (habits.frisk == .flutter ? 1 : 0.5) : 0
 
         let neck: Float
@@ -464,12 +481,12 @@ struct BarnSystem: System {
             // A bird pecks in quick dips; the others keep their heads down.
             neck = habits.frisk == .flutter ? (sin(state.elapsed * 8) > 0.3 ? 1 : 0.1) : habits.graze + sin(state.elapsed * 3) * 0.1
         case .resting: neck = 0.1
-        case .trotting, .frisking: neck = state.stride.motion * 0.25
+        case .trotting, .frisking: neck = state.stride.motion * 0.25 - roar * 0.7 // head thrown up to roar
         case .flying, .hovering, .landing: neck = -0.1 // head up
         }
         animate(
             animal, &state.stride, speed: Self.speed(of: animal), topSpeed: max(habits.dashSpeed, habits.flightSpeed), cadence: habits.cadence,
-            neck: neck, lying: state.lying, buck: buck, rear: rear, wings: wings, flapRate: habits.flapRate, tuck: state.airborne,
+            neck: neck, lying: state.lying, buck: buck, rear: rear, jaw: roar, wings: wings, flapRate: habits.flapRate, tuck: state.airborne,
             bounce: habits.bounce, deltaTime: deltaTime
         )
     }
@@ -566,12 +583,15 @@ struct BarnSystem: System {
     /// (`bounce`), and it can lie down (`lying`, from 0 standing to 1 lying,
     /// its legs folded under it), buck (`buck`, from 0 to 1 at the top of a
     /// kick) or rear up (`rear`, from 0 to 1 up on its hind legs). One with
-    /// wings spreads them (`wings`, from 0 folded to 1 spread) and beats
-    /// them `flapRate` radians a second, and tucks its legs up as it flies
-    /// (`tuck`, from 0 to 1).
+    /// a jaw opens it (`jaw`, from 0 shut to 1 wide open), and one with a
+    /// tail sways it as it goes and lashes it as it bucks. One on two legs
+    /// ("Leg") strides with one and then the other. One with wings spreads
+    /// them (`wings`, from 0 folded to 1 spread) and beats them `flapRate`
+    /// radians a second, and tucks its legs up as it flies (`tuck`, from 0
+    /// to 1).
     private func animate(
         _ animal: Entity, _ stride: inout Stride, speed: Float, topSpeed: Float, cadence: Float = 1, neck: Float,
-        lying: Float = 0, buck: Float = 0, rear: Float = 0, wings: Float = 0, flapRate: Float = 0, tuck: Float = 0,
+        lying: Float = 0, buck: Float = 0, rear: Float = 0, jaw: Float = 0, wings: Float = 0, flapRate: Float = 0, tuck: Float = 0,
         bounce: Float = 0.1, deltaTime: Float
     ) {
         let ease = min(1, deltaTime * 6)
@@ -584,7 +604,7 @@ struct BarnSystem: System {
         guard let gait = animal.children.first(where: { $0.name == "Gait" }) else { return }
         // Settles down smoothly as it comes to a stop, and doesn't bob in the air.
         let bob = stride.motion * (1 - tuck)
-        let backLeg = gait.children.first { $0.name == "BackLeg" }?.position ?? .zero
+        let backLeg = gait.children.first { $0.name == "BackLeg" || $0.name == "Leg" }?.position ?? .zero
         // Lying, its body comes down to just above the floor; rearing, its
         // hind feet stay on it.
         let rearAngle = rear * 0.9
@@ -606,8 +626,20 @@ struct BarnSystem: System {
                 let kick: Float = isBack ? 0.9 : -0.3
                 let paw: Float = isBack ? 0.9 : 0.6 + sin(stride.phase * 2) * 0.3
                 part.orientation = simd_quatf(angle: swing * (1 - fold) + folded * fold + kick * buck + paw * rear, axis: [1, 0, 0])
+            case "Leg":
+                // Two legs, half a stride apart, folded back under it lying down.
+                let lead: Float = part.position.x > 0 ? .pi : 0
+                let swing = sin(stride.phase + lead) * (0.15 + 0.45 * stride.motion) * bob
+                let fold = max(lying, tuck)
+                part.orientation = simd_quatf(angle: swing * (1 - fold) - 1.3 * fold, axis: [1, 0, 0])
             case "Neck":
                 part.orientation = simd_quatf(angle: stride.neck, axis: [1, 0, 0])
+            case "Jaw":
+                part.orientation = simd_quatf(angle: jaw * 0.6, axis: [1, 0, 0])
+            case "Tail":
+                // Swaying from side to side, more as it hurries, and lashing out as it bucks.
+                let sway = sin(stride.phase) * (0.06 + 0.14 * stride.motion) * (1 - lying) + buck * 0.7
+                part.orientation = simd_quatf(angle: sway, axis: [0, 1, 0])
             case "Wing":
                 // Folded back along its sides, or spread and beating.
                 let side: Float = part.position.x > 0 ? 1 : -1
