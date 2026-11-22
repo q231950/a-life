@@ -32,6 +32,10 @@ public final class ServerConnection {
     /// the server says, and for servers from before there was anything to
     /// build.
     public private(set) var lot = Lot()
+    /// How much of Claude's 5-hour usage window is used, as the server last
+    /// heard. No window until the server has read one, and for servers from
+    /// before it told.
+    public private(set) var usage = Usage()
     /// What the characters have been up to, to look back on, including what
     /// they did while you were away.
     public let log: EventLog
@@ -106,6 +110,7 @@ public final class ServerConnection {
         disconnect()
         sessions = []
         lot = Lot()
+        usage = Usage()
         log.clear()
         connect()
         return true
@@ -143,6 +148,7 @@ public final class ServerConnection {
                     streams.append((session, stream))
                 }
                 let lotChanges = try await followLot(client)
+                let usageChanges = try await followUsage(client)
                 if streams.isEmpty {
                     reason = "The server has no sessions."
                 } else {
@@ -160,6 +166,13 @@ public final class ServerConnection {
                             group.addTask { @MainActor [weak self] in
                                 for try await lot in lotChanges where lot != self?.lot {
                                     self?.lot = lot
+                                }
+                            }
+                        }
+                        if let usageChanges {
+                            group.addTask { @MainActor [weak self] in
+                                for try await usage in usageChanges where usage != self?.usage {
+                                    self?.usage = usage
                                 }
                             }
                         }
@@ -185,6 +198,16 @@ public final class ServerConnection {
     private func followLot(_ client: ALifeServerClient) async throws -> AsyncThrowingStream<Lot, Error>? {
         do {
             return try await client.lotChanges()
+        } catch ALifeClientError.server(status: 404, reason: _) {
+            return nil
+        }
+    }
+
+    /// The usage's changes, starting with what it is now, or `nil` if the
+    /// server is from before it told.
+    private func followUsage(_ client: ALifeServerClient) async throws -> AsyncThrowingStream<Usage, Error>? {
+        do {
+            return try await client.usageChanges()
         } catch ALifeClientError.server(status: 404, reason: _) {
             return nil
         }

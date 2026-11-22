@@ -37,7 +37,9 @@ struct PaintComponent: Component {
 /// the stars coming out at night with a dim blue moonlight, the sky's
 /// colours, the clouds' light, the light on the world painted on the walls
 /// and on the box's edges, and the city's windows lighting up. The clouds
-/// drift every frame, so they glide rather than step.
+/// drift every frame, so they glide rather than step. While the sky eases
+/// over to a new usage window, it is brought up to date every frame, so the
+/// sun sweeps rather than steps.
 struct DaySystem: System {
     private static let skies = EntityQuery(where: .has(SkyComponent.self))
     private static let paintings = EntityQuery(where: .has(PaintComponent.self))
@@ -59,8 +61,8 @@ struct DaySystem: System {
         for entity in context.entities(matching: Self.skies, updatingSystemWhen: .rendering) {
             guard var state = entity.components[SkyComponent.self] else { continue }
             let now = Date()
-            drift(state.clouds, in: state.clock.sky(at: now))
-            if let updated = state.updated, now.timeIntervalSince(updated) < Self.interval { continue }
+            drift(state.clouds, in: Sky(phase: state.clock.cloudPhase(at: now)))
+            if let updated = state.updated, now.timeIntervalSince(updated) < Self.interval, !state.clock.isEasing(at: now) { continue }
             state.updated = now
 
             let sky = state.clock.sky(at: now)

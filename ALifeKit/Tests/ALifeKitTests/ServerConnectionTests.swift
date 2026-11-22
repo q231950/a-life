@@ -312,6 +312,34 @@ final class ServerConnectionTests: XCTestCase {
         server.disconnect()
     }
 
+    func testFollowsTheUsage() async throws {
+        let (server, _) = makeConnection()
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        await wait(for: "the usage's stream") { StubServer.requests.contains { $0.url.path == "/v1/usage/events" } }
+        XCTAssertEqual(server.usage, Usage())
+
+        let window = UsageWindow(utilization: 0.46, resetsAt: Date(timeIntervalSince1970: 1_795_366_800), readAt: Date(timeIntervalSince1970: 1_795_360_000))
+        StubServer.pushUsage(Usage(revision: 1, window: window))
+        await wait(for: "the usage") { server.usage.window == window }
+
+        server.setServerURL("https://another.invalid")
+        XCTAssertEqual(server.usage, Usage())
+        server.disconnect()
+    }
+
+    func testAServerThatDoesntTellTheUsageStillHasItsSessionsFollowed() async throws {
+        let (server, _) = makeConnection()
+        StubServer.hasUsage = false
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")), to: "gardener")
+        await wait(for: "events") { gardener.state.conversationID == "g1" }
+        XCTAssertEqual(server.usage, Usage())
+        server.disconnect()
+    }
+
     func testAFailedSendIsReportedOnThatSession() async throws {
         let (server, _) = makeConnection()
         server.connect()
@@ -340,6 +368,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var _roster: [SessionState] = []
     nonisolated(unsafe) private static var _failPosts: (status: Int, reason: String)?
     nonisolated(unsafe) private static var _hasLot = true
+    nonisolated(unsafe) private static var _hasUsage = true
 
     static var requests: [Recorded] { lock.withLock { _requests } }
     /// What `GET /v1/sessions` answers.
@@ -360,6 +389,12 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         set { lock.withLock { _hasLot = newValue } }
     }
 
+    /// Whether it tells the usage, as servers from before it did don't.
+    static var hasUsage: Bool {
+        get { lock.withLock { _hasUsage } }
+        set { lock.withLock { _hasUsage = newValue } }
+    }
+
     static func reset() {
         lock.withLock {
             _requests = []
@@ -367,6 +402,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             _roster = [SessionState(id: "gardener", name: "Gardener"), SessionState(id: "builder", name: "Builder")]
             _failPosts = nil
             _hasLot = true
+            _hasUsage = true
         }
     }
 
@@ -381,6 +417,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         guard let stream = lock.withLock({ streams["lot"] }) else { return }
         let json = String(decoding: try! JSONEncoder().encode(lot), as: UTF8.self)
         stream.client?.urlProtocol(stream, didLoad: Data("id: \(lot.revision)\nevent: lot\ndata: \(json)\n\n".utf8))
+    }
+
+    /// Sends the usage down the usage's stream.
+    static func pushUsage(_ usage: Usage) {
+        guard let stream = lock.withLock({ streams["usage"] }) else { return }
+        let json = String(decoding: try! JSONEncoder().encode(usage), as: UTF8.self)
+        stream.client?.urlProtocol(stream, didLoad: Data("id: \(usage.revision)\nevent: usage\ndata: \(json)\n\n".utf8))
     }
 
     static func dropStream(_ sessionID: String) {
@@ -417,8 +460,11 @@ final class StubServer: URLProtocol, @unchecked Sendable {
 
         if method == "GET", url.path == "/v1/lot/events", !Self.hasLot {
             respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
+        } else if method == "GET", url.path == "/v1/usage/events", !Self.hasUsage {
+            respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
         } else if method == "GET", url.path.hasSuffix("/events") {
-            // A session's stream is kept under its id, and the lot's under "lot".
+            // A session's stream is kept under its id, the lot's under
+            // "lot" and the usage's under "usage".
             let sessionID = url.deletingLastPathComponent().lastPathComponent
             respond(200, contentType: "text/event-stream", body: ": connected\n\n", finish: false)
             Self.lock.withLock { Self.streams[sessionID] = self } // stays open

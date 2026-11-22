@@ -89,7 +89,7 @@ enum SkyBox {
 
         sky.visit { $0.components.set(DynamicLightShadowComponent(castsShadow: false)) }
         sky.components.set(SkyComponent(
-            clock: DayClock(),
+            clock: SkyClock(),
             sunlight: sunlight,
             gradient: gradient,
             sun: sun,
@@ -473,7 +473,9 @@ enum SkyBox {
 
 /// The sky's parts, for `DaySystem` to keep in step with the time of day.
 struct SkyComponent: Component {
-    let clock: DayClock
+    /// The time of day the sky shows: the lot's day for the usage window,
+    /// easing over to a new one when it changes.
+    var clock: SkyClock
     /// The light from the sun by day, and from the moon by night.
     let sunlight: DirectionalLight
     /// The sky's colours, drawn again as the day goes on.

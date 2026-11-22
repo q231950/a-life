@@ -3,8 +3,9 @@ import Vapor
 
 extension SessionState: @retroactive Content {}
 extension Lot: @retroactive Content {}
+extension Usage: @retroactive Content {}
 
-func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, voice: URL? = nil) {
+func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, usage: UsageHub = UsageHub(file: nil), voice: URL? = nil) {
     let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
 
     /// The session a request names in its path.
@@ -96,6 +97,20 @@ func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, voice: U
     app.get("v1", "lot", "events") { _ -> Response in
         eventStream(await lot.subscribe()) { lot in
             try serverSentEvent(id: lot.revision, type: "lot", data: lot)
+        }
+    }
+
+    // How much of Claude's 5-hour usage window is used, as the server last
+    // heard from its characters' runs.
+    app.get("v1", "usage") { _ in
+        await usage.usage
+    }
+
+    // Server-sent events: the usage as it is now, then again each time it
+    // changes.
+    app.get("v1", "usage", "events") { _ -> Response in
+        eventStream(await usage.subscribe()) { usage in
+            try serverSentEvent(id: usage.revision, type: "usage", data: usage)
         }
     }
 
