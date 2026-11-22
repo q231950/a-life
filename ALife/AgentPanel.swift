@@ -648,28 +648,34 @@ private struct ApprovalRow: View {
     let canAnswer: Bool
 
     var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(outcome == nil ? "\(session.name) wants to use \(approval.toolName)" : "\(session.name) asked to use \(approval.toolName)")
-                    .font(.footnote.bold())
-                Text(approval.input)
-                    .font(.caption.monospaced())
-                    .lineLimit(outcome == nil ? 6 : 2)
-                    .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(outcome == nil ? "\(session.name) wants to use \(approval.toolName)" : "\(session.name) asked to use \(approval.toolName)")
+                        .font(.footnote.bold())
+                    Text(approval.input)
+                        .font(.caption.monospaced())
+                        .lineLimit(outcome == nil ? 6 : 2)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                if let outcome {
+                    Label(outcome.label, systemImage: outcome.systemImage)
+                        .font(.caption.bold())
+                        .foregroundStyle(outcome.color)
+                }
             }
-            Spacer()
-            if let outcome {
-                Label(outcome.label, systemImage: outcome.systemImage)
-                    .font(.caption.bold())
-                    .foregroundStyle(outcome.color)
-            } else {
-                Button("Deny") {
-                    Task { await session.respond(to: approval, allow: false) }
+            if outcome == nil {
+                // Under the request, so a long one doesn't squeeze them: Allow first, then Deny.
+                HStack {
+                    Button("Allow") {
+                        Task { await session.respond(to: approval, allow: true) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Deny") {
+                        Task { await session.respond(to: approval, allow: false) }
+                    }
                 }
-                Button("Allow") {
-                    Task { await session.respond(to: approval, allow: true) }
-                }
-                .buttonStyle(.borderedProminent)
             }
         }
         .padding(8)
