@@ -132,10 +132,33 @@ extension SessionEvent: Codable {
 public struct EventEnvelope: Codable, Equatable, Sendable {
     public let seq: Int
     public let event: SessionEvent
+    /// When it happened, by the server's clock, so a front end that catches
+    /// up later can tell when. `nil` from servers from before they said.
+    public let time: Date?
 
-    public init(seq: Int, event: SessionEvent) {
+    public init(seq: Int, event: SessionEvent, time: Date? = nil) {
         self.seq = seq
         self.event = event
+        self.time = time
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case seq, event, time
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        seq = try container.decode(Int.self, forKey: .seq)
+        event = try container.decode(SessionEvent.self, forKey: .event)
+        // In seconds since 1970, whatever the decoder's own date strategy.
+        time = try container.decodeIfPresent(Double.self, forKey: .time).map(Date.init(timeIntervalSince1970:))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(seq, forKey: .seq)
+        try container.encode(event, forKey: .event)
+        try container.encodeIfPresent(time?.timeIntervalSince1970, forKey: .time)
     }
 }
 

@@ -170,13 +170,23 @@ final class NarratorTests: XCTestCase {
         XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
     }
 
-    func testWhatWasSaidBeforeYouCameIsLetGo() {
-        let narrator = Narrator(engine: Notebook())
-        let gardener = Narrator.Speaker(id: "gardener", messages: [agent("1", "Long ago.")])
-        narrator.letGo(of: [gardener])
-        narrator.listen(to: [gardener], inEarshot: [])
-        XCTAssertTrue(narrator.calls.isEmpty)
-        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+    func testEachCallIsWrittenDownInTheLog() {
+        let log = EventLog(seenStore: InMemoryLogSeenStore())
+        let narrator = Narrator(engine: Notebook(), log: log)
+        let working = Narrator.Speaker(id: "gardener", name: "Gardener", messages: [agent("1", "Planting.")], isWorking: true)
+        narrator.listen(to: [working], inEarshot: [])
+        XCTAssertTrue(log.entries.isEmpty) // no call yet
+
+        let done = Narrator.Speaker(id: "gardener", name: "Gardener", messages: [agent("1", "Planting."), agent("2", "**Done**.")])
+        narrator.listen(to: [done], inEarshot: [])
+        XCTAssertEqual(log.entries.map(\.kind), [.call])
+        XCTAssertEqual(log.entries.first?.name, "Gardener")
+        XCTAssertEqual(log.entries.first?.text, "Called you: Planting. Done.")
+        XCTAssertEqual(log.entries.first?.isWhileAway, false)
+
+        // Hanging up loses nothing from the log.
+        narrator.hangUp(on: "gardener")
+        XCTAssertEqual(log.entries.count, 1)
     }
 
     func testTakingACallSaysWhatYouMissedWhereverYouAre() async {

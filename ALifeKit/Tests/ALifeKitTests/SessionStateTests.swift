@@ -26,6 +26,17 @@ final class SessionStateTests: XCTestCase {
         }
     }
 
+    func testAnEventSaysWhenItHappenedInSecondsSince1970() throws {
+        let envelope = EventEnvelope(seq: 3, event: .activityChanged("read"), time: Date(timeIntervalSince1970: 1_800_000_000.5))
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(envelope)) as? [String: Any]
+        XCTAssertEqual(json?["time"] as? Double, 1_800_000_000.5)
+        XCTAssertEqual(try JSONDecoder().decode(EventEnvelope.self, from: JSONEncoder().encode(envelope)), envelope)
+
+        // Servers from before events had a time don't send one.
+        let old = #"{"seq":3,"event":{"type":"session.activity","activity":"read"}}"#
+        XCTAssertNil(try JSONDecoder().decode(EventEnvelope.self, from: Data(old.utf8)).time)
+    }
+
     func testWireFormatUsesSnakeCaseAndATypeField() throws {
         let approval = Approval(id: "p1", toolName: "bash", input: "ls")
         let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(EventEnvelope(seq: 7, event: .approvalRequested(approval)))) as? [String: Any]

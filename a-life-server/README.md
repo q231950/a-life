@@ -160,10 +160,10 @@ An unknown session id gets a `404`. The `POST` and `PUT` routes answer `202 Acce
 ```
 id: 4
 event: session.activity
-data: {"seq":4,"event":{"type":"session.activity","activity":"read"}}
+data: {"seq":4,"event":{"type":"session.activity","activity":"read"},"time":1795000000.25}
 ```
 
-Every event has a sequence number that only goes up within its session. A client applies events in order to build its picture of the session, and remembers the last number it saw. When it reconnects it passes that number and the conversation's id:
+Every event has a sequence number that only goes up within its session. Its `time` is when it happened, by the server's clock, in seconds since 1970, so a front end catching up on what it missed can say when; servers from before it leave it out. A client applies events in order to build its picture of the session, and remembers the last number it saw. When it reconnects it passes that number and the conversation's id:
 
 ```
 GET /v1/sessions/builder/events?after=4&conversation=<conversation id>

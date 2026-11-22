@@ -1,11 +1,13 @@
 import ALifeClient
 import SwiftUI
 
-/// How the server connection is doing, who is busy or waiting for you, and
-/// the button that opens the settings.
+/// How the server connection is doing, who is busy or waiting for you, the
+/// button that opens the log, with a badge counting what you haven't seen,
+/// and the one that opens the settings.
 struct SessionStatusBar: View {
     @Environment(ServerConnection.self) private var server
     @Binding var showsSettings: Bool
+    @Binding var showsLog: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -15,6 +17,24 @@ struct SessionStatusBar: View {
             Text(statusText)
                 .font(.footnote)
                 .lineLimit(2)
+            Button("Log", systemImage: "list.bullet.rectangle") {
+                showsLog = true
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .overlay(alignment: .topTrailing) {
+                if unseen > 0 {
+                    Text(unseen > 99 ? "99+" : "\(unseen)")
+                        .font(.caption2.bold().monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Color.red, in: Capsule())
+                        .offset(x: 10, y: -8)
+                        .allowsHitTesting(false)
+                }
+            }
+            .accessibilityValue(unseen == 0 ? "Nothing new" : "\(unseen) new")
             Button("Settings", systemImage: "gearshape") {
                 showsSettings = true
             }
@@ -26,6 +46,8 @@ struct SessionStatusBar: View {
         .background(.thinMaterial, in: Capsule())
     }
 
+    /// How many of the log's entries you haven't seen.
+    private var unseen: Int { server.log.unseen.count }
     private var waiting: [String] { server.sessions.filter { $0.isWaitingForYou }.map { $0.name } }
     private var working: [String] { server.sessions.filter { $0.status == .running }.map { $0.name } }
 
