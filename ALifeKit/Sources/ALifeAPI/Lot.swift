@@ -46,8 +46,9 @@ public enum LotPlan {
     public static let depth = 64
     /// The most tiles a building or a bed can stretch along either side.
     public static let largestSide = 16
-    /// The most foals in one bed. A bed of foals has one on each tile.
-    public static let mostFoals = 6
+    /// The most animals in one bed, such as foals or bears. A bed of
+    /// animals has one on each tile.
+    public static let mostAnimals = 6
 
     /// The whole lot.
     public static let bounds = LotArea(x: 0, y: 0, width: width, depth: depth)
@@ -67,7 +68,8 @@ public enum LotPlan {
 }
 
 /// Something on the lot: a building the Builder built, or a bed the
-/// Gardener planted, such as a row of roses or an oak tree.
+/// Conservationist planted or put out, such as a row of roses, an oak tree
+/// or a few foals.
 public struct LotItem: Codable, Identifiable, Equatable, Sendable {
     public enum Category: String, Codable, Sendable {
         case building, plant
@@ -109,14 +111,66 @@ public struct LotItem: Codable, Identifiable, Equatable, Sendable {
     /// The tiles it covers.
     public var area: LotArea { LotArea(x: x, y: y, width: width, depth: depth) }
 
-    /// Whether it is a bed of foals the Gardener put out, one on each tile,
-    /// rather than plants: its kind is a foal, a colt, a filly, a pony or a
-    /// baby horse. The foals play round their bed, so it isn't in anyone's way.
-    public var isFoals: Bool {
-        guard category == .plant else { return false }
-        let words = kind.lowercased().split { !$0.isLetter }
-        return words.contains { Self.foalWords.contains(String($0)) } || words.joined(separator: " ").contains("baby horse")
+    /// The animals a front end draws, each in a bed of its own kind in the
+    /// garden, with one on each tile.
+    public enum Animal: String, CaseIterable, Sendable {
+        /// Baby horses, which also go by pony, colt, filly or baby horse.
+        case foal
+        case bear
+        /// Bigger than a bear, and white.
+        case polarBear = "polar-bear"
+        /// Small, and flies about its bed.
+        case bird
+        /// A horse with a horn.
+        case unicorn
+        /// A horse with wings, which both walks and flies.
+        case pegasus
+
+        /// The kind a bed of them has, such as `polar-bear`.
+        public var kind: String { rawValue }
+
+        /// One of them, such as `polar bear`.
+        public var name: String {
+            self == .polarBear ? "polar bear" : rawValue
+        }
+
+        /// Several of them, such as `polar bears` or `pegasuses`.
+        public var plural: String {
+            self == .pegasus ? "pegasuses" : name + "s"
+        }
+
+        /// Whether it flies as well as walks.
+        public var flies: Bool {
+            self == .bird || self == .pegasus
+        }
     }
+
+    /// The animals it is a bed of, one on each tile, if it is a bed of
+    /// animals rather than plants: its kind names one, such as `foal`,
+    /// `bear`, `polar-bear`, `bird`, `unicorn` or `pegasus`. The animals play
+    /// round their bed, so it isn't in anyone's way.
+    public var animal: Animal? {
+        guard category == .plant else { return nil }
+        let words = kind.lowercased().split { !$0.isLetter }.map(String.init)
+        let phrase = words.joined(separator: " ")
+        func has(_ names: Set<String>) -> Bool { words.contains { names.contains($0) } }
+
+        if phrase.contains("polar bear") || has(["polarbear", "polarbears"]) { return .polarBear }
+        if has(["unicorn", "unicorns"]) { return .unicorn }
+        if has(["pegasus", "pegasuses", "pegasi"]) { return .pegasus }
+        if has(Self.foalWords) || phrase.contains("baby horse") { return .foal }
+        // Only a bear or a bird at the end, so bear's breeches, a bird
+        // cherry and a bird of paradise are still plants.
+        switch words.last {
+        case "bear", "bears": return .bear
+        case "bird", "birds": return .bird
+        default: return nil
+        }
+    }
+
+    /// Whether it is a bed of foals, one on each tile: its kind is a foal, a
+    /// colt, a filly, a pony or a baby horse.
+    public var isFoals: Bool { animal == .foal }
 
     private static let foalWords: Set<String> = ["foal", "foals", "colt", "colts", "filly", "fillies", "pony", "ponies"]
 }

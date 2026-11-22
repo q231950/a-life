@@ -32,7 +32,7 @@ extension SessionBackend {
 /// One session the server hosts: a character's event log, and what does
 /// its work.
 struct HostedSession: Sendable {
-    /// The character's id, such as `gardener`. It is what the session's URLs use.
+    /// The character's id, such as `builder`. It is what the session's URLs use.
     let id: String
     let hub: SessionHub
     let backend: any SessionBackend

@@ -5,7 +5,7 @@ import Vapor
 /// so a front end can be exercised end to end without any real agents. What
 /// the script does depends on the character:
 ///
-/// - One that only looks around (the Gardener) reads, then sends two helpers
+/// - One that only looks around (`changes_things` false) reads, then sends two helpers
 ///   off to search, and reports once both have reported back to it. It never
 ///   needs permission, like a Claude Code session in plan mode.
 /// - One that changes things (the Builder) looks first and sends a helper off

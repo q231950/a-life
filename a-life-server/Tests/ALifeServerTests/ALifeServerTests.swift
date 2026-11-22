@@ -15,7 +15,7 @@ final class ALifeServerTests: XCTestCase {
 
     override func setUp() async throws {
         app = try await Application.make(.testing)
-        try await configure(app, players: .dummies(step: .milliseconds(20)))
+        try await configure(app, players: .dummies(step: .milliseconds(20)), cast: [.birdwatcher, .builder, .engineer])
         app.http.server.configuration.hostname = "127.0.0.1"
         app.http.server.configuration.port = 0 // any free port
         try await app.startup()
@@ -39,11 +39,11 @@ final class ALifeServerTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out waiting for \(description)", file: file, line: line)
     }
 
-    private func connect() async throws -> (ServerConnection, gardener: AgentSession, builder: AgentSession) {
+    private func connect() async throws -> (ServerConnection, birdwatcher: AgentSession, builder: AgentSession) {
         let server = ServerConnection(serverURLStore: InMemoryServerURLStore(baseURL), urlSession: URLSession(configuration: .ephemeral))
         server.connect()
         await wait(for: "live") { server.phase == .live && server.sessions.allSatisfy { $0.state.conversationID != nil } }
-        return (server, try XCTUnwrap(server.session("gardener")), try XCTUnwrap(server.session("builder")))
+        return (server, try XCTUnwrap(server.session("birdwatcher")), try XCTUnwrap(server.session("builder")))
     }
 
     private func makeClient() -> ALifeServerClient {
@@ -51,21 +51,21 @@ final class ALifeServerTests: XCTestCase {
     }
 
     func testEveryCharacterHasASessionOfItsOwn() async throws {
-        let (server, gardener, builder) = try await connect()
-        XCTAssertEqual(server.sessions.map(\.name), ["Gardener", "Builder", "Engineer"])
+        let (server, birdwatcher, builder) = try await connect()
+        XCTAssertEqual(server.sessions.map(\.name), ["Birdwatcher", "Builder", "Engineer"])
         // Each wears its own colour; the Engineer's shirt is purple.
         XCTAssertEqual(server.sessions.map(\.color), ["#D9594D", "#F2A633", "#8050C8"])
-        XCTAssertEqual(gardener.status, .idle)
+        XCTAssertEqual(birdwatcher.status, .idle)
 
-        // The Gardener only looks, so it never asks for anything.
-        await gardener.send("Look for snails")
-        XCTAssertNil(gardener.lastError)
-        await wait(for: "the Gardener to finish") { gardener.stopReason == .endTurn }
-        XCTAssertEqual(gardener.transcript.map(\.speaker), ["You", "Gardener"])
-        XCTAssertEqual(gardener.transcript.first?.text, "Look for snails")
-        XCTAssertTrue(gardener.transcript.last?.text.hasPrefix("Had a look around for “Look for snails”.") == true)
-        XCTAssertNil(gardener.activity)
-        XCTAssertTrue(gardener.subagents.isEmpty) // every helper reported back
+        // The Birdwatcher only looks, so it never asks for anything.
+        await birdwatcher.send("Look for snails")
+        XCTAssertNil(birdwatcher.lastError)
+        await wait(for: "the Birdwatcher to finish") { birdwatcher.stopReason == .endTurn }
+        XCTAssertEqual(birdwatcher.transcript.map(\.speaker), ["You", "Birdwatcher"])
+        XCTAssertEqual(birdwatcher.transcript.first?.text, "Look for snails")
+        XCTAssertTrue(birdwatcher.transcript.last?.text.hasPrefix("Had a look around for “Look for snails”.") == true)
+        XCTAssertNil(birdwatcher.activity)
+        XCTAssertTrue(birdwatcher.subagents.isEmpty) // every helper reported back
 
         // None of that happened in the Builder's session.
         XCTAssertTrue(builder.transcript.isEmpty)
@@ -75,7 +75,7 @@ final class ALifeServerTests: XCTestCase {
     }
 
     func testTheBuilderAsksBeforeItActs() async throws {
-        let (server, gardener, builder) = try await connect()
+        let (server, birdwatcher, builder) = try await connect()
 
         await builder.send("Tidy the lot")
         await wait(for: "the approval") { builder.stopReason == .requiresAction }
@@ -86,9 +86,9 @@ final class ALifeServerTests: XCTestCase {
         await builder.send("What are you doing?")
         XCTAssertEqual(builder.lastError, "Builder is waiting for an answer to its request (HTTP 409)")
         XCTAssertEqual(builder.transcript.count, 1)
-        // The Gardener can, meanwhile.
-        await gardener.send("Look for snails")
-        XCTAssertNil(gardener.lastError)
+        // The Birdwatcher can, meanwhile.
+        await birdwatcher.send("Look for snails")
+        XCTAssertNil(birdwatcher.lastError)
 
         await builder.respond(to: builder.pendingApprovals[0], allow: false)
         await wait(for: "the end of the turn") { builder.stopReason == .endTurn }
@@ -101,28 +101,28 @@ final class ALifeServerTests: XCTestCase {
         })
 
         // A second front end joining late sees the same sessions.
-        let (latecomer, lateGardener, lateBuilder) = try await connect()
+        let (latecomer, lateBirdwatcher, lateBuilder) = try await connect()
         await wait(for: "the latecomer to catch up") { lateBuilder.state == builder.state }
 
-        // Starting the Builder over empties it for both, and leaves the Gardener be.
-        await wait(for: "the Gardener to finish") { gardener.stopReason == .endTurn && lateGardener.stopReason == .endTurn }
+        // Starting the Builder over empties it for both, and leaves the Birdwatcher be.
+        await wait(for: "the Birdwatcher to finish") { birdwatcher.stopReason == .endTurn && lateBirdwatcher.stopReason == .endTurn }
         await builder.startOver()
         await wait(for: "the reset") { builder.transcript.isEmpty && lateBuilder.transcript.isEmpty }
-        XCTAssertEqual(gardener.transcript.count, 2)
-        XCTAssertEqual(lateGardener.transcript, gardener.transcript)
+        XCTAssertEqual(birdwatcher.transcript.count, 2)
+        XCTAssertEqual(lateBirdwatcher.transcript, birdwatcher.transcript)
 
         server.disconnect()
         latecomer.disconnect()
     }
 
     func testAutoApproveIsEachCharactersOwn() async throws {
-        let (server, gardener, builder) = try await connect()
+        let (server, birdwatcher, builder) = try await connect()
         XCTAssertFalse(builder.autoApprove)
 
         await builder.setAutoApprove(true)
         XCTAssertNil(builder.lastError)
         await wait(for: "auto approve") { builder.state.autoApprove }
-        XCTAssertFalse(gardener.autoApprove)
+        XCTAssertFalse(birdwatcher.autoApprove)
         let engineer = try XCTUnwrap(server.session("engineer"))
         XCTAssertFalse(engineer.autoApprove)
 
@@ -166,11 +166,11 @@ final class ALifeServerTests: XCTestCase {
     }
 
     func testInterruptingStopsOnlyThatCharacter() async throws {
-        let (server, gardener, builder) = try await connect()
+        let (server, birdwatcher, builder) = try await connect()
 
         await builder.send("Build a pond")
         await wait(for: "the approval") { builder.stopReason == .requiresAction }
-        await gardener.send("Water the roses")
+        await birdwatcher.send("Water the roses")
         await builder.interrupt()
         await wait(for: "the interrupt") { builder.stopReason == .interrupted }
         XCTAssertFalse(builder.isWaitingForYou)
@@ -180,7 +180,7 @@ final class ALifeServerTests: XCTestCase {
             return false
         })
 
-        await wait(for: "the Gardener to finish anyway") { gardener.stopReason == .endTurn }
+        await wait(for: "the Birdwatcher to finish anyway") { birdwatcher.stopReason == .endTurn }
         XCTAssertEqual(builder.stopReason, .interrupted)
 
         server.disconnect()
@@ -188,12 +188,12 @@ final class ALifeServerTests: XCTestCase {
 
     func testSomethingSaidMidTaskIsAnsweredStraightAway() async throws {
         // A slow step, so the question surely arrives while the first one runs.
-        let hub = SessionHub(id: "gardener", name: "Gardener")
-        let gardener = DummyCharacter(.gardener, hub: hub, step: .milliseconds(300))
-        await gardener.reset()
+        let hub = SessionHub(id: "birdwatcher", name: "Birdwatcher")
+        let birdwatcher = DummyCharacter(.birdwatcher, hub: hub, step: .milliseconds(300))
+        await birdwatcher.reset()
 
-        try await gardener.handleMessage("Look for snails")
-        try await gardener.handleMessage("What are you doing?")
+        try await birdwatcher.handleMessage("Look for snails")
+        try await birdwatcher.handleMessage("What are you doing?")
         for _ in 0..<600 where await hub.state.stopReason != .endTurn {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
@@ -203,9 +203,9 @@ final class ALifeServerTests: XCTestCase {
         XCTAssertEqual(lines.prefix(3), [
             "You: Look for snails",
             "You: What are you doing?",
-            "Gardener: Still on “Look for snails”. Right now I'm looking around the lot.",
+            "Birdwatcher: Still on “Look for snails”. Right now I'm looking around the lot.",
         ])
-        XCTAssertTrue(lines.last?.hasPrefix("Gardener: Had a look around") == true)
+        XCTAssertTrue(lines.last?.hasPrefix("Birdwatcher: Had a look around") == true)
     }
 
     /// Plays a dummy's script for `instruction` and returns its events, up
@@ -224,8 +224,8 @@ final class ALifeServerTests: XCTestCase {
         return events
     }
 
-    func testTheGardenerWaitsForItsHelpersToReportBack() async throws {
-        let events = try await play(.gardener, "Look for snails", until: .endTurn)
+    func testTheBirdwatcherWaitsForItsHelpersToReportBack() async throws {
+        let events = try await play(.birdwatcher, "Look for snails", until: .endTurn)
 
         var sent: [Subagent] = []
         var reported: [String] = []
@@ -258,17 +258,17 @@ final class ALifeServerTests: XCTestCase {
 
     func testInterruptingCallsTheHelpersBack() async throws {
         // Slow steps, so the helpers are surely still out.
-        let hub = SessionHub(id: "gardener", name: "Gardener")
-        let gardener = DummyCharacter(.gardener, hub: hub, step: .milliseconds(300))
-        await gardener.reset()
-        try await gardener.handleMessage("Look for snails")
+        let hub = SessionHub(id: "birdwatcher", name: "Birdwatcher")
+        let birdwatcher = DummyCharacter(.birdwatcher, hub: hub, step: .milliseconds(300))
+        await birdwatcher.reset()
+        try await birdwatcher.handleMessage("Look for snails")
         for _ in 0..<300 where await hub.state.subagents.count < 2 {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         var state = await hub.state
         XCTAssertEqual(state.subagents.count, 2)
 
-        await gardener.interrupt()
+        await birdwatcher.interrupt()
         state = await hub.state
         XCTAssertTrue(state.subagents.isEmpty)
         XCTAssertEqual(state.stopReason, .interrupted)
@@ -303,7 +303,7 @@ final class ALifeServerTests: XCTestCase {
         let snapshot = try await client.state(of: "builder")
         XCTAssertEqual(snapshot, state)
         let listed = try await client.sessions()
-        XCTAssertEqual(listed.map(\.id), ["gardener", "builder", "engineer", "flamingo-engineer", "team-lead"])
+        XCTAssertEqual(listed.map(\.id), ["birdwatcher", "builder", "engineer"])
         XCTAssertEqual(listed[1], state)
 
         // Naming a conversation the server doesn't have replays the current one in full.
@@ -322,7 +322,7 @@ final class ALifeServerTests: XCTestCase {
             XCTAssertEqual(error, .server(status: 404, reason: "No such approval"))
         }
         do {
-            try await client.sendMessage("   ", to: "gardener")
+            try await client.sendMessage("   ", to: "birdwatcher")
             XCTFail("expected a 400")
         } catch let error as ALifeClientError {
             XCTAssertEqual(error, .server(status: 400, reason: "The message is empty"))

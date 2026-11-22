@@ -10,7 +10,7 @@ import Observation
 @MainActor
 @Observable
 public final class AgentSession {
-    /// The session's id, which is also its character's, such as `gardener`.
+    /// The session's id, which is also its character's, such as `builder`.
     public let id: String
     public private(set) var state: SessionState
     /// The most recent thing that went wrong when talking to this session.

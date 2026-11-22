@@ -265,10 +265,12 @@ enum Barn {
     /// A horse about as tall as a character, facing +z. Its body is in
     /// "Gait", which bobs as it runs, with its legs ("FrontLeg" and
     /// "BackLeg"), which swing from the hip, and its neck ("Neck"), which
-    /// lowers its head to feed.
-    private static func makeHorse(coat: PlatformColor) -> Entity {
+    /// lowers its head ("Head") to feed. Its mane and tail are dark, unless
+    /// it has a `mane` of another colour, as a unicorn does.
+    static func makeHorse(coat: PlatformColor, mane: PlatformColor? = nil) -> Entity {
         let coat = Buildings.material(coat, roughness: 0.6)
         let dark = Buildings.material(PlatformColor(red: 0.12, green: 0.1, blue: 0.09, alpha: 1), roughness: 0.7)
+        let hair = mane.map { Buildings.material($0, roughness: 0.7) } ?? dark
 
         let horse = Entity()
         horse.name = "Horse"
@@ -305,11 +307,12 @@ enum Barn {
         neckPiece.position = [0, 0.23 * cos(lean), 0.23 * sin(lean)]
         neckPiece.orientation = simd_quatf(angle: lean, axis: [1, 0, 0])
         neck.addChild(neckPiece)
-        let mane = ModelEntity(mesh: .generateBox(width: 0.05, height: 0.46, depth: 0.05, cornerRadius: 0.02), materials: [dark])
+        let mane = ModelEntity(mesh: .generateBox(width: 0.05, height: 0.46, depth: 0.05, cornerRadius: 0.02), materials: [hair])
         mane.position = [0, 0.02, -0.11]
         neckPiece.addChild(mane)
 
         let head = ModelEntity(mesh: .generateBox(width: 0.14, height: 0.15, depth: 0.34, cornerRadius: 0.05), materials: [coat])
+        head.name = "Head"
         head.position = [0, 0.42, 0.3]
         head.orientation = simd_quatf(angle: 0.35, axis: [1, 0, 0]) // nose down a little
         neck.addChild(head)
@@ -319,7 +322,7 @@ enum Barn {
             neck.addChild(ear)
         }
 
-        let tail = ModelEntity(mesh: .generateBox(width: 0.06, height: 0.36, depth: 0.06, cornerRadius: 0.02), materials: [dark])
+        let tail = ModelEntity(mesh: .generateBox(width: 0.06, height: 0.36, depth: 0.06, cornerRadius: 0.02), materials: [hair])
         tail.position = [0, 0.62, -0.47]
         tail.orientation = simd_quatf(angle: -0.4, axis: [1, 0, 0]) // hanging out behind
         gait.addChild(tail)

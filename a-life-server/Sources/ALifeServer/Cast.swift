@@ -6,7 +6,7 @@ import Yams
 ///
 /// The characters are listed in the agents file; see `Cast`.
 struct Character: Equatable, Sendable {
-    /// Used in the session's URLs, such as `gardener`.
+    /// Used in the session's URLs, such as `builder`.
     let id: String
     let name: String
     /// The character's colour, as `#RRGGBB`: its shirt on the lot, which its
@@ -32,7 +32,7 @@ struct Character: Equatable, Sendable {
 /// `works_in` or `project` says.
 enum Workspace: Equatable, Sendable {
     /// The lot: the directory the characters share, with the Builder's
-    /// buildings and the Gardener's beds.
+    /// buildings and the Conservationist's beds.
     case lot
     /// A checkout of the a*life repository, the app and server that run the
     /// sim, such as the Engineer works in.
@@ -223,7 +223,7 @@ enum Cast {
         let fields = try fields(of: entry)
 
         let lines = yaml.components(separatedBy: "\n")
-        // As the file's agents are indented, such as "  - id: gardener".
+        // As the file's agents are indented, such as "  - id: builder".
         let indent = lines.lazy
             .compactMap { line -> String? in
                 let spaces = line.prefix { $0 == " " }
@@ -421,7 +421,7 @@ private struct AgentEntry: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
         let id = try container.text(.id)
-        try checkName(id, at: container.codingPath + [CodingKeys.id], what: "An id", example: "gardener")
+        try checkName(id, at: container.codingPath + [CodingKeys.id], what: "An id", example: "builder")
 
         let color = try container.optional(String.self, .color)
         if let color, !Self.isColor(color) {

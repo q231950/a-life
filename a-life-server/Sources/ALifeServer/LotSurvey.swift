@@ -20,9 +20,9 @@ import Yams
 ///
 /// An empty file stands for nothing. Without a `width` and `depth`, a building takes 3 by 3 tiles and a plant
 /// one. Plants can have a `color` too, and anything can have a `name`;
-/// without one, the file's first heading names it. A bed whose kind is a
-/// foal (or a pony, a colt, a filly or a baby horse) has a foal on each
-/// tile, and no more than `LotPlan.mostFoals` of them.
+/// without one, the file's first heading names it. A bed whose kind is an
+/// animal (see `LotItem.Animal`), such as a foal, a bear or a bird, has one
+/// on each tile, and no more than `LotPlan.mostAnimals` of them.
 enum LotSurvey {
     /// One file in `buildings/` or `garden/`.
     struct Entry: Equatable {
@@ -120,9 +120,9 @@ enum LotSurvey {
             throw Problem("at \(describe(area)) it is on the house or the lawn in front of it, \(describe(LotPlan.reserved)), where nothing can go.")
         }
 
-        let isFoals = LotItem(id: entry.id, category: entry.category, kind: kind, name: "", area: area).isFoals
-        guard !isFoals || width * depth <= LotPlan.mostFoals else {
-            throw Problem("a bed of foals has a foal on each tile, and can have at most \(LotPlan.mostFoals) of them, not \(width * depth) (\(width) by \(depth)).")
+        if let animal = LotItem(id: entry.id, category: entry.category, kind: kind, name: "", area: area).animal,
+           width * depth > LotPlan.mostAnimals {
+            throw Problem("a bed of \(animal.plural) has a \(animal.name) on each tile, and can have at most \(LotPlan.mostAnimals) of them, not \(width * depth) (\(width) by \(depth)).")
         }
 
         let name = (fields["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -167,12 +167,18 @@ enum LotSurvey {
             ---
             ```
 
-            Plants can have a color, such as red, too. In garden/, a bed of kind foal has a foal on each tile, at most \(LotPlan.mostFoals), in its color if it has one, such as chestnut, bay, grey or palomino; they play round the bed, and anyone can walk across it. Nothing can share a tile with anything else; where two things would, the one that was there first stays.
+            Plants can have a color, such as red, too. Nothing can share a tile with anything else; where two things would, the one that was there first stays.
 
-            ## On the lot
+            ## Animals
+
+            a*life draws these animals in garden/, each in a bed of its own kind with one on each tile, at most \(LotPlan.mostAnimals) to a bed, so the bed is as big as the number of animals. They are all in the bed's color if it has one, or each in a coat of its own. They play round their bed, and anyone can walk across it.
 
 
             """
+        for animal in LotItem.Animal.allCases {
+            text += "- kind: \(animal.kind). \(about(animal))\n"
+        }
+        text += "\n## On the lot\n\n"
         if lot.items.isEmpty {
             text += "Nothing yet.\n"
         }
@@ -208,6 +214,25 @@ enum LotSurvey {
         }
         text += "```\n"
         return text
+    }
+
+    /// What a bed of `animal` looks like on the lot, and the colours it
+    /// comes in, for the report.
+    static func about(_ animal: LotItem.Animal) -> String {
+        switch animal {
+        case .foal:
+            "Baby horses, which graze, trot, frisk and lie down. Colors such as chestnut, bay, brown, black, grey, white, palomino or dun."
+        case .bear:
+            "Brown bears, which amble about, sniff around, rear up and lie down. Colors such as brown, black, cinnamon or golden."
+        case .polarBear:
+            "Polar bears, bigger than bears, which amble about, sniff around, rear up and lie down. White or cream."
+        case .bird:
+            "Small birds, which hop and peck about, flutter up, fly round the bed, hover and land again. Any color, such as red, blue, yellow, brown, black or white."
+        case .unicorn:
+            "Horses with a golden horn and a pastel mane, which graze, trot, rear and lie down. Colors such as white, cream, silver, grey, lilac or pink."
+        case .pegasus:
+            "Horses with wings, which walk, graze and buck, and fly up over the bed, hover and land again. Colors such as white, silver, grey, palomino or black."
+        }
     }
 
     // MARK: Reading a file
@@ -255,7 +280,7 @@ enum LotSurvey {
         return name.prefix(1).uppercased() + name.dropFirst()
     }
 
-    /// The colours a plant, or a foal's coat, can be given by name.
+    /// The colours a plant, or an animal's coat, can be given by name.
     static let colors: [String: String] = [
         "red": "#D7263D", "crimson": "#B0182E", "scarlet": "#E0301E",
         "pink": "#F28AB2", "rose": "#E8638B", "magenta": "#D1338F",
@@ -266,8 +291,9 @@ enum LotSurvey {
         "blue": "#3F6FD8", "sky blue": "#79B4F0",
         "green": "#4E9A3A", "brown": "#8A5A32", "black": "#2B2730",
         "grey": "#BDBAB4", "gray": "#BDBAB4",
-        // Horses' coats, for foals.
+        // Coats, for foals, bears, unicorns and pegasuses.
         "chestnut": "#8C4A23", "bay": "#52321F", "palomino": "#D9B26F", "dun": "#B89A6A",
+        "cinnamon": "#9A5B2E", "silver": "#C8CCD2",
     ]
 
     /// A colour given by name, such as `red`, or as `#RRGGBB`, as

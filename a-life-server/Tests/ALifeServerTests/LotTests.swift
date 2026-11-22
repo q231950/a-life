@@ -124,7 +124,7 @@ final class LotTests: XCTestCase {
         ])
     }
 
-    func testTheGardenerCanPutOutFoals() throws {
+    func testTheConservationistCanPutOutFoals() throws {
         // A foal on each tile, in a horse's colour.
         try write("---\nkind: foal\ncolour: chestnut\nx: 10\ny: 40\nwidth: 3\ndepth: 2\n---\n# Foals", to: "garden/foals.md")
         try write("---\nkind: Shetland pony\nx: 20\ny: 40\ncolor: grey\n---\n", to: "garden/pony.md")
@@ -143,12 +143,30 @@ final class LotTests: XCTestCase {
         XCTAssertEqual(problems, ["garden/herd.md: a bed of foals has a foal on each tile, and can have at most 6 of them, not 8 (4 by 2)."])
     }
 
-    func testThePlanterIsToldItCanPutOutFoals() {
-        let prompt = Character.gardener.helper.prompt
-        XCTAssertTrue(prompt.contains("kind: foal"), prompt)
-        XCTAssertTrue(prompt.contains("at most \(LotPlan.mostFoals)"), prompt)
-        XCTAssertTrue(Character.gardener.helper.description.contains("foals"))
-        XCTAssertTrue(Character.gardener.role.contains("foals"))
+    func testTheConservationistCanPutOutBearsPolarBearsBirdsUnicornsAndPegasuses() throws {
+        try write("---\nkind: bear\ncolor: cinnamon\nx: 2\ny: 2\nwidth: 2\n---\n# Bears", to: "garden/bears.md")
+        try write("---\nkind: polar-bear\nx: 2\ny: 6\n---\n", to: "garden/polar-bear.md")
+        try write("---\nkind: bird\ncolor: blue\nx: 2\ny: 10\nwidth: 3\ndepth: 2\n---\n", to: "garden/birds.md")
+        try write("---\nkind: unicorn\ncolor: silver\nx: 2\ny: 14\n---\n", to: "garden/unicorn.md")
+        try write("---\nkind: pegasus\nx: 2\ny: 18\nwidth: 2\n---\n", to: "garden/pegasuses.md")
+        // Too many pegasuses for one bed.
+        try write("---\nkind: pegasus\nx: 10\ny: 2\nwidth: 7\n---\n", to: "garden/herd.md")
+
+        let (items, problems) = survey()
+        XCTAssertEqual(items.map(\.id), ["garden/bears.md", "garden/birds.md", "garden/pegasuses.md", "garden/polar-bear.md", "garden/unicorn.md"])
+        XCTAssertEqual(items.map(\.animal), [.bear, .bird, .pegasus, .polarBear, .unicorn])
+        XCTAssertEqual(items.map(\.color), ["#9A5B2E", "#3F6FD8", nil, nil, "#C8CCD2"])
+        XCTAssertEqual(problems, ["garden/herd.md: a bed of pegasuses has a pegasus on each tile, and can have at most 6 of them, not 7 (7 by 1)."])
+    }
+
+    func testTheKeeperIsToldItCanPutOutAnimals() {
+        let keeper = Character.conservationist.helper
+        XCTAssertTrue(keeper.prompt.contains("at most \(LotPlan.mostAnimals)"), keeper.prompt)
+        for animal in LotItem.Animal.allCases {
+            XCTAssertTrue(keeper.prompt.contains("kind: \(animal.kind)"), animal.kind)
+            XCTAssertTrue(keeper.description.contains(animal.plural), animal.plural)
+            XCTAssertTrue(Character.conservationist.role.contains(animal.plural), animal.plural)
+        }
     }
 
     func testAnEmptyFileIsSomethingTakenAway() throws {
@@ -161,7 +179,7 @@ final class LotTests: XCTestCase {
     func testTheHelpersAreToldWhereTheHouseIs() {
         let house = LotSurvey.describe(LotPlan.reserved)
         XCTAssertEqual(house, "x 28 to 35, y 25 to 36")
-        for character in [Character.builder, Character.gardener] {
+        for character in [Character.builder, Character.conservationist] {
             XCTAssertTrue(character.helper.prompt.contains("takes up \(house), and nothing can go there"), character.name)
             XCTAssertTrue(character.helper.prompt.contains("64 by 64 tiles"), character.name)
             XCTAssertTrue(character.helper.prompt.contains("lot.md"), character.name)
@@ -190,7 +208,11 @@ final class LotTests: XCTestCase {
         XCTAssertTrue(report.contains("- A: Luigi's, a restaurant, at x 38 to 42, y 22 to 25, from buildings/restaurant.md\n"), report)
         XCTAssertTrue(report.contains("- B: Rose bed, a rose, #D7263D, at x 20 to 22, y 30, from garden/roses.md\n"), report)
         XCTAssertTrue(report.contains("## Not on the lot\n\n- buildings/office.md: it isn't on the lot"), report)
-        XCTAssertTrue(report.contains("a bed of kind foal has a foal on each tile, at most 6"), report)
+        // It says which animals a*life draws, for the Conservationist's keeper.
+        XCTAssertTrue(report.contains("## Animals\n\na*life draws these animals in garden/, each in a bed of its own kind with one on each tile, at most 6 to a bed"), report)
+        for kind in ["foal", "bear", "polar-bear", "bird", "unicorn", "pegasus"] {
+            XCTAssertTrue(report.contains("\n- kind: \(kind). "), kind)
+        }
 
         let map = report.components(separatedBy: "```\n").last { $0.contains("#") }!.split(separator: "\n")
         XCTAssertEqual(map.count, 2 + 64) // two lines of column numbers, then a line per row
@@ -268,7 +290,7 @@ final class LotTests: XCTestCase {
             }
             XCTAssertEqual(server.lot.items.map(\.kind), ["restaurant"])
 
-            // The Gardener's planter plants an oak, and it shows up.
+            // The Conservationist's keeper plants an oak, and it shows up.
             try write("---\nkind: oak\nx: 20\ny: 20\n---\n# The old oak", to: "garden/oak.md")
             for _ in 0..<500 where server.lot.items.count != 2 {
                 try await Task.sleep(nanoseconds: 10_000_000)

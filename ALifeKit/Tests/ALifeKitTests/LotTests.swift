@@ -70,6 +70,33 @@ final class LotTests: XCTestCase {
         }
         // Foals live in the garden, not in a building.
         XCTAssertFalse(item("foal", .building).isFoals)
-        XCTAssertEqual(LotPlan.mostFoals, 6)
+        XCTAssertEqual(LotPlan.mostAnimals, 6)
+    }
+
+    func testBedsOfAnimalsAreNamedByTheirKind() {
+        func animal(_ kind: String, _ category: LotItem.Category = .plant) -> LotItem.Animal? {
+            LotItem(id: "garden/x.md", category: category, kind: kind, name: "X", area: LotArea(x: 1, y: 1)).animal
+        }
+        let kinds: [String: LotItem.Animal] = [
+            "foal": .foal, "pony": .foal,
+            "bear": .bear, "brown bears": .bear, "grizzly bear": .bear,
+            "polar-bear": .polarBear, "polar bears": .polarBear, "Polar Bear": .polarBear,
+            "bird": .bird, "birds": .bird, "blue bird": .bird,
+            "unicorn": .unicorn, "unicorns": .unicorn,
+            "pegasus": .pegasus, "pegasuses": .pegasus, "pegasi": .pegasus,
+        ]
+        for (kind, expected) in kinds {
+            XCTAssertEqual(animal(kind), expected, kind)
+        }
+        // Plants named after animals are still plants.
+        for kind in ["rose", "bird cherry", "bird of paradise", "bearberry", "bear's breeches", "oak"] {
+            XCTAssertNil(animal(kind), kind)
+        }
+        XCTAssertNil(animal("bear", .building))
+
+        // The kinds a bed of them has, as the Conservationist writes them.
+        XCTAssertEqual(LotItem.Animal.allCases.map(\.kind), ["foal", "bear", "polar-bear", "bird", "unicorn", "pegasus"])
+        XCTAssertEqual(LotItem.Animal.allCases.map(\.plural), ["foals", "bears", "polar bears", "birds", "unicorns", "pegasuses"])
+        XCTAssertEqual(LotItem.Animal.allCases.filter(\.flies), [.bird, .pegasus])
     }
 }
