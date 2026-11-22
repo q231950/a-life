@@ -102,3 +102,40 @@ marked seen or unseen across launches.
   while you were away are picked out at the top until the sheet closes;
   opening it (and closing it) marks everything seen. Tapping an entry picks
   that character and unfolds the panel.
+
+## Missed calls
+
+Staying quiet about what happened while you were away left one thing out:
+a character that finished a job while you were gone had something to tell
+you, and nothing said so. Now it leaves you a missed call.
+
+- **Which characters.** An `AgentSession` keeps `finishedWhileAway`: when
+  catching up ends with the character's job done (`end_turn`) or with it
+  waiting for you, the replies it gave since it was last told something
+  (the last 20 at most). Characters that were stopped, or ended on an
+  error, leave none. Sending it something or answering it empties it.
+- **The call.** `Narrator.Speaker` carries `finishedWhileAway`, and
+  `listen(to:inEarshot:)` turns it into a `Call` with `isMissed` set: one
+  per character, with its spoken lines, in its voice, and nothing said.
+  `isCalling(_:)` and `incomingCalls` are only the calls ringing now, so no
+  phone rings over its head; `missedCalls` and `hasMissedCall(_:)` are the
+  missed ones. It still counts in `hasSomethingToSay(_:)`, so the character
+  waits at its desk until you have dealt with it. Each missed call is
+  logged as `.missedCall`, while you were away.
+- **Calling back** is `take(callFrom:)`, as for any call: its lines are
+  said next, wherever you stand. `clearMissedCall(from:)` lets it go
+  unheard, and leaves a ringing call alone; the app calls it when you pick
+  that character (on the lot, in the panel or from the log), and telling
+  it something hangs up as before. Something new said live on top of a
+  missed call turns it into a ringing call.
+- **Only once.** The narrator remembers the last reply you heard from each
+  character, by message id, in a `HeardRepliesStoring`
+  (`UserDefaultsHeardRepliesStore`, `ALife.lastHeardReply`, in the app; in
+  memory by default): a line said to you, a call taken, hung up on or
+  cleared. A job whose last reply you heard isn't a missed call on the next
+  launch; a call left ringing when the app closed is. On the first launch
+  with this, every character whose last job ended done has a missed call.
+- **In the app.** The panel's call bar shows a ringing call first, as
+  before, and otherwise the first missed call, with a red handset, a
+  **Call back** button and how many more were missed. Each character's
+  button shows a red handset while it has one.

@@ -160,6 +160,7 @@ extension EventLog.Entry.Kind {
         case .stopped: return "stop.circle.fill"
         case .waitingForYou: return "exclamationmark.circle.fill"
         case .call: return "phone.fill"
+        case .missedCall: return "phone.arrow.down.left.fill"
         }
     }
 }

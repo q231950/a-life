@@ -138,8 +138,8 @@ struct AgentPanel: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    /// Answers a character's call: shows its conversation and plays what
-    /// you missed in its voice.
+    /// Answers a character's call, or calls it back: shows its conversation
+    /// and plays what you missed in its voice.
     private func take(callFrom id: String) {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
@@ -178,14 +178,16 @@ private struct AutoApproveToggle: View {
 }
 
 /// The first character calling you, with a button to take the call, and how
-/// many more are holding after it.
+/// many more are holding after it. Once none is ringing, the first missed
+/// call, from a character that finished a job while you were away, with a
+/// button to call it back.
 private struct IncomingCallBar: View {
     @Environment(ServerConnection.self) private var server
     @Environment(\.narrator) private var narrator
     let take: (String) -> Void
 
     var body: some View {
-        if let calls = narrator?.calls, let first = calls.first {
+        if let calls = narrator?.incomingCalls, let first = calls.first {
             let name = server.sessions.first { $0.id == first.speakerID }?.name ?? first.speakerID
             HStack(spacing: 8) {
                 Image(systemName: "phone.arrow.down.left.fill")
@@ -212,6 +214,32 @@ private struct IncomingCallBar: View {
             .padding(8)
             .background(Color.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .combine)
+        } else if let calls = narrator?.missedCalls, let first = calls.first {
+            let name = server.sessions.first { $0.id == first.speakerID }?.name ?? first.speakerID
+            HStack(spacing: 8) {
+                Image(systemName: "phone.arrow.down.left.fill")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Missed call from \(name)")
+                        .font(.footnote.bold())
+                    if calls.count > 1 {
+                        Text("\(calls.count - 1) more missed")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                Button("Call back", systemImage: "phone.arrow.up.right.fill") {
+                    take(first.speakerID)
+                }
+                .font(.footnote)
+                .buttonStyle(.bordered)
+                .tint(.green)
+                .accessibilityHint("Plays what \(name) had to say about the job it finished while you were away")
+            }
+            .padding(8)
+            .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityElement(children: .combine)
         }
     }
 }
@@ -231,9 +259,11 @@ private struct CharacterPicker: View {
     }
 }
 
-/// One button per character, showing whether it is working or waiting for you.
+/// One button per character, showing whether it is working or waiting for
+/// you, and whether it left you a missed call.
 private struct CharacterButtons: View {
     @Environment(ServerConnection.self) private var server
+    @Environment(\.narrator) private var narrator
     let selectedID: String
     let select: (String) -> Void
 
@@ -248,6 +278,11 @@ private struct CharacterButtons: View {
                             .fill(session.statusColor)
                             .frame(width: 8, height: 8)
                         Text(session.name)
+                        if narrator?.hasMissedCall(session.id) == true {
+                            Image(systemName: "phone.arrow.down.left.fill")
+                                .foregroundStyle(.red)
+                                .accessibilityLabel("Missed call")
+                        }
                     }
                     .font(.footnote)
                 }

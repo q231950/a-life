@@ -55,6 +55,12 @@ public final class AgentSession {
     /// `newMessages`. It ends once the character is seen without a job, or
     /// once you answer it or tell it something.
     public private(set) var isCatchingUp = true
+    /// What the character said in the job it finished while you were away,
+    /// oldest first: its replies since it was last told something, if
+    /// catching up ended with its job done or with it waiting for you. The
+    /// narrator turns it into a missed call. Empty otherwise, and once you
+    /// answer it or tell it something.
+    public private(set) var finishedWhileAway: [Message] = []
 
     /// Set by the connection while it has a server to talk to.
     @ObservationIgnored var client: ALifeServerClient?
@@ -79,6 +85,7 @@ public final class AgentSession {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         isCatchingUp = false // you're back with it
+        finishedWhileAway = []
         await perform { try await $0.sendMessage(text, to: self.id) }
     }
 
@@ -90,6 +97,7 @@ public final class AgentSession {
     /// Answers a tool call that is waiting for approval.
     public func respond(to approval: Approval, allow: Bool) async {
         isCatchingUp = false // you're back with it
+        finishedWhileAway = []
         await perform { try await $0.decide(approvalID: approval.id, allow: allow, in: self.id) }
     }
 
@@ -147,10 +155,14 @@ public final class AgentSession {
 
     /// Catching up is over once everything listed has been replayed and the
     /// character isn't working any more: whatever job it had before you came
-    /// is done, or it is waiting for you.
+    /// is done, or it is waiting for you. If it finished a job, or is
+    /// waiting for you, what it said meanwhile is kept for a missed call.
     private func finishCatchingUp() {
         guard isCatchingUp, state.lastSeq >= caughtUpAt, state.status != .running else { return }
         isCatchingUp = false
+        guard (state.status == .idle && state.stopReason == .endTurn) || isWaitingForYou else { return }
+        let sinceToldSomething = state.messages.reversed().prefix { $0.kind != .user }.reversed()
+        finishedWhileAway = Array(sinceToldSomething.filter { $0.kind == .agent }.suffix(Self.newMessagesKept))
     }
 
     /// Writes down in the log what `envelope` changed, if it is worth

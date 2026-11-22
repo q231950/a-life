@@ -4,7 +4,7 @@ import Observation
 /// What the characters have been up to, to look back on: their replies, the
 /// helpers they sent off and that came back, the jobs they finished or were
 /// stopped in, the tool calls they asked you about, their errors, and their
-/// calls to you.
+/// calls to you, missed ones too.
 ///
 /// What happened before this front end caught up with a character, or while
 /// it was still finishing a job it had before you came, is marked as while
@@ -33,6 +33,9 @@ public final class EventLog {
             case waitingForYou
             /// It called you about what you missed.
             case call
+            /// It left you a missed call about a job it finished while you
+            /// were away.
+            case missedCall
         }
 
         public let id: Int

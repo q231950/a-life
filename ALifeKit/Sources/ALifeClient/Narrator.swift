@@ -38,9 +38,13 @@ public enum Earshot {
 /// to hear the lot in its voice, wherever you are, or hang up. Each call is
 /// written down in the log too, so hanging up loses nothing.
 ///
-/// What happened while you were away never reaches it: an `AgentSession`'s
-/// `newMessages` leave out what was replayed on connecting, and what a
-/// character said while finishing a job it had before you came.
+/// What happened while you were away is never said and never rings: an
+/// `AgentSession`'s `newMessages` leave out what was replayed on connecting,
+/// and what a character said while finishing a job it had before you came.
+/// A character that finished a job while you were away leaves you a missed
+/// call instead, without a sound: call it back to hear what it had to say.
+/// Which replies you have heard, or let go, is kept between launches, so a
+/// job you heard out isn't a missed call the next time.
 @MainActor
 @Observable
 public final class Narrator {
@@ -54,23 +58,40 @@ public final class Narrator {
         /// Whether it is still on the job. Once it isn't, whatever you
         /// missed of what it said turns into a call.
         public let isWorking: Bool
+        /// What it said in the job it finished while you were away, oldest
+        /// first, for a missed call. Empty if it didn't finish one.
+        public let finishedWhileAway: [Message]
 
-        public init(id: String, name: String? = nil, messages: [Message], isWorking: Bool = false) {
+        public init(
+            id: String,
+            name: String? = nil,
+            messages: [Message],
+            isWorking: Bool = false,
+            finishedWhileAway: [Message] = []
+        ) {
             self.id = id
             self.name = name ?? id
             self.messages = messages
             self.isWorking = isWorking
+            self.finishedWhileAway = finishedWhileAway
         }
     }
 
     /// A character calling you, because it finished a job while you were too
-    /// far away to hear what it had to say.
+    /// far away to hear what it had to say, or a missed call, because it
+    /// finished one while you were away.
     public struct Call: Equatable, Identifiable {
         /// The character calling, by session.
         public let speakerID: String
         /// What you missed, oldest first, as it will be said.
         public internal(set) var lines: [String]
+        /// Whether it is a missed call, left while you were away, rather
+        /// than one ringing now. It waits for you to call back.
+        public internal(set) var isMissed = false
         let voice: Int
+        /// The last of the character's messages in the call, to remember it
+        /// as heard once you take it or let it go.
+        var lastMessageID: String
 
         public var id: String { speakerID }
     }
@@ -80,6 +101,8 @@ public final class Narrator {
         let speakerID: String
         let voice: Int
         let text: String
+        /// The message it comes from.
+        let messageID: String
         /// Part of a call you took, so said wherever you stand.
         var isCall = false
     }
@@ -93,6 +116,13 @@ public final class Narrator {
     @ObservationIgnored private var heard: [String: Set<String>] = [:]
     /// Who was still on the job when last heard from.
     @ObservationIgnored private var working: Set<String> = []
+    /// Where the replies you have heard are kept between launches.
+    @ObservationIgnored private let heardStore: any HeardRepliesStoring
+    /// The last reply you heard from each speaker, or let go unheard.
+    @ObservationIgnored private var lastHeard: [String: String]
+    /// The last replies of jobs finished while you were away that have been
+    /// a missed call already, so each is one only once.
+    @ObservationIgnored private var offered: Set<String> = []
     /// The lines you missed from characters still on the job, by speaker.
     private(set) var missed: [String: [Line]] = [:]
     /// The characters calling you, in the order they rang, one call each.
@@ -100,9 +130,14 @@ public final class Narrator {
     private(set) var waiting: [Line] = []
     private(set) var speaking: Line?
 
-    public init(engine: any SpeechEngine, log: EventLog? = nil) {
+    /// `heardStore` keeps which replies you have heard between launches.
+    /// It is in memory unless you say otherwise; the app keeps them in
+    /// `UserDefaults`.
+    public init(engine: any SpeechEngine, log: EventLog? = nil, heardStore: any HeardRepliesStoring = InMemoryHeardRepliesStore()) {
         self.engine = engine
         self.log = log
+        self.heardStore = heardStore
+        lastHeard = heardStore.load()
     }
 
     /// Takes in what the characters have said lately. Each character's voice
@@ -117,7 +152,7 @@ public final class Narrator {
                 guard message.kind == .agent else { continue }
                 let text = SpokenText.from(message.text)
                 guard !text.isEmpty else { continue }
-                let line = Line(speakerID: speaker.id, voice: voice, text: text)
+                let line = Line(speakerID: speaker.id, voice: voice, text: text, messageID: message.id)
                 if inEarshot.contains(speaker.id) {
                     waiting.append(line)
                 } else {
@@ -126,6 +161,7 @@ public final class Narrator {
             }
             // Only the ones still listed can come round again.
             self.heard[speaker.id] = heard.intersection(speaker.messages.map(\.id))
+            leaveMissedCall(from: speaker, voice: voice)
         }
         working = Set(speakers.filter(\.isWorking).map(\.id))
         ring()
@@ -155,7 +191,8 @@ public final class Narrator {
     public func take(callFrom speakerID: String) {
         guard let index = calls.firstIndex(where: { $0.speakerID == speakerID }) else { return }
         let call = calls.remove(at: index)
-        let lines = call.lines.map { Line(speakerID: speakerID, voice: call.voice, text: $0, isCall: true) }
+        markHeard(call.lastMessageID, from: speakerID)
+        let lines = call.lines.map { Line(speakerID: speakerID, voice: call.voice, text: $0, messageID: call.lastMessageID, isCall: true) }
         // Ahead of anything else waiting, after any other call you took.
         let place = waiting.lastIndex(where: \.isCall).map { $0 + 1 } ?? 0
         waiting.insert(contentsOf: lines, at: place)
@@ -165,6 +202,12 @@ public final class Narrator {
     /// Hangs up on `speakerID` without hearing it out: its call, and
     /// anything kept for one, are let go, and a call you took stops.
     public func hangUp(on speakerID: String) {
+        if let call = calls.first(where: { $0.speakerID == speakerID }) {
+            markHeard(call.lastMessageID, from: speakerID)
+        }
+        if let line = missed[speakerID]?.last {
+            markHeard(line.messageID, from: speakerID)
+        }
         calls.removeAll { $0.speakerID == speakerID }
         missed[speakerID] = nil
         waiting.removeAll { $0.isCall && $0.speakerID == speakerID }
@@ -183,9 +226,32 @@ public final class Narrator {
             || speaking?.speakerID == speakerID
     }
 
-    /// Whether `speakerID` is calling you.
+    /// Clears `speakerID`'s missed call without calling back, as when you
+    /// open its conversation to read what it said. A call ringing now stays.
+    public func clearMissedCall(from speakerID: String) {
+        guard let index = calls.firstIndex(where: { $0.speakerID == speakerID && $0.isMissed }) else { return }
+        let call = calls.remove(at: index)
+        markHeard(call.lastMessageID, from: speakerID)
+    }
+
+    /// Whether `speakerID` is calling you now. A missed call doesn't ring.
     public func isCalling(_ speakerID: String) -> Bool {
-        calls.contains { $0.speakerID == speakerID }
+        calls.contains { $0.speakerID == speakerID && !$0.isMissed }
+    }
+
+    /// Whether `speakerID` left you a missed call.
+    public func hasMissedCall(_ speakerID: String) -> Bool {
+        calls.contains { $0.speakerID == speakerID && $0.isMissed }
+    }
+
+    /// The calls ringing now, in the order they rang.
+    public var incomingCalls: [Call] {
+        calls.filter { !$0.isMissed }
+    }
+
+    /// The missed calls, in the order they were left.
+    public var missedCalls: [Call] {
+        calls.filter(\.isMissed)
     }
 
     /// Stops talking and forgets what was waiting to be said.
@@ -205,16 +271,51 @@ public final class Narrator {
             log?.record(.call, "Called you: " + lines.map(\.text).joined(separator: " "), sessionID: speakerID, name: names[speakerID] ?? speakerID)
             if let index = calls.firstIndex(where: { $0.speakerID == speakerID }) {
                 calls[index].lines += lines.map(\.text)
+                calls[index].lastMessageID = lines[lines.count - 1].messageID
+                // Something new on top of a missed call rings.
+                calls[index].isMissed = false
             } else {
-                calls.append(Call(speakerID: speakerID, lines: lines.map(\.text), voice: lines[0].voice))
+                calls.append(Call(speakerID: speakerID, lines: lines.map(\.text), voice: lines[0].voice, lastMessageID: lines[lines.count - 1].messageID))
             }
         }
+    }
+
+    /// Leaves a missed call from `speaker` if it finished a job while you
+    /// were away and has something to say about it you haven't heard. It
+    /// doesn't ring: it waits for you to call back. Written down in the log
+    /// as while you were away.
+    private func leaveMissedCall(from speaker: Speaker, voice: Int) {
+        let lines = speaker.finishedWhileAway.compactMap { message -> Line? in
+            guard message.kind == .agent else { return nil }
+            let text = SpokenText.from(message.text)
+            return text.isEmpty ? nil : Line(speakerID: speaker.id, voice: voice, text: text, messageID: message.id)
+        }
+        guard let last = lines.last,
+              !offered.contains(last.messageID),
+              lastHeard[speaker.id] != last.messageID,
+              !calls.contains(where: { $0.speakerID == speaker.id })
+        else { return }
+        offered.insert(last.messageID)
+        calls.append(Call(speakerID: speaker.id, lines: lines.map(\.text), isMissed: true, voice: voice, lastMessageID: last.messageID))
+        log?.record(
+            .missedCall, "Missed call: " + lines.map(\.text).joined(separator: " "),
+            sessionID: speaker.id, name: speaker.name, isWhileAway: true
+        )
+    }
+
+    /// Remembers `messageID` as the last you heard from `speakerID`, now
+    /// and on later launches.
+    private func markHeard(_ messageID: String, from speakerID: String) {
+        guard lastHeard[speakerID] != messageID else { return }
+        lastHeard[speakerID] = messageID
+        heardStore.save(lastHeard)
     }
 
     private func sayNext() {
         guard speaking == nil, !waiting.isEmpty else { return }
         let line = waiting.removeFirst()
         speaking = line
+        markHeard(line.messageID, from: line.speakerID)
         let engine = engine
         Task { [weak self] in
             await engine.say(line.text, voice: line.voice)
@@ -222,6 +323,40 @@ public final class Narrator {
             self?.sayNext()
         }
     }
+}
+
+/// Where the last reply you heard from each character is kept between
+/// launches, by session, so a job you heard out isn't a missed call later.
+public protocol HeardRepliesStoring: Sendable {
+    func load() -> [String: String]
+    func save(_ lastHeard: [String: String])
+}
+
+public struct UserDefaultsHeardRepliesStore: HeardRepliesStoring {
+    private let key: String
+
+    public init(key: String = "ALife.lastHeardReply") {
+        self.key = key
+    }
+
+    public func load() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+    }
+
+    public func save(_ lastHeard: [String: String]) {
+        UserDefaults.standard.set(lastHeard, forKey: key)
+    }
+}
+
+/// Keeps the replies heard in memory only. For tests and previews.
+public final class InMemoryHeardRepliesStore: HeardRepliesStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastHeard: [String: String]
+
+    public init(_ lastHeard: [String: String] = [:]) { self.lastHeard = lastHeard }
+
+    public func load() -> [String: String] { lock.withLock { lastHeard } }
+    public func save(_ lastHeard: [String: String]) { lock.withLock { self.lastHeard = lastHeard } }
 }
 
 /// A character's message as it should sound: its Markdown read as plain
