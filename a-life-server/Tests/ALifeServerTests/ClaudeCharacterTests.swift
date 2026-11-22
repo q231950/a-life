@@ -96,11 +96,13 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertNil(agents["keeper"])
         XCTAssertTrue(try XCTUnwrap(value(after: "--append-system-prompt", in: arguments)).contains("`construction-worker` agent"))
 
-        // It is told what you said, after the SDK's handshake.
+        // It is told what you said, after the SDK's handshake and asking how
+        // full its context is.
         let cli = try XCTUnwrap(claudeCode.clis.first)
-        XCTAssertEqual(cli.sent.map { $0["type"]?.string }, ["control_request", "user"])
+        XCTAssertEqual(cli.sent.map { $0["type"]?.string }, ["control_request", "control_request", "user"])
         XCTAssertEqual(cli.sent[0]["request"]?["subtype"], "initialize")
-        XCTAssertEqual(cli.sent[1]["message"], ["role": "user", "content": "Build me an office"])
+        XCTAssertEqual(cli.sent[1]["request"]?["subtype"], "get_context_usage")
+        XCTAssertEqual(cli.sent[2]["message"], ["role": "user", "content": "Build me an office"])
         var state = await hub.state
         XCTAssertEqual(state.status, .running)
 

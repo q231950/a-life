@@ -22,8 +22,19 @@ import Vapor
 /// last step becomes the next instruction.
 ///
 /// Each instruction also uses up a little of a made-up 5-hour window, so the
-/// front ends' gauge and the lot's day can be tried without a model.
+/// front ends' gauge and the lot's day can be tried without a model, and
+/// fills a made-up context, which "compacts" once it reaches the point
+/// where Claude Code would, so the context ring can be tried too.
 actor DummyCharacter: SessionBackend {
+    /// The made-up context's window, where it compacts, what it holds when
+    /// it starts and after it compacts, and what a step and a reply add.
+    static let contextWindow = 200_000
+    static let compactsAt = 167_000
+    static let startingTokens = 15_000
+    static let compactedTokens = 20_000
+    static let tokensPerStep = 12_000
+    static let tokensPerReply = 2_000
+
     private let profile: Character
     private let hub: SessionHub
     private let step: Duration
@@ -38,6 +49,9 @@ actor DummyCharacter: SessionBackend {
     private var pendingApproval: (id: String, answer: AsyncStream<Bool>.Continuation)?
     /// The helpers that are out and haven't reported back yet, by id.
     private var helpersOut: [String] = []
+    /// How many tokens the made-up context holds, once the session has
+    /// started.
+    private var usedTokens: Int?
 
     init(_ profile: Character, hub: SessionHub, step: Duration, usage: UsageHub? = nil) {
         self.profile = profile
@@ -54,6 +68,7 @@ actor DummyCharacter: SessionBackend {
         }
         await hub.emit(.message(Message(kind: .user, speaker: "You", text: text)))
         await usage?.recordMadeUpUse(at: Date())
+        await fillContext(by: usedTokens == nil ? Self.startingTokens : Self.tokensPerReply)
         inbox.append(text)
         if worker == nil {
             let generation = generation
@@ -84,6 +99,7 @@ actor DummyCharacter: SessionBackend {
 
     func reset() async {
         await stopWorking()
+        usedTokens = nil
         await hub.startConversation()
     }
 
@@ -130,6 +146,7 @@ actor DummyCharacter: SessionBackend {
     private func work(_ activity: String, doing description: String, on instruction: String) async throws {
         try await post(.activityChanged(activity))
         try await post(.toolUsed(ToolUse(toolName: activity, input: description)))
+        await fillContext(by: Self.tokensPerStep)
         try await Task.sleep(for: step)
         try await answerWhatWasSaid(doing: description, on: instruction)
     }
@@ -219,6 +236,23 @@ actor DummyCharacter: SessionBackend {
 
     private func say(_ text: String) async throws {
         try await post(.message(Message(kind: .agent, speaker: profile.name, text: text)))
+        await fillContext(by: Self.tokensPerReply)
+    }
+
+    /// Adds `tokens` to the made-up context and says how full it is. Once
+    /// it would pass the compaction point, it compacts, as Claude Code's
+    /// would.
+    private func fillContext(by tokens: Int) async {
+        guard !Task.isCancelled else { return } // a stopped script says no more
+        var used = (usedTokens ?? 0) + tokens
+        if used > Self.compactsAt { used = Self.compactedTokens }
+        usedTokens = used
+        await hub.emit(.contextChanged(Self.context(holding: used)))
+    }
+
+    /// The made-up context, holding `usedTokens`.
+    static func context(holding usedTokens: Int) -> SessionContext {
+        SessionContext(model: "dummy", usedTokens: usedTokens, compactsAt: compactsAt, contextWindow: contextWindow, autoCompact: true)
     }
 
     /// Emits an event, unless the script was cancelled in the meantime.

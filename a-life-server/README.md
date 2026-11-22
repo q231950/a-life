@@ -140,7 +140,7 @@ A session's `{id}` is its character's, such as `builder` or `engineer`, and neve
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, the whole conversation (`conversation`, see below), helpers out, whether auto approve is on (`auto_approve`), last sequence number. |
+| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, the whole conversation (`conversation`, see below), helpers out, whether auto approve is on (`auto_approve`), how full the character's Claude Code session is and the model playing it (`context`, see `session.context` below; left out until its session has said), last sequence number. |
 | `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
 | `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
 | `POST` | `/v1/sessions/{id}/messages` | `{"text": "…"}` | Says something to the character. Works while it is busy: it answers at its next step. `409` while it waits for an approval. |
@@ -188,6 +188,7 @@ A front end follows every session at once: it reads `GET /v1/sessions` to learn 
 | `subagent.started` | `subagent` | The character sent a helper (a subagent) off to do part of its work: `id`, `task`. |
 | `subagent.finished` | `subagent_id` | The helper reported back to the character, or was called back because the character was stopped or started over. |
 | `session.auto_approve` | `auto_approve` | Auto approve was turned on (`true`) or off for the session. A new conversation starts with it off, so a server that keeps it on sends this again straight after `conversation.started`. |
+| `session.context` | `context` | How full the character's Claude Code session is, and the model playing it: `model`, `used_tokens` (what its context holds as of its last call; its helpers' don't count), `compacts_at` (the tokens at which Claude Code compacts the conversation by itself), `context_window`, and `auto_compact` (whether it does). Each is left out until it is known. A new conversation starts without one. See [How full a session is](#how-full-a-session-is). |
 
 Clients skip event types they don't know, so new ones can be added.
 
@@ -282,6 +283,7 @@ How a session maps onto the events:
 | A call to the `Agent` tool, or `Task` in older versions | `subagent.started`, until the call returns or Claude Code reports the task done: `subagent.finished` |
 | A permission request (`can_use_tool`) | `approval.requested`, and the session is idle with `requires_action` until you answer. Allowing or denying goes back to Claude Code as the answer, and is `approval.resolved` with `allowed` or `denied`; with auto approve on, Claude Code is told yes at once and it is `auto_approved`, without waiting; one Claude Code no longer needs is `withdrawn`. |
 | The end of a turn (`result`) | `session.status` idle with `end_turn`. If it ended in an error, such as not being logged in, the error is a `message` of kind `error`. |
+| The model (the `init` message's `model`), the usage on each of the character's own replies, and `get_context_usage`'s answers | `session.context`. See [How full a session is](#how-full-a-session-is). |
 | The 5-hour usage limit (a `rate_limit_event` that is `rejected`, then the error `rate_limit`) | `session.status` idle with `usage_limit` and `resumes_at`, and later a `message` from `a*life`, "please continue". See [The usage limit](#the-usage-limit). |
 
 - **Talking to a character** while it works is fine: Claude Code takes what you say up at its next step. While it waits for an approval, messages to it are refused with `409` until the approval is answered.
@@ -290,6 +292,17 @@ How a session maps onto the events:
 - **If Claude Code stops by itself**, the error is shown in the conversation and the next thing you say resumes the same session (`--resume`).
 - Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
 - Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the directory the character works in (the lot, or the Engineer's a\*life checkout) picks the conversation up in a terminal. The server itself keeps no conversations: after a restart, every character starts a new session, unless it was waiting for the usage limit.
+
+### How full a session is
+
+The app shows how full the session of the character you're talking to is, as a ring under the usage gauge: how far its context is to the point where Claude Code compacts the conversation by itself. The server tells it in `session.context`:
+
+- **Where it compacts** is Claude Code's to say, as it depends on the model's window, a margin it keeps for the summary, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, the `autoCompactWindow` setting (`/autocompact`) and more besides. So the server asks it, with the control request `get_context_usage`, the one behind `/context` and the Agent SDK's `getContextUsage()`: when the CLI starts, after each turn, and after it compacts (`compact_boundary`), one question at a time. From the answer it takes `model`, `totalTokens`, `autoCompactThreshold` (`compacts_at`), `isAutoCompactEnabled` (`auto_compact`) and `maxTokens` (`context_window`).
+- **Between answers** the tokens follow the usage on each of the character's own replies: `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` and `output_tokens` added up. Its helpers' replies have contexts of their own and are left out. The model comes from the `init` message, and from each reply.
+- **If Claude Code won't say** (it answers the request with an error), it isn't asked again until the CLI starts again, and the ring measures against the whole window instead, from the `contextWindow` of the character's model in the turn's `modelUsage`. With auto-compact off, there's no `compacts_at`, and the ring measures against the window too.
+- The characters compact by your own Claude Code settings: nothing in the agents file changes them.
+- Starting over forgets it; a session that is resumed after the CLI stopped keeps it until the new run says otherwise. Nothing of it is kept across a restart of the server.
+- This was written from what Claude Code 2.1.323's own code says about these messages, not yet checked against a real run.
 
 ### The usage limit
 
@@ -493,6 +506,8 @@ With `ALIFE_BACKEND=dummy`, each character is a `DummyCharacter` instead, which 
 
 Each helper is out for a few steps (the looker's for four and six, the Builder's for four); while they are out, the character's activity is `agent`.
 
+Each also fills a made-up context, so the app's context ring can be tried: model `dummy`, a window of 200,000 tokens that compacts at 167,000, starting at 15,000 with the first message and growing with each step and reply, then dropping back to 20,000 once it would pass the compaction point, as Claude Code's would. Starting over empties it.
+
 Both can be talked to while they work: something said mid-task is answered at the next step ("Still on … Right now I'm …") and the work carries on. Something said after the last step becomes the next instruction. While the Builder waits for an approval, messages to it are refused with `409` until the approval is answered.
 
 Each step takes 1.5 seconds.
@@ -528,13 +543,13 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many animals fit in a bed, and writes `lot.md`, with the animals the app draws. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
-| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects, and waits out the 5-hour usage limit before it carries on. |
+| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects, waits out the 5-hour usage limit before it carries on, and follows how full the session is, asking Claude Code where it compacts (`get_context_usage`). |
 | `UsageLimit.swift` | Reads what Claude Code says about its usage limits, and the 5-hour window from its `unifiedWindows`, tells the 5-hour limit from the weekly ones and when it resets, and `WakeClock`, the clock a character waits on. |
 | `Usage.swift` | `UsageHub`: the last reading of the 5-hour usage window, from the characters' runs (or made up by the dummies), kept in `usage.json` and sent to the clients following it when it changes. |
 | `PendingContinues.swift` | The characters waiting for the usage limit to reset, kept in `continues.json` so they outlast a restart. |
 | `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, with the agents file and the server's command in its environment, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
-| `DummyCharacter.swift` | The scripted stand-in. |
+| `DummyCharacter.swift` | The scripted stand-in, with a made-up context that fills and compacts. |
 | `fetch-voice.sh` | Not in `Sources`: fetches the voice model into `ALIFE_VOICE_DIR`. See [Voices](#voices). |
 
 ## Tests
@@ -545,7 +560,7 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `ContextTests` follow how full a session is: Claude Code asked where it compacts when it starts, after each turn and after compacting, one question at a time, answers to other requests ignored, auto-compact off, the whole window from the turn's `modelUsage` when Claude Code won't say, the tokens on the character's own replies and not its helpers', the same reading not said twice, starting over and resuming, the dummies' made-up context filling and compacting, and a front end following it. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Conservationist's foals, bears, polar bears, birds, unicorns, pegasuses and dinosaurs and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the keeper being told where the house is, the keeper being told about every animal the app draws, and a front end seeing a restaurant and an oak appear.
 

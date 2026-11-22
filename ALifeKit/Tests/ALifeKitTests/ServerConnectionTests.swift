@@ -328,6 +328,26 @@ final class ServerConnectionTests: XCTestCase {
         server.disconnect()
     }
 
+    func testFollowsHowFullEachSessionIsWithoutLoggingIt() async throws {
+        let (server, _) = makeConnection()
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let builder = try XCTUnwrap(server.session("builder"))
+        await wait(for: "the builder's stream") { streamRequests.contains { $0.url.path == "/v1/sessions/builder/events" } }
+        XCTAssertNil(builder.context)
+
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
+        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.idle, stopReason: .endTurn)), to: "builder")
+        await wait(for: "the builder's status") { builder.state.lastSeq == 2 }
+        let logged = server.log.entries.count
+        let context = SessionContext(model: "claude-opus-4-7", usedTokens: 84_000, compactsAt: 167_000)
+        StubServer.push(EventEnvelope(seq: 3, event: .contextChanged(context)), to: "builder")
+        await wait(for: "the context") { builder.context == context }
+        XCTAssertEqual(server.log.entries.count, logged)
+
+        server.disconnect()
+    }
+
     func testAServerThatDoesntTellTheUsageStillHasItsSessionsFollowed() async throws {
         let (server, _) = makeConnection()
         StubServer.hasUsage = false

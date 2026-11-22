@@ -18,6 +18,11 @@ enum JSONValue: Sendable, Equatable {
         return object[key]
     }
 
+    var object: [String: JSONValue]? {
+        guard case .object(let object) = self else { return nil }
+        return object
+    }
+
     var string: String? {
         guard case .string(let string) = self else { return nil }
         return string
