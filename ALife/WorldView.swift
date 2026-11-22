@@ -8,6 +8,9 @@ import AppKit
 struct WorldView: View {
     @Environment(ServerConnection.self) private var server
     @Environment(Voices.self) private var voices
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     @State private var world: World?
     /// Says the characters' lines out loud while you stand near them.
     @State private var narrator: Narrator?
@@ -15,9 +18,9 @@ struct WorldView: View {
     @State private var selectedID: String?
     @State private var showsSettings = false
     @State private var showsLog = false
-    /// How wide the usage panel at the top left is while it shows, so the
-    /// status pill keeps clear of it.
-    @State private var usagePanelWidth: CGFloat = 0
+    /// How wide the panels at the top left are, the usage and the context,
+    /// so the status pill keeps clear of them. 0 while neither shows.
+    @State private var topLeftWidth: CGFloat = 0
     /// Whether the agent panel shows the conversation, as the panel keeps it.
     @AppStorage("agentPanelIsExpanded") private var panelIsExpanded = true
     /// Each character's shirt on the lot, for the panel to show them in.
@@ -73,14 +76,28 @@ struct WorldView: View {
         }
         .overlay(alignment: .top) {
             SessionStatusBar(showsSettings: $showsSettings, showsLog: $showsLog)
-                // Kept clear of the usage panel on both sides, so it stays
-                // centred.
-                .padding(.horizontal, usagePanelWidth > 0 ? usagePanelWidth + 8 : 0)
+                // Kept clear of the panels at the top left on both sides, so
+                // it stays centred; on a narrow screen, only on the left, so
+                // it has the room to the right of them.
+                .padding(.leading, topLeftWidth > 0 ? topLeftWidth + 8 : 0)
+                .padding(.trailing, topLeftWidth > 0 && !isNarrow ? topLeftWidth + 8 : 0)
                 .padding()
         }
         .overlay(alignment: .topLeading) {
-            UsagePanel(width: $usagePanelWidth)
-                .padding()
+            // The usage, and under it how full the session of the character
+            // you're talking to is, both as wide as the wider of the two.
+            EqualWidthColumn {
+                UsagePanel()
+                if let selected {
+                    // A fresh one for each character, so the ring doesn't
+                    // sweep over from someone else's.
+                    ContextPanel(session: selected)
+                        .id(selected.id)
+                        .environment(\.shirts, shirts)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { topLeftWidth = $0 }
+            .padding()
         }
         .overlay(alignment: .bottom) {
             AgentPanel(selectedID: $selectedID)
@@ -105,6 +122,15 @@ struct WorldView: View {
         #if os(macOS)
         .onAppear(perform: startScrollZoom)
         .onDisappear(perform: stopScrollZoom)
+        #endif
+    }
+
+    /// Whether there is little room across, as on an iPhone held upright.
+    private var isNarrow: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
         #endif
     }
 

@@ -36,6 +36,14 @@ import Vapor
 ///
 /// What Claude Code says about the 5-hour window on every turn goes to the
 /// `UsageHub`, for the front ends' gauge and the lot's day.
+///
+/// How full the character's context is, and the model playing it, are
+/// emitted as `session.context`, for the front ends' context ring. Claude
+/// Code is asked (`get_context_usage`) when it starts, after each turn and
+/// after it compacts, for the point where it compacts by itself; between
+/// answers, the tokens follow the usage on each of the character's own
+/// replies. If it won't say, the ring measures against the window its
+/// turns report instead.
 actor ClaudeCharacter: SessionBackend {
     /// What a*life says to a character once the usage limit has reset.
     static let pleaseContinue = "please continue"
@@ -84,6 +92,22 @@ actor ClaudeCharacter: SessionBackend {
     private var limitNotice: String?
     /// Waits for the usage limit to reset, then carries on.
     private var waitingForLimit: Task<Void, Never>?
+    /// How full the context is, as far as it is known.
+    private var context = SessionContext()
+    /// What was last said about it, so the same isn't said twice.
+    private var contextSaid: SessionContext?
+    /// The window the last turn reported, for when Claude Code won't say
+    /// where it compacts.
+    private var turnWindow: Int?
+    /// The window Claude Code said auto-compact works within.
+    private var compactionWindow: Int?
+    /// The request asking Claude Code how full the context is, while it
+    /// waits for the answer.
+    private var contextQuestion: String?
+    /// Whether to ask again once the answer comes.
+    private var asksAboutContextAgain = false
+    /// Whether this CLI refused to say, so it isn't asked again.
+    private var contextRefused = false
 
     private struct HelperOut {
         /// The kind of subagent, such as `construction-worker`.
@@ -217,6 +241,11 @@ actor ClaudeCharacter: SessionBackend {
         hitLimit = false
         limitNotice = nil
         activity = nil
+        forgetContextQuestion()
+        context = SessionContext()
+        contextSaid = nil
+        turnWindow = nil
+        compactionWindow = nil
         await callEveryoneBack()
         await hub.startConversation()
     }
@@ -301,6 +330,7 @@ actor ClaudeCharacter: SessionBackend {
         self.connection = connection
         logger.info("Started Claude Code for \(character.name)")
         try? connection.send(Self.controlRequest(["subtype": "initialize"]))
+        askAboutContext(connection)
         Task { [weak self] in
             for await message in connection.messages {
                 await self?.handle(message, from: connection)
@@ -329,6 +359,7 @@ actor ClaudeCharacter: SessionBackend {
         case "system": await handleSystem(message)
         case "result": await handleResult(message)
         case "control_request": await handleControlRequest(message, from: connection)
+        case "control_response": await handleControlResponse(message, from: connection)
         case "control_cancel_request": await withdrawApproval(message["request_id"]?.string)
         default: break
         }
@@ -342,6 +373,9 @@ actor ClaudeCharacter: SessionBackend {
             // report from the background.
             turnActive = true
             await hub.emit(.statusChanged(.running, stopReason: nil))
+        }
+        if !fromHelper {
+            await noteContext(of: message)
         }
         for block in message["message"]?["content"]?.array ?? [] {
             switch block["type"]?.string {
@@ -402,6 +436,14 @@ actor ClaudeCharacter: SessionBackend {
     /// including those in the background.
     private func handleSystem(_ message: JSONValue) async {
         switch message["subtype"]?.string {
+        case "init":
+            if let model = message["model"]?.string, !model.isEmpty {
+                context.model = model
+                await sayContext()
+            }
+        case "compact_boundary":
+            // Most of the context has gone.
+            if let connection { askAboutContext(connection) }
         case "task_started":
             // Background shell commands are tasks too.
             let taskType = message["task_type"]?.string ?? "local_agent"
@@ -436,6 +478,12 @@ actor ClaudeCharacter: SessionBackend {
 
     /// The end of a turn.
     private func handleResult(_ message: JSONValue) async {
+        if let window = Self.contextWindow(in: message["modelUsage"], for: context.model) {
+            turnWindow = window
+            context.contextWindow = compactionWindow ?? window
+            await sayContext()
+        }
+        if let connection { askAboutContext(connection) }
         // Helpers in the foreground can't outlive the turn that sent them.
         for (id, helper) in helpers where !helper.inBackground {
             await reportedBack(id)
@@ -540,6 +588,7 @@ actor ClaudeCharacter: SessionBackend {
     private func ended(_ connection: any ClaudeCodeConnection) async {
         guard connection === self.connection else { return } // stopped on purpose
         self.connection = nil
+        forgetContextQuestion() // the next run is asked afresh
         let wasWorking = turnActive || !approvals.isEmpty || !helpers.isEmpty
         turnActive = false
         swallowNextResult = false
@@ -553,6 +602,106 @@ actor ClaudeCharacter: SessionBackend {
         if !diagnostics.isEmpty { text += " " + diagnostics }
         await hub.emit(.message(Message(kind: .error, speaker: character.name, text: text)))
         await hub.emit(.statusChanged(.idle, stopReason: .endTurn))
+    }
+
+    // MARK: How full the context is
+
+    /// Asks Claude Code how full the context is and where it compacts,
+    /// unless it refused before. Only one question is out at a time; asked
+    /// meanwhile, it is asked again once the answer comes.
+    private func askAboutContext(_ connection: any ClaudeCodeConnection) {
+        guard !contextRefused else { return }
+        guard contextQuestion == nil else {
+            asksAboutContextAgain = true
+            return
+        }
+        let id = UUID().uuidString
+        contextQuestion = id
+        try? connection.send(Self.controlRequest(["subtype": "get_context_usage"], id: id))
+    }
+
+    private func forgetContextQuestion() {
+        contextQuestion = nil
+        asksAboutContextAgain = false
+        contextRefused = false
+    }
+
+    /// Claude Code's answer to a control request. Only the answer to the
+    /// question about the context is read.
+    private func handleControlResponse(_ message: JSONValue, from connection: any ClaudeCodeConnection) async {
+        let response = message["response"]
+        guard let id = response?["request_id"]?.string, id == contextQuestion else { return }
+        contextQuestion = nil
+        if response?["subtype"]?.string == "success", let answer = response?["response"] {
+            if let model = answer["model"]?.string, !model.isEmpty { context.model = model }
+            if let total = answer["totalTokens"]?.number { context.usedTokens = Int(total) }
+            let enabled = answer["isAutoCompactEnabled"]?.bool
+            context.autoCompact = enabled
+            context.compactsAt = enabled == false ? nil : answer["autoCompactThreshold"]?.number.map { Int($0) }
+            compactionWindow = answer["maxTokens"]?.number.map { Int($0) }
+            context.contextWindow = compactionWindow ?? turnWindow
+            await sayContext()
+        } else {
+            contextRefused = true
+            asksAboutContextAgain = false
+            let reason = response?["error"]?.string ?? "no reason given"
+            logger.info("Claude Code won't say how full \(character.name)'s context is (\(reason)), so it is measured against the window")
+        }
+        if asksAboutContextAgain {
+            asksAboutContextAgain = false
+            askAboutContext(connection)
+        }
+    }
+
+    /// The tokens and the model of one of the character's own replies.
+    private func noteContext(of message: JSONValue) async {
+        let model = message["message"]?["model"]?.string
+        // Claude Code's own notices, such as running into a limit, weren't
+        // a call to the model, and say nothing about the context.
+        guard model != "<synthetic>" else { return }
+        if let model, !model.isEmpty {
+            context.model = model
+        }
+        if let used = Self.usedTokens(message["message"]?["usage"]) {
+            context.usedTokens = used
+        }
+        await sayContext()
+    }
+
+    /// Says how full the context is, if that has changed and anything is known.
+    private func sayContext() async {
+        guard context != contextSaid, context != SessionContext() else { return }
+        contextSaid = context
+        await hub.emit(.contextChanged(context))
+    }
+
+    /// The tokens a call's `usage` leaves in the context: what went in,
+    /// read from the cache or written to it, and what came out.
+    static func usedTokens(_ usage: JSONValue?) -> Int? {
+        guard let usage else { return nil }
+        let parts = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"]
+            .compactMap { usage[$0]?.number }
+        guard !parts.isEmpty else { return nil }
+        return Int(parts.reduce(0, +))
+    }
+
+    /// The context window a turn's `modelUsage` gives for `model`: its own
+    /// entry, or one for the same model without a suffix such as `[1m]`, or
+    /// the only entry when the model isn't known. Other models' entries,
+    /// such as one for small jobs on the side, are left alone.
+    static func contextWindow(in modelUsage: JSONValue?, for model: String?) -> Int? {
+        guard let entries = modelUsage?.object, !entries.isEmpty else { return nil }
+        func window(_ entry: JSONValue?) -> Int? {
+            guard let window = entry?["contextWindow"]?.number, window > 0 else { return nil }
+            return Int(window)
+        }
+        guard let model else {
+            return entries.count == 1 ? window(entries.first?.value) : nil
+        }
+        if let exact = window(entries[model]) { return exact }
+        func base(_ id: String) -> Substring { id.split(separator: "[", maxSplits: 1).first ?? Substring(id) }
+        let match = entries.keys.sorted().first { base($0) == base(model) || base($0).hasPrefix(base(model)) || base(model).hasPrefix(base($0)) }
+        return match.flatMap { window(entries[$0]) }
     }
 
     // MARK: Helpers
@@ -623,8 +772,8 @@ actor ClaudeCharacter: SessionBackend {
         return ""
     }
 
-    private static func controlRequest(_ request: JSONValue) -> JSONValue {
-        ["type": "control_request", "request_id": .string(UUID().uuidString), "request": request]
+    private static func controlRequest(_ request: JSONValue, id: String = UUID().uuidString) -> JSONValue {
+        ["type": "control_request", "request_id": .string(id), "request": request]
     }
 
     private static func controlResponse(to requestID: String, _ response: JSONValue) -> JSONValue {

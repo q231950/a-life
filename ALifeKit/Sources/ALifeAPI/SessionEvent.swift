@@ -30,6 +30,9 @@ public enum SessionEvent: Equatable, Sendable {
     /// every tool call that asks is allowed straight away, and settled as
     /// `autoApproved`.
     case autoApproveChanged(Bool)
+    /// How full the character's Claude Code session is, or the model playing
+    /// it, changed.
+    case contextChanged(SessionContext)
     /// An event type this version doesn't know. It is skipped.
     case unknown(type: String)
 
@@ -46,6 +49,7 @@ public enum SessionEvent: Equatable, Sendable {
         case .subagentStarted: return "subagent.started"
         case .subagentFinished: return "subagent.finished"
         case .autoApproveChanged: return "session.auto_approve"
+        case .contextChanged: return "session.context"
         case .unknown(let type): return type
         }
     }
@@ -53,7 +57,7 @@ public enum SessionEvent: Equatable, Sendable {
 
 extension SessionEvent: Codable {
     enum CodingKeys: String, CodingKey {
-        case type, status, activity, message, approval, subagent, outcome
+        case type, status, activity, message, approval, subagent, outcome, context
         case toolUse = "tool_use"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
@@ -95,6 +99,8 @@ extension SessionEvent: Codable {
             self = .subagentFinished(subagentID: try container.decode(String.self, forKey: .subagentID))
         case "session.auto_approve":
             self = .autoApproveChanged(try container.decode(Bool.self, forKey: .autoApprove))
+        case "session.context":
+            self = .contextChanged(try container.decode(SessionContext.self, forKey: .context))
         default:
             self = .unknown(type: type)
         }
@@ -127,6 +133,8 @@ extension SessionEvent: Codable {
             try container.encode(subagentID, forKey: .subagentID)
         case .autoApproveChanged(let autoApprove):
             try container.encode(autoApprove, forKey: .autoApprove)
+        case .contextChanged(let context):
+            try container.encode(context, forKey: .context)
         case .unknown:
             break
         }
@@ -208,6 +216,10 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     /// Whether tool calls that ask are allowed without asking you. Each
     /// session has its own; it is off until someone turns it on.
     public var autoApprove = false
+    /// How full the character's Claude Code session is, and the model
+    /// playing it. `nil` until the session has started and said, and from
+    /// servers from before it did.
+    public var context: SessionContext?
     /// Sequence number of the last event applied.
     public var lastSeq = 0
 
@@ -273,6 +285,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
             subagents.removeAll { $0.id == subagentID }
         case .autoApproveChanged(let autoApprove):
             self.autoApprove = autoApprove
+        case .contextChanged(let context):
+            self.context = context
         case .unknown:
             break
         }
@@ -280,7 +294,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, color, status, activity, messages, approvals, conversation, subagents
+        case id, name, color, status, activity, messages, approvals, conversation, subagents, context
         case autoApprove = "auto_approve"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
@@ -319,6 +333,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         subagents = try container.decodeIfPresent([Subagent].self, forKey: .subagents) ?? []
         // Nor from before there was auto approve.
         autoApprove = try container.decodeIfPresent(Bool.self, forKey: .autoApprove) ?? false
+        // Nor from before they said how full the session is.
+        context = (try? container.decodeIfPresent(SessionContext.self, forKey: .context)) ?? nil
         lastSeq = try container.decode(Int.self, forKey: .lastSeq)
     }
 
@@ -338,6 +354,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(conversation, forKey: .conversation)
         try container.encode(subagents, forKey: .subagents)
         try container.encode(autoApprove, forKey: .autoApprove)
+        try container.encodeIfPresent(context, forKey: .context)
         try container.encode(lastSeq, forKey: .lastSeq)
     }
 }

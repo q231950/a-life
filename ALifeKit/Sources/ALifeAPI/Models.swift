@@ -200,6 +200,52 @@ public struct Subagent: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// How full a character's Claude Code session is, and the model playing it:
+/// the tokens its context holds, and when Claude Code compacts it by
+/// itself. Each field is `nil` until the session has said it.
+public struct SessionContext: Codable, Equatable, Sendable {
+    /// The model playing the character, such as `claude-opus-4-7`.
+    public var model: String?
+    /// How many tokens the character's context holds, as of its last call
+    /// to the model. Its helpers' contexts aren't counted.
+    public var usedTokens: Int?
+    /// How many tokens the context can hold before Claude Code compacts it
+    /// by itself. `nil` when it doesn't, or hasn't said.
+    public var compactsAt: Int?
+    /// How many tokens the context can hold at all, for when it isn't
+    /// compacted by itself.
+    public var contextWindow: Int?
+    /// Whether Claude Code compacts the context by itself as it gets full.
+    /// `nil` if it hasn't said.
+    public var autoCompact: Bool?
+
+    public init(model: String? = nil, usedTokens: Int? = nil, compactsAt: Int? = nil, contextWindow: Int? = nil, autoCompact: Bool? = nil) {
+        self.model = model
+        self.usedTokens = usedTokens
+        self.compactsAt = compactsAt
+        self.contextWindow = contextWindow
+        self.autoCompact = autoCompact
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case usedTokens = "used_tokens"
+        case compactsAt = "compacts_at"
+        case contextWindow = "context_window"
+        case autoCompact = "auto_compact"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // A field this front end can't read is as good as none.
+        model = (try? container.decodeIfPresent(String.self, forKey: .model)) ?? nil
+        usedTokens = (try? container.decodeIfPresent(Int.self, forKey: .usedTokens)) ?? nil
+        compactsAt = (try? container.decodeIfPresent(Int.self, forKey: .compactsAt)) ?? nil
+        contextWindow = (try? container.decodeIfPresent(Int.self, forKey: .contextWindow)) ?? nil
+        autoCompact = (try? container.decodeIfPresent(Bool.self, forKey: .autoCompact)) ?? nil
+    }
+}
+
 // MARK: Request bodies
 
 /// `POST /v1/sessions/{id}/messages`

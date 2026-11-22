@@ -45,6 +45,9 @@ public final class AgentSession {
     /// Whether the character's tool calls are allowed without asking you.
     /// Only this session's: each character has its own.
     public var autoApprove: Bool { state.autoApprove }
+    /// How full the character's Claude Code session is, and the model
+    /// playing it, or `nil` if its session hasn't started.
+    public var context: SessionContext? { state.context }
 
     /// What was said in the session since this front end caught up with it,
     /// oldest first, as it happened: not what was said before and replayed
