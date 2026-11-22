@@ -219,6 +219,8 @@ final class ServerConnectionTests: XCTestCase {
 
         XCTAssertFalse(gardener.isCatchingUp)
         XCTAssertTrue(gardener.newMessages.isEmpty)
+        // Kept for a missed call, which only the narrator's speakers carry.
+        XCTAssertEqual(gardener.finishedWhileAway.map(\.id), ["m1"])
         XCTAssertTrue(narrator.calls.isEmpty)
         XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
         await Task.yield()
@@ -258,6 +260,7 @@ final class ServerConnectionTests: XCTestCase {
 
         await builder.send("Make it a café instead.")
         XCTAssertFalse(builder.isCatchingUp)
+        XCTAssertTrue(builder.finishedWhileAway.isEmpty)
         StubServer.push(EventEnvelope(seq: 3, event: .message(Message(id: "m1", kind: .agent, speaker: "Builder", text: "A café it is."))), to: "builder")
         await wait(for: "the answer") { builder.newMessages.count == 1 }
 

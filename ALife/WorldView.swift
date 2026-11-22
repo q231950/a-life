@@ -43,6 +43,11 @@ struct WorldView: View {
         .onChange(of: selected?.id) { _, id in
             world?.show(residents, selectedID: id)
         }
+        .onChange(of: selectedID) { _, id in
+            // Opening a character's conversation shows what it said, so its
+            // missed call can go.
+            if let id { narrator?.clearMissedCall(from: id) }
+        }
         .onChange(of: speakers) { _, speakers in
             narrator?.listen(to: speakers, inEarshot: world?.residentsInEarshot() ?? [])
         }
@@ -113,19 +118,24 @@ struct WorldView: View {
     /// What each character has said lately, and whether it's still on the
     /// job, for the narrator. Only what it said since you came: what it did
     /// while you were away, or while finishing a job it had before, is left
-    /// out of `newMessages`, and only goes to the log.
+    /// out of `newMessages`, and only goes to the log. A job it finished
+    /// while you were away is a missed call.
     private var speakers: [Narrator.Speaker] {
         server.sessions.map {
-            Narrator.Speaker(id: $0.id, name: $0.name, messages: $0.newMessages, isWorking: $0.isOnTheJob)
+            Narrator.Speaker(
+                id: $0.id, name: $0.name, messages: $0.newMessages, isWorking: $0.isOnTheJob,
+                finishedWhileAway: $0.finishedWhileAway
+            )
         }
     }
 
     /// Keeps an ear on who is close enough to hear, as you and the
     /// characters walk about, so a character you walk away from stops
     /// talking, and calls you with the rest once its job is done. Its calls
-    /// go in the log too.
+    /// go in the log too, and which replies you have heard is kept between
+    /// launches, for missed calls.
     private func keepEarshot() async {
-        let narrator = Narrator(engine: voices, log: server.log)
+        let narrator = Narrator(engine: voices, log: server.log, heardStore: UserDefaultsHeardRepliesStore())
         self.narrator = narrator
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))

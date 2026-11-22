@@ -261,6 +261,115 @@ final class NarratorTests: XCTestCase {
         XCTAssertEqual(narrator.calls.first?.lines, ["Roses.", "Tulips."])
     }
 
+    // MARK: Missed calls
+
+    func testAJobFinishedWhileYouWereAwayIsAMissedCallThatDoesntRing() async {
+        let notebook = Notebook()
+        let log = EventLog(seenStore: InMemoryLogSeenStore())
+        let narrator = Narrator(engine: notebook, log: log)
+        let away = [agent("1", "Planted the roses."), agent("2", "**Done**.")]
+        let gardener = Narrator.Speaker(id: "gardener", name: "Gardener", messages: [], finishedWhileAway: away)
+        narrator.listen(to: [gardener], inEarshot: ["gardener"])
+        narrator.listen(to: [gardener], inEarshot: ["gardener"]) // one call, not one each time
+
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["gardener"])
+        XCTAssertEqual(narrator.calls.first?.isMissed, true)
+        XCTAssertEqual(narrator.calls.first?.lines, ["Planted the roses.", "Done."])
+        XCTAssertEqual(narrator.missedCalls.map(\.speakerID), ["gardener"])
+        XCTAssertTrue(narrator.incomingCalls.isEmpty)
+        XCTAssertTrue(narrator.hasMissedCall("gardener"))
+        XCTAssertFalse(narrator.isCalling("gardener")) // it doesn't ring
+        await Task.yield()
+        XCTAssertTrue(notebook.said.isEmpty)
+
+        XCTAssertEqual(log.entries.map(\.kind), [.missedCall])
+        XCTAssertEqual(log.entries.first?.text, "Missed call: Planted the roses. Done.")
+        XCTAssertEqual(log.entries.first?.isWhileAway, true)
+    }
+
+    func testOneMissedCallForEachCharacterThatFinished() {
+        let narrator = Narrator(engine: Notebook())
+        let builder = Narrator.Speaker(id: "builder", messages: [], finishedWhileAway: [agent("b1", "Bricks."), agent("b2", "Mortar.")])
+        let gardener = Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: [agent("g1", "Roses.")])
+        let idle = Narrator.Speaker(id: "engineer", messages: [])
+        let allCode = Narrator.Speaker(id: "team-lead", messages: [], finishedWhileAway: [agent("t1", "```\nls\n```")])
+        narrator.listen(to: [builder, gardener, idle, allCode], inEarshot: [])
+        XCTAssertEqual(narrator.missedCalls.map(\.speakerID), ["builder", "gardener"])
+    }
+
+    func testCallingBackSaysWhatItHadToSay() async {
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook)
+        let builder = Narrator.Speaker(id: "builder", messages: [])
+        let gardener = Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: [agent("1", "Roses."), agent("2", "Tulips.")])
+        narrator.listen(to: [builder, gardener], inEarshot: [])
+
+        narrator.take(callFrom: "gardener")
+        XCTAssertTrue(narrator.calls.isEmpty)
+        await wait(for: "the first line") { notebook.isSaying }
+        notebook.finishLine()
+        await wait(for: "the second line") { notebook.said.count == 2 && notebook.isSaying }
+        notebook.finishLine()
+        await wait(for: "quiet") { narrator.speaking == nil }
+        XCTAssertEqual(notebook.said.map(\.text), ["Roses.", "Tulips."])
+        XCTAssertEqual(notebook.said.map(\.voice), [1, 1])
+
+        // Heard once is enough.
+        narrator.listen(to: [builder, gardener], inEarshot: [])
+        XCTAssertTrue(narrator.calls.isEmpty)
+    }
+
+    func testOpeningTheConversationClearsTheMissedCallForGood() {
+        let store = InMemoryHeardRepliesStore()
+        let narrator = Narrator(engine: Notebook(), heardStore: store)
+        let gardener = Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: [agent("1", "Roses.")])
+        narrator.listen(to: [gardener], inEarshot: [])
+        narrator.clearMissedCall(from: "gardener")
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+        narrator.listen(to: [gardener], inEarshot: [])
+        XCTAssertTrue(narrator.calls.isEmpty)
+
+        // Nor on the next launch.
+        let nextLaunch = Narrator(engine: Notebook(), heardStore: store)
+        nextLaunch.listen(to: [gardener], inEarshot: [])
+        XCTAssertTrue(nextLaunch.calls.isEmpty)
+    }
+
+    func testClearingAMissedCallLeavesOneRinging() {
+        let narrator = Narrator(engine: Notebook())
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [agent("1", "Roses.")])], inEarshot: [])
+        narrator.clearMissedCall(from: "gardener")
+        XCTAssertTrue(narrator.isCalling("gardener"))
+        XCTAssertEqual(narrator.incomingCalls.map(\.speakerID), ["gardener"])
+    }
+
+    func testAJobYouHeardOutIsntAMissedCallNextTime() async {
+        let store = InMemoryHeardRepliesStore()
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook, heardStore: store)
+        let done = agent("1", "Roses.")
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [done])], inEarshot: ["gardener"])
+        await wait(for: "the line") { notebook.isSaying }
+        notebook.finishLine()
+
+        let nextLaunch = Narrator(engine: Notebook(), heardStore: store)
+        nextLaunch.listen(to: [Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: [done])], inEarshot: [])
+        XCTAssertTrue(nextLaunch.calls.isEmpty)
+    }
+
+    func testACallLeftRingingIsAMissedCallNextTime() {
+        let store = InMemoryHeardRepliesStore()
+        let narrator = Narrator(engine: Notebook(), heardStore: store)
+        let done = agent("1", "Roses.")
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: [done])], inEarshot: [])
+        XCTAssertTrue(narrator.isCalling("gardener")) // and the app closes
+
+        let nextLaunch = Narrator(engine: Notebook(), heardStore: store)
+        nextLaunch.listen(to: [Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: [done])], inEarshot: [])
+        XCTAssertTrue(nextLaunch.hasMissedCall("gardener"))
+    }
+
     // MARK: How it sounds
 
     func testMarkdownIsReadAsProse() {

@@ -100,7 +100,8 @@ final class World {
         /// Its shirt's colour as `#RRGGBB`, if the server gives it one.
         let color: String?
         /// Working, waiting for you in the middle of its work, or with
-        /// something still to tell you: a call, or lines yet to be said.
+        /// something still to tell you: a call, missed or ringing, or lines
+        /// yet to be said.
         let isAtWork: Bool
         /// A tool call is waiting for your yes or no.
         let isWaitingForYou: Bool
