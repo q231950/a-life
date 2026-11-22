@@ -23,6 +23,9 @@ public final class AgentSession {
     /// Whether the character is working.
     public var status: RunStatus { state.status }
     public var stopReason: StopReason? { state.stopReason }
+    /// When the character carries on by itself, if it stopped on the 5-hour
+    /// usage limit and is waiting for it to reset.
+    public var resumesAt: Date? { state.stopReason == .usageLimit ? state.resumesAt : nil }
     /// What the character is doing right now, such as the name of a tool.
     public var activity: String? { state.activity }
     /// What was said, by you and the character.
@@ -175,16 +178,21 @@ public final class AgentSession {
             switch message.kind {
             case .agent: entry = (.reply, message.text)
             case .error: entry = (.error, message.text)
+            case .user where message.speaker == Message.aLife: entry = (.continued, "Told to carry on: \(message.text)")
             case .user: entry = nil
             }
         case .subagentStarted(let subagent) where state.subagents.count > before.subagents.count:
             entry = (.helperSent, "Sent a helper off: \(subagent.task)")
         case .subagentFinished(let subagentID):
             entry = before.subagents.first { $0.id == subagentID }.map { (.helperBack, "A helper reported back: \($0.task)") }
-        case .statusChanged(let status, let stopReason) where status != before.status || stopReason != before.stopReason:
+        case .statusChanged(let status, let stopReason, let resumesAt)
+            where status != before.status || stopReason != before.stopReason || resumesAt != before.resumesAt:
             switch (status, stopReason) {
             case (.idle, .endTurn): entry = (.jobDone, "Finished the job")
             case (.idle, .interrupted): entry = (.stopped, "Was stopped")
+            case (.idle, .usageLimit):
+                let back = resumesAt.map { " Back at \($0.formatted(date: .omitted, time: .shortened))." } ?? ""
+                entry = (.usageLimit, "Hit the 5-hour usage limit.\(back)")
             default: entry = nil
             }
         case .approvalRequested(let approval) where !before.autoApprove && state.approvals.count > before.approvals.count:

@@ -33,6 +33,15 @@ enum JSONValue: Sendable, Equatable {
         return array
     }
 
+    /// The value as a number, whether it was written as a whole number or not.
+    var number: Double? {
+        switch self {
+        case .int(let int): return Double(int)
+        case .double(let double): return double
+        default: return nil
+        }
+    }
+
     /// The value as one line of JSON.
     func encoded() throws -> Data {
         let encoder = JSONEncoder()

@@ -26,11 +26,29 @@ import Vapor
 /// remembers what was said. Starting over stops
 /// it; the next message starts a fresh session. If the CLI stops on its own,
 /// the next message resumes the same session.
+///
+/// A turn that ends on Claude's 5-hour usage limit isn't the end of the
+/// job: the character waits for the limit to reset, and a minute after it
+/// tells itself "please continue", as a*life, in the same session. Telling
+/// it anything yourself, stopping it or starting it over calls that off.
+/// Who is waiting is kept in `PendingContinues`, so it outlasts a restart.
+/// The weekly limits are only reported.
 actor ClaudeCharacter: SessionBackend {
+    /// What a*life says to a character once the usage limit has reset.
+    static let pleaseContinue = "please continue"
+    /// How long after the limit resets the character carries on, to be sure
+    /// it has.
+    static let afterReset: TimeInterval = 60
+    /// How soon after the server starts a character carries on whose limit
+    /// reset while the server wasn't running.
+    static let afterStart: TimeInterval = 10
+
     private let character: Character
     private let hub: SessionHub
     private let claudeCode: any ClaudeCodeLauncher
     private let logger: Logger
+    private let continues: PendingContinues
+    private let clock: any WakeClock
 
     /// The CLI playing the character in this conversation, once started.
     private var connection: (any ClaudeCodeConnection)?
@@ -52,6 +70,15 @@ actor ClaudeCharacter: SessionBackend {
     /// What the character last said in this turn, so the turn's result isn't
     /// repeated.
     private var lastReply: String?
+    /// What Claude Code last said about the usage limits.
+    private var rateLimit: UsageLimit.Info?
+    /// Whether this turn ran into a usage limit, and what Claude Code said
+    /// about it, held back until the turn ends in case the character waits
+    /// it out rather than having it shown as an error.
+    private var hitLimit = false
+    private var limitNotice: String?
+    /// Waits for the usage limit to reset, then carries on.
+    private var waitingForLimit: Task<Void, Never>?
 
     private struct HelperOut {
         /// The kind of subagent, such as `construction-worker`.
@@ -62,11 +89,20 @@ actor ClaudeCharacter: SessionBackend {
         var inBackground = false
     }
 
-    init(_ character: Character, hub: SessionHub, claudeCode: any ClaudeCodeLauncher, logger: Logger) {
+    init(
+        _ character: Character,
+        hub: SessionHub,
+        claudeCode: any ClaudeCodeLauncher,
+        logger: Logger,
+        continues: PendingContinues = PendingContinues(file: nil),
+        clock: any WakeClock = SystemWakeClock()
+    ) {
         self.character = character
         self.hub = hub
         self.claudeCode = claudeCode
         self.logger = logger
+        self.continues = continues
+        self.clock = clock
     }
 
     /// The CLI's arguments, apart from the model, which the launcher adds.
@@ -95,10 +131,16 @@ actor ClaudeCharacter: SessionBackend {
         guard approvals.isEmpty else {
             throw Abort(.conflict, reason: "\(character.name) is waiting for an answer to its request")
         }
+        await stopWaitingForLimit() // you've said what to do next
+        try await say(text, as: "You")
+    }
+
+    /// Tells the character `text`, as `speaker`, starting its CLI if needed.
+    private func say(_ text: String, as speaker: String) async throws {
         let connection = try startIfNeeded()
         let startsTurn = !turnActive
         turnActive = true
-        await hub.emit(.message(Message(kind: .user, speaker: "You", text: text)))
+        await hub.emit(.message(Message(kind: .user, speaker: speaker, text: text)))
         if startsTurn {
             await hub.emit(.statusChanged(.running, stopReason: nil))
         }
@@ -117,6 +159,10 @@ actor ClaudeCharacter: SessionBackend {
     }
 
     func interrupt() async {
+        if await stopWaitingForLimit(), !(turnActive || !approvals.isEmpty || !helpers.isEmpty) {
+            await hub.emit(.statusChanged(.idle, stopReason: .interrupted))
+            return
+        }
         guard let connection, turnActive || !approvals.isEmpty || !helpers.isEmpty else { return }
         if turnActive { swallowNextResult = true }
         turnActive = false
@@ -153,20 +199,85 @@ actor ClaudeCharacter: SessionBackend {
     }
 
     func reset() async {
+        await stopWaitingForLimit()
         connection?.close()
         connection = nil
         claudeSessionID = nil
         turnActive = false
         swallowNextResult = false
         lastReply = nil
+        rateLimit = nil
+        hitLimit = false
+        limitNotice = nil
         activity = nil
         await callEveryoneBack()
         await hub.startConversation()
     }
 
     func shutdown() async {
+        // What it waits for stays in `continues`, for the next start.
+        waitingForLimit?.cancel()
+        waitingForLimit = nil
         connection?.close()
         connection = nil
+    }
+
+    // MARK: The usage limit
+
+    /// Waits for the limit `waiting` ran into before the server restarted,
+    /// and carries on in its Claude Code session after it resets: straight
+    /// after starting if it has reset already.
+    func carryOn(after waiting: PendingContinues.Entry) async {
+        claudeSessionID = waiting.claudeSessionID
+        let soonest = clock.now().addingTimeInterval(Self.afterStart)
+        let resumesAt = max(waiting.resetsAt.addingTimeInterval(Self.afterReset), soonest)
+        await wait(until: resumesAt, for: waiting)
+        logger.notice("\(character.name) is still waiting for the usage limit to reset, and carries on at \(resumesAt)")
+        await hub.emit(.statusChanged(.idle, stopReason: .usageLimit, resumesAt: resumesAt))
+    }
+
+    /// Remembers that the character waits for the limit to reset, and
+    /// carries on at `resumesAt`.
+    private func wait(until resumesAt: Date, for waiting: PendingContinues.Entry) async {
+        waitingForLimit?.cancel()
+        await continues.set(waiting)
+        let clock = self.clock
+        waitingForLimit = Task { [weak self] in
+            do {
+                try await clock.sleep(until: resumesAt)
+            } catch {
+                return // called off
+            }
+            await self?.continueAfterLimit()
+        }
+    }
+
+    /// Calls off carrying on after the limit. Returns whether it was waiting.
+    @discardableResult
+    private func stopWaitingForLimit() async -> Bool {
+        guard let waitingForLimit else { return false }
+        waitingForLimit.cancel()
+        self.waitingForLimit = nil
+        await continues.remove(character.id)
+        logger.info("\(character.name) no longer waits for the usage limit")
+        return true
+    }
+
+    /// The limit has reset: tells the character to carry on.
+    private func continueAfterLimit() async {
+        guard waitingForLimit != nil, !Task.isCancelled else { return }
+        waitingForLimit = nil
+        await continues.remove(character.id)
+        guard approvals.isEmpty else { return }
+        logger.notice("The usage limit has reset, so \(character.name) carries on")
+        do {
+            try await say(Self.pleaseContinue, as: Message.aLife)
+        } catch {
+            let reason = (error as? AbortError)?.reason ?? "\(error)"
+            await hub.emit(.message(Message(kind: .error, speaker: character.name, text: "Couldn't carry on after the usage limit: \(reason)")))
+            turnActive = false
+            await hub.emit(.statusChanged(.idle, stopReason: .endTurn))
+        }
     }
 
     // MARK: The CLI
@@ -199,6 +310,8 @@ actor ClaudeCharacter: SessionBackend {
             logger.info("\(character.name) is Claude Code session \(sessionID)")
         }
         switch message["type"]?.string {
+        case "rate_limit_event":
+            if let info = UsageLimit.Info(message["rate_limit_info"]) { rateLimit = info }
         case "assistant": await handleAssistant(message)
         case "user": await handleToolResults(message)
         case "system": await handleSystem(message)
@@ -224,6 +337,12 @@ actor ClaudeCharacter: SessionBackend {
                 let text = (block["text"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { continue }
                 lastReply = text
+                if let error = message["error"], UsageLimit.isLimit(error: error.string, text: text) {
+                    // Shown when the turn ends, unless it is waited out.
+                    hitLimit = true
+                    limitNotice = text
+                    continue
+                }
                 let kind: Message.Kind = message["error"] == nil ? .agent : .error
                 await hub.emit(.message(Message(kind: kind, speaker: character.name, text: text)))
             case "tool_use":
@@ -312,25 +431,47 @@ actor ClaudeCharacter: SessionBackend {
         await setActivity(nil)
         let reply = lastReply
         lastReply = nil
+        var hitLimit = self.hitLimit
+        let limitNotice = self.limitNotice
+        self.hitLimit = false
+        self.limitNotice = nil
         if swallowNextResult {
             swallowNextResult = false
             return
         }
 
         let result = (message["result"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if message["is_error"]?.bool == true {
-            let errors = message["errors"]?.array?.compactMap(\.string).joined(separator: " ") ?? ""
-            let text = [result, errors].first { !$0.isEmpty }
-                ?? "Claude Code stopped (\(message["subtype"]?.string ?? "error"))."
-            if text != reply {
-                await hub.emit(.message(Message(kind: .error, speaker: character.name, text: text)))
+        let isError = message["is_error"]?.bool == true
+        if isError, UsageLimit.isLimit(error: nil, text: result) || rateLimit?.status == "rejected" {
+            hitLimit = true
+        }
+        // The 5-hour limit is waited out; any other is an error, as ever.
+        var resumesAt: Date?
+        if hitLimit, approvals.isEmpty, let claudeSessionID,
+           let resetsAt = UsageLimit.fiveHourReset(info: rateLimit, text: limitNotice ?? result, now: clock.now())
+        {
+            let at = resetsAt.addingTimeInterval(Self.afterReset)
+            await wait(until: at, for: PendingContinues.Entry(character: character.id, claudeSessionID: claudeSessionID, resetsAt: resetsAt))
+            logger.notice("\(character.name) ran into the 5-hour usage limit, which resets at \(resetsAt), and carries on at \(at)")
+            resumesAt = at
+        } else {
+            if let limitNotice {
+                await hub.emit(.message(Message(kind: .error, speaker: character.name, text: limitNotice)))
             }
-        } else if reply == nil, !result.isEmpty {
-            await hub.emit(.message(Message(kind: .agent, speaker: character.name, text: result)))
+            if isError {
+                let errors = message["errors"]?.array?.compactMap(\.string).joined(separator: " ") ?? ""
+                let text = [result, errors].first { !$0.isEmpty }
+                    ?? "Claude Code stopped (\(message["subtype"]?.string ?? "error"))."
+                if text != reply {
+                    await hub.emit(.message(Message(kind: .error, speaker: character.name, text: text)))
+                }
+            } else if reply == nil, !result.isEmpty {
+                await hub.emit(.message(Message(kind: .agent, speaker: character.name, text: result)))
+            }
         }
         if approvals.isEmpty {
             turnActive = false
-            await hub.emit(.statusChanged(.idle, stopReason: .endTurn))
+            await hub.emit(.statusChanged(.idle, stopReason: resumesAt == nil ? .endTurn : .usageLimit, resumesAt: resumesAt))
         }
     }
 

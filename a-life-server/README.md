@@ -79,6 +79,7 @@ All optional, as environment variables:
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
+| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
 | `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id (with a clone of each repository in it, for a project of several). `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
 
 ```sh
@@ -176,7 +177,7 @@ A front end follows every session at once: it reads `GET /v1/sessions` to learn 
 | Event | Carries | Meaning |
 |---|---|---|
 | `conversation.started` | `conversation_id` | A new conversation began in the session. Drop everything known about the old one. |
-| `session.status` | `status`, `stop_reason` | The character is `running` or `idle`. When idle, `stop_reason` is `end_turn`, `requires_action` (an approval is waiting) or `interrupted`. |
+| `session.status` | `status`, `stop_reason`, `resumes_at` | The character is `running` or `idle`. When idle, `stop_reason` is `end_turn`, `requires_action` (an approval is waiting), `interrupted`, or `usage_limit`: it ran into the 5-hour usage limit and carries on by itself at `resumes_at` (seconds since 1970), which only that one has. See [The usage limit](#the-usage-limit). |
 | `session.activity` | `activity` | What the character is doing right now, such as the tool it is using. Absent when it isn't doing anything in particular. |
 | `message` | `message` | A line of the conversation: `id`, `kind` (`user`, `agent`, `error`), `speaker`, `text`. Everything the character says is one, along the way as well as at the end. |
 | `tool.used` | `tool_use` | The character used a tool, so you can follow along: `id`, `tool_name`, `input` (a few words of what it does, such as a command or a file's path). Its helpers' tools aren't sent. |
@@ -254,13 +255,33 @@ How a session maps onto the events:
 | A call to the `Agent` tool, or `Task` in older versions | `subagent.started`, until the call returns or Claude Code reports the task done: `subagent.finished` |
 | A permission request (`can_use_tool`) | `approval.requested`, and the session is idle with `requires_action` until you answer. Allowing or denying goes back to Claude Code as the answer, and is `approval.resolved` with `allowed` or `denied`; with auto approve on, Claude Code is told yes at once and it is `auto_approved`, without waiting; one Claude Code no longer needs is `withdrawn`. |
 | The end of a turn (`result`) | `session.status` idle with `end_turn`. If it ended in an error, such as not being logged in, the error is a `message` of kind `error`. |
+| The 5-hour usage limit (a `rate_limit_event` that is `rejected`, then the error `rate_limit`) | `session.status` idle with `usage_limit` and `resumes_at`, and later a `message` from `a*life`, "please continue". See [The usage limit](#the-usage-limit). |
 
 - **Talking to a character** while it works is fine: Claude Code takes what you say up at its next step. While it waits for an approval, messages to it are refused with `409` until the approval is answered.
 - **Interrupting** stops the character's turn, withdraws a pending approval and calls its helpers back. The others carry on.
 - **Starting over** stops the character's Claude Code session; the next thing you say starts a new one. What was built stays on the lot.
 - **If Claude Code stops by itself**, the error is shown in the conversation and the next thing you say resumes the same session (`--resume`).
 - Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
-- Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the directory the character works in (the lot, or the Engineer's a\*life checkout) picks the conversation up in a terminal. The server itself keeps nothing: after a restart, every character starts a new session.
+- Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the directory the character works in (the lot, or the Engineer's a\*life checkout) picks the conversation up in a terminal. The server itself keeps no conversations: after a restart, every character starts a new session, unless it was waiting for the usage limit.
+
+### The usage limit
+
+When a character's turn ends on Claude's 5-hour usage limit, it doesn't give up: it waits for the limit to reset, and a minute after, the server says "please continue" into the same Claude Code session, on the CLI if it is still running, or resuming it with `--resume` if it has exited. Meanwhile the session is idle with `usage_limit`, and `resumes_at` says when it carries on; the app shows "Back at 15:01". What Claude Code said about the limit isn't shown as an error. "please continue" is a `message` of kind `user` from `a*life`, so you can tell it from what you said. If the character runs into the limit again, it waits again.
+
+- **Telling it anything yourself**, stopping it or starting it over calls the wait off.
+- **Only the 5-hour limit** is waited out: Claude Code's `rate_limit_event` with `rateLimitType` `five_hour`, or a limit of no known type that resets within five hours. The weekly limits, and spend limits and the like, are shown as an error, as before.
+- **How it tells.** Claude Code 2.1 writes a `rate_limit_event` whenever what it knows about the limits changes, with `rate_limit_info`: its `status` (`allowed`, `allowed_warning` or `rejected`), `resetsAt` in seconds since 1970 and `rateLimitType`. The turn then fails with an assistant message whose `error` is `rate_limit`, saying something like "You've hit your session limit · resets 3pm (Europe/Berlin)", and an error `result`. Without the event, the server reads when it resets from that line, or from the older "Claude AI usage limit reached|<seconds since 1970>".
+- **Across a restart.** Who is waiting is kept in `continues.json` in `ALIFE_STATE_DIR` (`~/a-life-state`): for each character, its id, its Claude Code session and when the limit resets, in seconds since 1970. The server reads it when it starts and waits again, or carries on ten seconds after starting if the limit has reset meanwhile. An entry goes once the character has been told to carry on, or the wait is called off, and the file goes once nobody is waiting:
+
+```json
+[
+  {
+    "character" : "builder",
+    "claude_session_id" : "1f0c2b6e-…",
+    "resets_at" : 1763820000
+  }
+]
+```
 
 ### The Engineer and the a\*life checkout
 
@@ -478,7 +499,9 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many animals fit in a bed, and writes `lot.md`, with the animals the app draws. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
-| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects. |
+| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects, and waits out the 5-hour usage limit before it carries on. |
+| `UsageLimit.swift` | Reads what Claude Code says about its usage limits, tells the 5-hour limit from the weekly ones and when it resets, and `WakeClock`, the clock a character waits on. |
+| `PendingContinues.swift` | The characters waiting for the usage limit to reset, kept in `continues.json` so they outlast a restart. |
 | `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, with the agents file and the server's command in its environment, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in. |
@@ -492,7 +515,7 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Conservationist's foals, bears, polar bears, birds, unicorns, pegasuses and dinosaurs and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the keeper being told where the house is, the keeper being told about every animal the app draws, and a front end seeing a restaurant and an oak appear.
 

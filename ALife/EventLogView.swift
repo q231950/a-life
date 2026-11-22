@@ -158,6 +158,8 @@ extension EventLog.Entry.Kind {
         case .helperBack: return "arrow.down.left.circle.fill"
         case .jobDone: return "checkmark.circle.fill"
         case .stopped: return "stop.circle.fill"
+        case .usageLimit: return "hourglass"
+        case .continued: return "arrow.clockwise.circle.fill"
         case .waitingForYou: return "exclamationmark.circle.fill"
         case .call: return "phone.fill"
         case .missedCall: return "phone.arrow.down.left.fill"

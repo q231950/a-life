@@ -7,7 +7,10 @@ public enum SessionEvent: Equatable, Sendable {
     /// A new conversation began in the session. Everything known about the
     /// previous one is void.
     case conversationStarted(conversationID: String)
-    case statusChanged(RunStatus, stopReason: StopReason?)
+    /// Whether the character is working, and why it last stopped.
+    /// `resumesAt` is when a character that stopped on the usage limit
+    /// carries on by itself; `nil` otherwise.
+    case statusChanged(RunStatus, stopReason: StopReason?, resumesAt: Date? = nil)
     /// What the character is doing changed, such as the tool it is using.
     /// `nil` when it isn't doing anything in particular.
     case activityChanged(String?)
@@ -57,6 +60,7 @@ extension SessionEvent: Codable {
         case approvalID = "approval_id"
         case subagentID = "subagent_id"
         case autoApprove = "auto_approve"
+        case resumesAt = "resumes_at"
     }
 
     public init(from decoder: Decoder) throws {
@@ -68,7 +72,9 @@ extension SessionEvent: Codable {
         case "session.status":
             self = .statusChanged(
                 try container.decode(RunStatus.self, forKey: .status),
-                stopReason: try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
+                stopReason: try container.decodeIfPresent(StopReason.self, forKey: .stopReason),
+                // In seconds since 1970, whatever the decoder's own date strategy.
+                resumesAt: try container.decodeIfPresent(Double.self, forKey: .resumesAt).map(Date.init(timeIntervalSince1970:))
             )
         case "session.activity":
             self = .activityChanged(try container.decodeIfPresent(String.self, forKey: .activity))
@@ -100,9 +106,10 @@ extension SessionEvent: Codable {
         switch self {
         case .conversationStarted(let conversationID):
             try container.encode(conversationID, forKey: .conversationID)
-        case .statusChanged(let status, let stopReason):
+        case .statusChanged(let status, let stopReason, let resumesAt):
             try container.encode(status, forKey: .status)
             try container.encodeIfPresent(stopReason, forKey: .stopReason)
+            try container.encodeIfPresent(resumesAt?.timeIntervalSince1970, forKey: .resumesAt)
         case .activityChanged(let activity):
             try container.encodeIfPresent(activity, forKey: .activity)
         case .message(let message):
@@ -181,6 +188,9 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     public var conversationID: String?
     public var status: RunStatus = .unknown
     public var stopReason: StopReason?
+    /// When a character that stopped on the usage limit carries on by
+    /// itself, a minute or so after the limit resets. `nil` otherwise.
+    public var resumesAt: Date?
     /// What the character is doing right now, such as the name of a tool.
     public var activity: String?
     /// What was said in the conversation, by you and the character.
@@ -215,9 +225,10 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
             self = SessionState(id: id, name: name, color: color)
             self.conversationID = conversationID
             status = .idle
-        case .statusChanged(let status, let stopReason):
+        case .statusChanged(let status, let stopReason, let resumesAt):
             self.status = status
             self.stopReason = stopReason
+            self.resumesAt = resumesAt
         case .activityChanged(let activity):
             self.activity = activity
         case .message(let message):
@@ -273,6 +284,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         case autoApprove = "auto_approve"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
+        case resumesAt = "resumes_at"
         case lastSeq = "last_seq"
     }
 
@@ -285,6 +297,7 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
         status = try container.decode(RunStatus.self, forKey: .status)
         stopReason = try container.decodeIfPresent(StopReason.self, forKey: .stopReason)
+        resumesAt = try container.decodeIfPresent(Double.self, forKey: .resumesAt).map(Date.init(timeIntervalSince1970:))
         activity = try container.decodeIfPresent(String.self, forKey: .activity)
         messages = try container.decode([Message].self, forKey: .messages)
         approvals = try container.decode([Approval].self, forKey: .approvals)
@@ -307,6 +320,25 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         // Nor from before there was auto approve.
         autoApprove = try container.decodeIfPresent(Bool.self, forKey: .autoApprove) ?? false
         lastSeq = try container.decode(Int.self, forKey: .lastSeq)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(color, forKey: .color)
+        try container.encodeIfPresent(conversationID, forKey: .conversationID)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(stopReason, forKey: .stopReason)
+        // In seconds since 1970, as events say when they happened.
+        try container.encodeIfPresent(resumesAt?.timeIntervalSince1970, forKey: .resumesAt)
+        try container.encodeIfPresent(activity, forKey: .activity)
+        try container.encode(messages, forKey: .messages)
+        try container.encode(approvals, forKey: .approvals)
+        try container.encode(conversation, forKey: .conversation)
+        try container.encode(subagents, forKey: .subagents)
+        try container.encode(autoApprove, forKey: .autoApprove)
+        try container.encode(lastSeq, forKey: .lastSeq)
     }
 }
 

@@ -19,6 +19,9 @@ public enum StopReason: String, Codable, Sendable {
     case requiresAction = "requires_action"
     /// Someone stopped the character.
     case interrupted
+    /// The character ran into Claude's 5-hour usage limit, and carries on by
+    /// itself once it resets, at the status's `resumesAt`.
+    case usageLimit = "usage_limit"
     case unknown
 
     public init(from decoder: Decoder) throws {
@@ -35,6 +38,11 @@ public struct Message: Codable, Identifiable, Equatable, Sendable {
         case agent
         case error
     }
+
+    /// The speaker of what a*life says to a character on your behalf, such
+    /// as "please continue" once a usage limit has reset. It is a `.user`
+    /// message, from a*life rather than from you.
+    public static let aLife = "a*life"
 
     public let id: String
     public let kind: Kind
