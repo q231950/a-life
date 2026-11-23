@@ -464,6 +464,11 @@ private struct ConversationView: View {
                 CharacterStatus(session: session)
                 Spacer()
                 Menu {
+                    // Works while it waits for you, or for the usage limit, too.
+                    if !server.models.isEmpty {
+                        ModelMenu(session: session, options: server.models)
+                        Divider()
+                    }
                     Button("Start over", systemImage: "arrow.counterclockwise", role: .destructive) {
                         Task { await session.startOver() }
                     }
@@ -493,10 +498,6 @@ private struct ConversationView: View {
             }
 
             HStack {
-                // Works while it waits for you, or for the usage limit, too.
-                if !server.models.isEmpty {
-                    ModelPicker(session: session, options: server.models)
-                }
                 // Works while the character is busy, too: it answers at its
                 // next step. Not while it waits for an answer, though.
                 Group {
@@ -530,15 +531,12 @@ private struct ConversationView: View {
     }
 }
 
-/// The model the character runs on, to change it, by the text field you
-/// talk to it in: Claude Code's simple names, strongest first, each with the
-/// version it stands for and what it's good for, and the agents file's to
-/// go back to. A change applies at once if the character is working, or
-/// else when it next starts, and every front end sees it.
-private struct ModelPicker: View {
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #endif
+/// The model the character runs on, to change it, as a submenu of the more
+/// menu: Claude Code's simple names, strongest first, each with the version
+/// it stands for and what it's good for, and the agents file's to go back
+/// to. A change applies at once if the character is working, or else when it
+/// next starts, and every front end sees it.
+private struct ModelMenu: View {
     let session: AgentSession
     let options: [ModelOption]
 
@@ -565,34 +563,13 @@ private struct ModelPicker: View {
                 }
             }
         } label: {
-            Label(label, systemImage: "cpu")
-                .font(.footnote)
+            Label("Model: \(session.model == nil ? "Default" : name(of: session.model))", systemImage: "cpu")
         }
-        .menuStyle(.button)
-        .buttonStyle(.borderless)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .accessibilityLabel("Model: \(name(of: session.model))")
-    }
-
-    /// The model's name and version, or just its family on a narrow screen.
-    private var label: String {
-        guard let model = session.model else { return "Default" }
-        return isNarrow ? model.name : name(of: model)
     }
 
     private func name(of model: ClaudeModel?) -> String {
         guard let model else { return "Claude Code's default" }
         return options.first { $0.model == model }?.displayName ?? model.name
-    }
-
-    /// Whether there is little room across, as on an iPhone held upright.
-    private var isNarrow: Bool {
-        #if os(iOS)
-        sizeClass == .compact
-        #else
-        false
-        #endif
     }
 }
 
