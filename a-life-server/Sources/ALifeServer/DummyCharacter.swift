@@ -25,6 +25,10 @@ import Vapor
 /// front ends' gauge and the lot's day can be tried without a model, and
 /// fills a made-up context, which "compacts" once it reaches the point
 /// where Claude Code would, so the context ring can be tried too.
+///
+/// It takes a model from the model picker as a Claude Code session would,
+/// so the picker can be tried, but runs on none, and its choice isn't kept
+/// across a restart of the server.
 actor DummyCharacter: SessionBackend {
     /// The made-up context's window, where it compacts, what it holds when
     /// it starts and after it compacts, and what a step and a reply add.
@@ -95,6 +99,10 @@ actor DummyCharacter: SessionBackend {
         if enabled, let pending = pendingApproval {
             _ = await answer(pending.id, allow: true, as: .autoApproved)
         }
+    }
+
+    func setModel(_ model: ClaudeModel?) async {
+        await hub.setModel(model ?? profile.model)
     }
 
     func reset() async {

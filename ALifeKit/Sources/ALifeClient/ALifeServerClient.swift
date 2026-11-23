@@ -58,6 +58,20 @@ public struct ALifeServerClient: Sendable {
         try await send("PUT", path(sessionID, "auto-approve"), body: AutoApproveRequest(enabled: enabled))
     }
 
+    /// Changes the model a session's character runs on, for every front
+    /// end: `nil` goes back to the one the agents file gives it.
+    public func setModel(_ model: ClaudeModel?, in sessionID: String) async throws {
+        try await send("PUT", path(sessionID, "model"), body: ModelChoiceRequest(model: model))
+    }
+
+    /// The models a character can be switched to, strongest first, with
+    /// the versions they stand for if the server knows them. Ones this
+    /// version doesn't know are left out.
+    public func models() async throws -> [ModelOption] {
+        let data = try await send("GET", "/v1/models")
+        return try JSONDecoder().decode([Lossy<ModelOption>].self, from: data).compactMap(\.value)
+    }
+
     /// Ends a session's conversation and starts an empty one.
     public func startOver(_ sessionID: String) async throws {
         try await send("POST", path(sessionID, "reset"))
@@ -156,6 +170,15 @@ public struct ALifeServerClient: Sendable {
         let reason = (try? JSONDecoder().decode(Failure.self, from: body))?.reason
             ?? String(decoding: body.prefix(300), as: UTF8.self)
         return .server(status: status, reason: reason)
+    }
+}
+
+/// One of a list, or `nil` if this version can't read it.
+private struct Lossy<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
     }
 }
 

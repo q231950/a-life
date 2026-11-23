@@ -246,6 +246,51 @@ public struct SessionContext: Codable, Equatable, Sendable {
     }
 }
 
+/// The models a character can run on, by the simple names Claude Code
+/// gives them, each the latest of its family: `opus` is whatever Opus is
+/// newest. The agents file and the model picker take only these. Listed
+/// strongest first.
+public enum ClaudeModel: String, Codable, CaseIterable, Sendable {
+    case fable, opus, sonnet, haiku
+
+    /// The name to show while the version isn't known, such as "Opus".
+    public var name: String {
+        rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+    }
+
+    /// The names, to say which there are: "fable, opus, sonnet or haiku".
+    public static var names: String {
+        let names = allCases.map(\.rawValue)
+        return names.dropLast().joined(separator: ", ") + " or " + (names.last ?? "")
+    }
+}
+
+/// One of the models a character can be switched to, as the server's
+/// Claude Code describes it: `GET /v1/models`.
+public struct ModelOption: Codable, Equatable, Identifiable, Sendable {
+    public let model: ClaudeModel
+    /// Its name with the version it stands for right now, such as "Opus
+    /// 5.5". `nil` if Claude Code hasn't said.
+    public let name: String?
+    /// What it is good for, in Claude Code's words, such as "For complex
+    /// work and everyday tasks".
+    public let description: String?
+    /// The model it stands for right now, such as `claude-opus-5-5`.
+    public let resolved: String?
+
+    public var id: String { model.rawValue }
+
+    /// Its name with its version if known, or else its plain name.
+    public var displayName: String { name ?? model.name }
+
+    public init(model: ClaudeModel, name: String? = nil, description: String? = nil, resolved: String? = nil) {
+        self.model = model
+        self.name = name
+        self.description = description
+        self.resolved = resolved
+    }
+}
+
 // MARK: Request bodies
 
 /// `POST /v1/sessions/{id}/messages`
@@ -267,4 +312,38 @@ public struct AutoApproveRequest: Codable, Equatable, Sendable {
     public var enabled: Bool
 
     public init(enabled: Bool) { self.enabled = enabled }
+}
+
+/// `PUT /v1/sessions/{id}/model`: the model the character runs on from now
+/// on, or `nil` for the one the agents file gives it.
+public struct ModelChoiceRequest: Codable, Equatable, Sendable {
+    public var model: ClaudeModel?
+
+    public init(model: ClaudeModel?) { self.model = model }
+
+    enum CodingKeys: String, CodingKey {
+        case model
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard let name = try container.decodeIfPresent(String.self, forKey: .model) else {
+            model = nil
+            return
+        }
+        guard let model = ClaudeModel(rawValue: name) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .model,
+                in: container,
+                debugDescription: "\"\(name)\" isn't one of the models a character can run on: \(ClaudeModel.names)."
+            )
+        }
+        self.model = model
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        // Said even when it's nil, which means the agents file's.
+        try container.encode(model, forKey: .model)
+    }
 }

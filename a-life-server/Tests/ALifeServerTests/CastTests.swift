@@ -16,6 +16,7 @@ final class CastTests: XCTestCase {
             name: Painter
             color: "#3366CC"
             permission_mode: acceptEdits
+            model: opus
             works_in: a-life
             changes_things: true
             role: |
@@ -25,6 +26,7 @@ final class CastTests: XCTestCase {
             helper:
               name: brush
               tools: [Read, Edit]
+              model: haiku
               description: Paints walls.
               prompt: |
                 You paint walls.
@@ -56,6 +58,18 @@ final class CastTests: XCTestCase {
         ]))
         XCTAssertEqual(founders.map(\.workspace), [.lot, .aLife, .project(flamingoChess), .lot])
         XCTAssertEqual(founders.map(\.changesThings), [true, true, true, true])
+        // Each runs on a model fit for its work, and the helpers on their
+        // character's, but for the Apple Specialist's researcher.
+        // (Agents added since may have any model, or none.)
+        let models: [String: ClaudeModel] = [
+            "builder": .haiku, "conservationist": .haiku, "team-lead": .sonnet, "engineer": .opus, "flamingo-engineer": .opus,
+            "btlb-engineer": .opus, "lo-life": .opus, "apple-specialist": .opus,
+        ]
+        for (id, model) in models {
+            let character = try XCTUnwrap(cast.first { $0.id == id }, id)
+            XCTAssertEqual(character.model, model, id)
+            XCTAssertEqual(character.helper.model, id == "apple-specialist" ? .sonnet : nil, id)
+        }
         XCTAssertEqual(founders.map(\.helper.name), ["construction-worker", "a-life-expert", "flamingo-expert", "recruiter"])
         XCTAssertEqual(founders.map(\.helper.tools), [
             ["Read", "Glob", "Grep", "Write", "Edit"],
@@ -126,6 +140,7 @@ final class CastTests: XCTestCase {
         id: plumber
         name: Plumber
         color: "#2266AA"
+        model: sonnet
         role: |
           You are the Plumber.
 
@@ -164,6 +179,7 @@ final class CastTests: XCTestCase {
               - id: plumber
                 name: Plumber
                 color: "#2266AA"
+                model: sonnet
                 role: |
                   You are the Plumber.
 
@@ -186,9 +202,10 @@ final class CastTests: XCTestCase {
             color: "#2266AA",
             changesThings: false,
             permissionMode: "default",
+            model: .sonnet,
             workspace: .lot,
             role: "You are the Plumber.\n\nYou fix the pipes.",
-            helper: Helper(name: "wrench", description: "Fixes pipes.", prompt: "You fix pipes.", tools: ["Read", "Edit"])
+            helper: Helper(name: "wrench", description: "Fixes pipes.", prompt: "You fix pipes.", tools: ["Read", "Edit"], model: nil)
         ))
 
         // Given as a list item, indented, it is the same agent.
@@ -226,7 +243,11 @@ final class CastTests: XCTestCase {
             ),
             (
                 plumber.replacingOccurrences(of: "color:", with: "colour:"),
-                "agents.yaml: agents[1].colour isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, project, changes_things, role and helper."
+                "agents.yaml: agents[1].colour isn't a field of an agent. The fields are id, name, color, permission_mode, model, works_in, project, changes_things, role and helper."
+            ),
+            (
+                plumber.replacingOccurrences(of: "model: sonnet", with: "model: sonnet-5"),
+                "agents.yaml: agents[1].model \"sonnet-5\" isn't one of the models a character can run on: fable, opus, sonnet or haiku. Leave it out for Claude Code's own default."
             ),
             (
                 plumber.replacingOccurrences(of: "  tools: [Read, Edit]\n", with: ""),
@@ -285,15 +306,16 @@ final class CastTests: XCTestCase {
                 color: "#3366CC",
                 changesThings: true,
                 permissionMode: "acceptEdits",
+                model: .opus,
                 workspace: .aLife,
                 // Without the line break a YAML block ends with.
                 role: "You are the Painter.\n\nYou paint the house.",
-                helper: Helper(name: "brush", description: "Paints walls.", prompt: "You paint walls.", tools: ["Read", "Edit"])
+                helper: Helper(name: "brush", description: "Paints walls.", prompt: "You paint walls.", tools: ["Read", "Edit"], model: .haiku)
             ),
         ])
     }
 
-    func testAnAgentCanLeaveOutItsColourPermissionModeWorkspaceAndWhetherItChangesThings() throws {
+    func testAnAgentCanLeaveOutItsColourPermissionModeModelWorkspaceAndWhetherItChangesThings() throws {
         let yaml = """
             agents:
               - id: painter
@@ -304,8 +326,22 @@ final class CastTests: XCTestCase {
         let painter = try XCTUnwrap(Cast.decode(yaml, from: "agents.yaml").first)
         XCTAssertNil(painter.color) // the front ends choose one
         XCTAssertEqual(painter.permissionMode, "default") // asks before every change
+        XCTAssertNil(painter.model) // Claude Code's own default
+        XCTAssertNil(painter.helper.model) // its character's
+        XCTAssertEqual(painter.helper.definition["model"], "inherit")
         XCTAssertEqual(painter.workspace, .lot)
         XCTAssertFalse(painter.changesThings)
+    }
+
+    func testAModelIsOneOfClaudeCodesSimpleNames() throws {
+        for model in ClaudeModel.allCases {
+            let yaml = amended(replacing: "model: opus", with: "model: \(model.rawValue)")
+                .replacingOccurrences(of: "model: haiku", with: "model: \(model.rawValue)")
+            let painter = try XCTUnwrap(Cast.decode(yaml, from: "agents.yaml").first)
+            XCTAssertEqual(painter.model, model)
+            XCTAssertEqual(painter.helper.model, model)
+            XCTAssertEqual(painter.helper.definition["model"], .string(model.rawValue))
+        }
     }
 
     func testTheAgentsAreInTheFilesOrder() throws {
@@ -341,7 +377,23 @@ final class CastTests: XCTestCase {
             ),
             (
                 amended(replacing: "color:", with: "colour:"),
-                "agents.yaml: agents[0].colour isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, project, changes_things, role and helper."
+                "agents.yaml: agents[0].colour isn't a field of an agent. The fields are id, name, color, permission_mode, model, works_in, project, changes_things, role and helper."
+            ),
+            (
+                amended(replacing: "model: opus", with: "model: claude-opus-5-5"),
+                "agents.yaml: agents[0].model \"claude-opus-5-5\" isn't one of the models a character can run on: fable, opus, sonnet or haiku. Leave it out for Claude Code's own default."
+            ),
+            (
+                amended(replacing: "model: opus", with: "model: Opus"),
+                "agents.yaml: agents[0].model \"Opus\" isn't one of the models a character can run on: fable, opus, sonnet or haiku. Leave it out for Claude Code's own default."
+            ),
+            (
+                amended(replacing: "model: opus", with: "model:"),
+                "agents.yaml: agents[0].model is empty. Leave it out, or give it a value; one that starts with # needs quotes."
+            ),
+            (
+                amended(replacing: "model: haiku", with: "model: inherit"),
+                "agents.yaml: agents[0].helper.model \"inherit\" isn't one of the models a character can run on: fable, opus, sonnet or haiku. Leave it out to run it on its character's model."
             ),
             (
                 amended(replacing: "\"#3366CC\"", with: "purple"),
@@ -401,7 +453,7 @@ final class CastTests: XCTestCase {
             ),
             (
                 amended(replacing: "description: Paints walls.", with: "descripton: Paints walls."),
-                "agents.yaml: agents[0].helper.descripton isn't a field of a helper. The fields are name, tools, description and prompt."
+                "agents.yaml: agents[0].helper.descripton isn't a field of a helper. The fields are name, tools, model, description and prompt."
             ),
         ]
         for mistake in mistakes {

@@ -94,9 +94,10 @@ struct EqualWidthColumn: Layout {
 }
 
 /// How the panels at the top left are laid out, the usage and the context,
-/// so they are the same size whatever they say: a ring, then two lines, a
-/// headline and a detail in smaller, fainter words, in the same fonts and
-/// padding, on the same material. On a narrow screen, such as an iPhone held
+/// so they look alike whatever they say: a ring, then a headline and the
+/// detail in smaller, fainter words (a line, or two for the context panel,
+/// whose model has a line of its own), in the same fonts and padding, on
+/// the same material. On a narrow screen, such as an iPhone held
 /// upright, the lines go under the ring, and the headline can be shorter.
 ///
 /// Each draws its material across the whole width it is given, so in an

@@ -4,8 +4,16 @@ import Vapor
 extension SessionState: @retroactive Content {}
 extension Lot: @retroactive Content {}
 extension Usage: @retroactive Content {}
+extension ModelOption: @retroactive Content {}
 
-func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, usage: UsageHub = UsageHub(file: nil), voice: URL? = nil) {
+func routes(
+    _ app: Application,
+    sessions: [HostedSession],
+    lot: LotHub,
+    usage: UsageHub = UsageHub(file: nil),
+    models: ModelCatalog = ModelCatalog(),
+    voice: URL? = nil
+) {
     let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
 
     /// The session a request names in its path.
@@ -82,9 +90,24 @@ func routes(_ app: Application, sessions: [HostedSession], lot: LotHub, usage: U
         return .accepted
     }
 
+    // The model the character runs on, for every front end; null goes back
+    // to the agents file's.
+    one.put("model") { request -> HTTPStatus in
+        let backend = try session(request).backend
+        let choice = try request.content.decode(ModelChoiceRequest.self)
+        try await backend.setModel(choice.model)
+        return .accepted
+    }
+
     one.post("reset") { request -> HTTPStatus in
         try await session(request).backend.reset()
         return .accepted
+    }
+
+    // The models a character can be switched to, strongest first, with the
+    // versions they stand for once Claude Code has said.
+    app.get("v1", "models") { _ -> [ModelOption] in
+        await models.optionsWhenKnown()
     }
 
     // Everything the characters have built and planted on the lot.

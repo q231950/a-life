@@ -360,6 +360,65 @@ final class ServerConnectionTests: XCTestCase {
         server.disconnect()
     }
 
+    func testFollowsEachCharactersModelAndSwitchesIt() async throws {
+        let (server, _) = makeConnection()
+        var builderState = SessionState(id: "builder", name: "Builder")
+        builderState.model = .haiku
+        builderState.fileModel = .haiku
+        StubServer.roster = [SessionState(id: "gardener", name: "Gardener"), builderState]
+        // One this version doesn't know is left out.
+        StubServer.models = #"[{"model":"fable","name":"Fable 5.2"},{"model":"mythos","name":"Mythos 1"},{"model":"opus","name":"Opus 5.5","description":"For complex work and everyday tasks","resolved":"claude-opus-5-5"},{"model":"sonnet"},{"model":"haiku","name":"Haiku 5.5"}]"#
+        server.connect()
+        await wait(for: "live, with the models") { server.phase == .live && !server.models.isEmpty }
+        XCTAssertEqual(server.models.map(\.displayName), ["Fable 5.2", "Opus 5.5", "Sonnet", "Haiku 5.5"])
+        let builder = try XCTUnwrap(server.session("builder"))
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        XCTAssertEqual(builder.model, .haiku)
+        XCTAssertNil(gardener.model)
+        XCTAssertEqual(builder.modelName(among: server.models), "Haiku 5.5") // before it has started
+        XCTAssertEqual(gardener.modelName(among: server.models), "Default model")
+
+        await builder.setModel(.opus)
+        XCTAssertEqual(builder.model, .opus)
+        let put = try XCTUnwrap(StubServer.requests.last)
+        XCTAssertEqual(put.method, "PUT")
+        XCTAssertEqual(put.url.path, "/v1/sessions/builder/model")
+        XCTAssertEqual(try JSONDecoder().decode(ModelChoiceRequest.self, from: XCTUnwrap(put.body)).model, .opus)
+
+        // The event brings it to every front end, and starting over keeps it.
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
+        StubServer.push(EventEnvelope(seq: 2, event: .modelChanged(.sonnet, fileModel: .haiku)), to: "builder")
+        await wait(for: "the model from another front end") { builder.model == .sonnet }
+        StubServer.push(EventEnvelope(seq: 3, event: .conversationStarted(conversationID: "b2")), to: "builder")
+        await wait(for: "the new conversation") { builder.state.conversationID == "b2" }
+        XCTAssertEqual(builder.model, .sonnet)
+        XCTAssertEqual(builder.fileModel, .haiku)
+
+        // Back to the agents file's, which is said as null.
+        await builder.setModel(nil)
+        XCTAssertEqual(builder.model, .haiku)
+        let back = try XCTUnwrap(StubServer.requests.last?.body)
+        XCTAssertEqual(String(decoding: back, as: UTF8.self), #"{"model":null}"#)
+
+        // Refused, it goes back to what it was.
+        StubServer.failPosts = (400, "\"opus-5\" isn't one of the models a character can run on")
+        await builder.setModel(.fable)
+        XCTAssertEqual(builder.model, .haiku)
+        XCTAssertNotNil(builder.lastError)
+        server.disconnect()
+    }
+
+    func testAServerWithoutModelsOffersNone() async throws {
+        let (server, _) = makeConnection()
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        await wait(for: "the models asked for") { StubServer.requests.contains { $0.url.path == "/v1/models" } }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(server.models.isEmpty) // so there's no picker
+        XCTAssertNil(server.session("builder")?.model)
+        server.disconnect()
+    }
+
     func testAFailedSendIsReportedOnThatSession() async throws {
         let (server, _) = makeConnection()
         server.connect()
@@ -389,6 +448,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var _failPosts: (status: Int, reason: String)?
     nonisolated(unsafe) private static var _hasLot = true
     nonisolated(unsafe) private static var _hasUsage = true
+    nonisolated(unsafe) private static var _models: String?
 
     static var requests: [Recorded] { lock.withLock { _requests } }
     /// What `GET /v1/sessions` answers.
@@ -409,6 +469,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         set { lock.withLock { _hasLot = newValue } }
     }
 
+    /// What `GET /v1/models` answers, or `nil` for a 404, as servers from
+    /// before characters had models give.
+    static var models: String? {
+        get { lock.withLock { _models } }
+        set { lock.withLock { _models = newValue } }
+    }
+
     /// Whether it tells the usage, as servers from before it did don't.
     static var hasUsage: Bool {
         get { lock.withLock { _hasUsage } }
@@ -423,6 +490,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             _failPosts = nil
             _hasLot = true
             _hasUsage = true
+            _models = nil
         }
     }
 
@@ -488,6 +556,12 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             let sessionID = url.deletingLastPathComponent().lastPathComponent
             respond(200, contentType: "text/event-stream", body: ": connected\n\n", finish: false)
             Self.lock.withLock { Self.streams[sessionID] = self } // stays open
+        } else if method == "GET", url.path == "/v1/models" {
+            if let models = Self.models {
+                respond(200, body: models)
+            } else {
+                respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
+            }
         } else if method == "GET", url.path == "/v1/sessions" {
             respond(200, body: String(decoding: try! JSONEncoder().encode(Self.roster), as: UTF8.self))
         } else if let failure = Self.failPosts {

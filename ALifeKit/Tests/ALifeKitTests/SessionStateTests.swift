@@ -263,6 +263,54 @@ final class SessionStateTests: XCTestCase {
         XCTAssertFalse(builder.autoApprove)
     }
 
+    func testTheModelIsTheCharactersAndTravelsAsSnakeCase() throws {
+        let event = try JSONSerialization.jsonObject(with: JSONEncoder().encode(SessionEvent.modelChanged(.opus, fileModel: .haiku))) as? [String: Any]
+        XCTAssertEqual(event?["type"] as? String, "session.model")
+        XCTAssertEqual(event?["model"] as? String, "opus")
+        XCTAssertEqual(event?["file_model"] as? String, "haiku")
+        for model in [ClaudeModel.haiku, nil] {
+            let data = try JSONEncoder().encode(EventEnvelope(seq: 1, event: .modelChanged(model, fileModel: nil)))
+            XCTAssertEqual(try JSONDecoder().decode(EventEnvelope.self, from: data).event, .modelChanged(model, fileModel: nil))
+        }
+        // A model this version doesn't know is as good as none.
+        let newer = #"{"seq":1,"event":{"type":"session.model","model":"mythos","file_model":"haiku"}}"#
+        XCTAssertEqual(try JSONDecoder().decode(EventEnvelope.self, from: Data(newer.utf8)).event, .modelChanged(nil, fileModel: .haiku))
+
+        var builder = SessionState(id: "builder", name: "Builder")
+        builder.apply(EventEnvelope(seq: 1, event: .modelChanged(.opus, fileModel: .haiku)))
+        XCTAssertEqual(builder.model, .opus)
+        // Starting over keeps it, and the agents file's.
+        builder.apply(EventEnvelope(seq: 2, event: .conversationStarted(conversationID: "c2")))
+        XCTAssertEqual(builder.model, .opus)
+        XCTAssertEqual(builder.fileModel, .haiku)
+
+        let snapshot = try JSONSerialization.jsonObject(with: JSONEncoder().encode(builder)) as? [String: Any]
+        XCTAssertEqual(snapshot?["model"] as? String, "opus")
+        XCTAssertEqual(snapshot?["file_model"] as? String, "haiku")
+        XCTAssertEqual(try JSONDecoder().decode(SessionState.self, from: JSONEncoder().encode(builder)), builder)
+
+        // Servers from before characters had models, or with one this
+        // version doesn't know.
+        let old = #"{"id":"b","name":"B","status":"idle","messages":[],"approvals":[],"last_seq":0}"#
+        XCTAssertNil(try JSONDecoder().decode(SessionState.self, from: Data(old.utf8)).model)
+        let unknown = #"{"id":"b","name":"B","status":"idle","messages":[],"approvals":[],"last_seq":0,"model":"mythos","file_model":"haiku"}"#
+        let decoded = try JSONDecoder().decode(SessionState.self, from: Data(unknown.utf8))
+        XCTAssertNil(decoded.model)
+        XCTAssertEqual(decoded.fileModel, .haiku)
+    }
+
+    func testAModelChoiceIsOneOfTheSimpleNames() throws {
+        XCTAssertEqual(ClaudeModel.allCases.map(\.rawValue), ["fable", "opus", "sonnet", "haiku"])
+        XCTAssertEqual(ClaudeModel.names, "fable, opus, sonnet or haiku")
+        XCTAssertEqual(ClaudeModel.opus.name, "Opus")
+        XCTAssertEqual(String(decoding: try JSONEncoder().encode(ModelChoiceRequest(model: nil)), as: UTF8.self), #"{"model":null}"#)
+        XCTAssertNil(try JSONDecoder().decode(ModelChoiceRequest.self, from: Data(#"{}"#.utf8)).model)
+        XCTAssertEqual(try JSONDecoder().decode(ModelChoiceRequest.self, from: Data(#"{"model":"sonnet"}"#.utf8)).model, .sonnet)
+        XCTAssertThrowsError(try JSONDecoder().decode(ModelChoiceRequest.self, from: Data(#"{"model":"opus-5"}"#.utf8))) { error in
+            XCTAssertTrue("\(error)".contains("\"opus-5\" isn't one of the models a character can run on: fable, opus, sonnet or haiku."), "\(error)")
+        }
+    }
+
     func testApplyingEventsBuildsTheState() {
         var state = SessionState(id: "builder", name: "Builder")
         let approval = Approval(id: "p1", toolName: "bash", input: "ls")

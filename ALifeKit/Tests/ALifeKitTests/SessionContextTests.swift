@@ -118,4 +118,14 @@ final class SessionContextTests: XCTestCase {
         XCTAssertEqual(name("gpt-oss"), "gpt-oss")
         XCTAssertNil(name(""))
     }
+
+    func testAModelsSimpleNameIsShownAsTheVersionItStandsFor() {
+        let options = [ModelOption(model: .opus, name: "Opus 5.5", resolved: "claude-opus-5-5"), ModelOption(model: .haiku)]
+        XCTAssertEqual(SessionContext(model: "claude-opus-5-5").modelName(among: options), "Opus 5.5")
+        XCTAssertEqual(SessionContext(model: "opus").modelName(among: options), "Opus 5.5")
+        XCTAssertEqual(SessionContext(model: "haiku").modelName(among: options), "Haiku")
+        XCTAssertEqual(SessionContext(model: "claude-fable-5-2").modelName(among: []), "Fable 5.2")
+        XCTAssertEqual(SessionContext(model: "dummy").modelName(among: options), "Dummy")
+        XCTAssertNil(SessionContext().modelName(among: options))
+    }
 }

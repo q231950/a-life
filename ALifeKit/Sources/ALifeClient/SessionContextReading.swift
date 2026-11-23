@@ -78,6 +78,16 @@ extension SessionContext {
         return Self.name(ofModel: model)
     }
 
+    /// The same, also reading a model's simple name, such as `opus`, as the
+    /// version it stands for among `options`: "Opus 5.5".
+    public func modelName(among options: [ModelOption]) -> String? {
+        guard let model, !model.isEmpty else { return nil }
+        if let option = options.first(where: { $0.model.rawValue == model }) {
+            return option.displayName
+        }
+        return Self.name(ofModel: model)
+    }
+
     static func name(ofModel model: String) -> String {
         if model == "dummy" { return "Dummy" }
         var id = model

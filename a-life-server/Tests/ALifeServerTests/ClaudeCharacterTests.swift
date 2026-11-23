@@ -8,9 +8,9 @@ import XCTest
 /// Claude Code 2.1 really writes.
 final class ClaudeCharacterTests: XCTestCase {
     private func make(_ character: Character) async -> (ClaudeCharacter, SessionHub, FakeClaudeCode) {
-        let hub = SessionHub(id: character.id, name: character.name)
+        let hub = SessionHub(id: character.id, name: character.name, model: character.model, fileModel: character.model)
         let claudeCode = FakeClaudeCode()
-        let backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: Logger(label: "test"))
+        let backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: Logger(label: "test"), model: character.model)
         await backend.reset()
         return (backend, hub, claudeCode)
     }
@@ -89,6 +89,7 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertEqual(value(after: "--output-format", in: arguments), "stream-json")
         XCTAssertEqual(value(after: "--permission-prompt-tool", in: arguments), "stdio")
         XCTAssertEqual(value(after: "--permission-mode", in: arguments), "default")
+        XCTAssertEqual(value(after: "--model", in: arguments), "haiku") // the agents file's
         XCTAssertFalse(arguments.contains("--resume"))
         let agents = try JSONValue.decode(Data(XCTUnwrap(value(after: "--agents", in: arguments)).utf8))
         XCTAssertEqual(agents["construction-worker"]?["tools"], ["Read", "Glob", "Grep", "Write", "Edit"])
@@ -537,16 +538,17 @@ final class ClaudeCodeProcessTests: XCTestCase {
 
     func testClaudeCodeRunsInTheLotWithHelpersInTheForeground() async throws {
         let lot = try lot()
-        let claudeCode = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: lot, model: "haiku")
-        // `sh -c` takes the arguments after the script as $0, $1, …
-        let script = #"printf '{"background":"%s","directory":"%s","model":"%s %s"}\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$(pwd -P)" "$0" "$1""#
+        let claudeCode = ClaudeCode(executable: URL(fileURLWithPath: "/bin/sh"), lot: lot)
+        // `sh -c` takes the arguments after the script as $1, …: the launcher
+        // adds none, as the character's arguments carry its model.
+        let script = #"printf '{"background":"%s","directory":"%s","extra":"%s"}\n' "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" "$(pwd -P)" "$#""#
         let connection = try claudeCode.launch(["-c", script], in: .lot)
         var said: JSONValue?
         for await message in connection.messages {
             said = message
         }
         XCTAssertEqual(said?["background"], "1")
-        XCTAssertEqual(said?["model"], "--model haiku")
+        XCTAssertEqual(said?["extra"], "0")
         let directory = try XCTUnwrap(said?["directory"]?.string)
         // On macOS, /var is a link to /private/var.
         XCTAssertEqual(URL(fileURLWithPath: directory).resolvingSymlinksInPath().path, lot.resolvingSymlinksInPath().path)
@@ -793,7 +795,7 @@ final class ClaudeCodeProcessTests: XCTestCase {
 
 /// Runs the Builder on the `claude` installed here, to see a real
 /// construction worker sent off. It costs a little, so it only runs with
-/// `ALIFE_LIVE_CLAUDE=1`; set `ALIFE_CLAUDE_MODEL` to pick the model.
+/// `ALIFE_LIVE_CLAUDE=1`. It runs on the Builder's model, haiku.
 final class LiveClaudeCodeTests: XCTestCase {
     func testBuildMeAnOfficeOnTheRealClaudeCode() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -801,10 +803,10 @@ final class LiveClaudeCodeTests: XCTestCase {
         let executable = try XCTUnwrap(ClaudeCode.findExecutable(in: environment), "no claude command")
         let lot = FileManager.default.temporaryDirectory.appendingPathComponent("a-life-lot-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: lot, withIntermediateDirectories: true)
-        let claudeCode = ClaudeCode(executable: executable, lot: lot, model: environment["ALIFE_CLAUDE_MODEL"])
+        let claudeCode = ClaudeCode(executable: executable, lot: lot)
 
         let hub = SessionHub(id: "builder", name: "Builder")
-        let builder = ClaudeCharacter(.builder, hub: hub, claudeCode: claudeCode, logger: Logger(label: "live"))
+        let builder = ClaudeCharacter(.builder, hub: hub, claudeCode: claudeCode, logger: Logger(label: "live"), model: Character.builder.model)
         await builder.reset()
         let events = await hub.subscribe(conversationID: nil, after: 0)
         try await builder.handleMessage("Build me an office")

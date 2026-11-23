@@ -48,6 +48,21 @@ public final class AgentSession {
     /// How full the character's Claude Code session is, and the model
     /// playing it, or `nil` if its session hasn't started.
     public var context: SessionContext? { state.context }
+    /// The model the character runs on, by its simple name, or `nil` for
+    /// Claude Code's own default.
+    public var model: ClaudeModel? { state.model }
+    /// The model the agents file gives the character, which the picker can
+    /// go back to.
+    public var fileModel: ClaudeModel? { state.fileModel }
+
+    /// The model to show for the character, with its version: the one its
+    /// session runs on, as Claude Code last said ("Opus 5.5"), or, before
+    /// it has said, the one it will run on, as `options` describe it.
+    public func modelName(among options: [ModelOption]) -> String {
+        if let name = context?.modelName(among: options) { return name }
+        guard let model else { return "Default model" }
+        return options.first { $0.model == model }?.displayName ?? model.name
+    }
 
     /// What was said in the session since this front end caught up with it,
     /// oldest first, as it happened: not what was said before and replayed
@@ -117,6 +132,17 @@ public final class AgentSession {
         if lastError != nil, state.autoApprove == enabled { state.autoApprove = was }
     }
 
+    /// Changes the model the character runs on, for every front end: at
+    /// once if it is working, or else from its next start. `nil` goes back
+    /// to the agents file's. The picker shows the change straight away, and
+    /// goes back if the server says no.
+    public func setModel(_ model: ClaudeModel?) async {
+        let was = state.model
+        state.model = model ?? state.fileModel
+        await perform { try await $0.setModel(model, in: self.id) }
+        if lastError != nil { state.model = was }
+    }
+
     /// Ends the conversation and starts an empty one, for every front end.
     public func startOver() async {
         await perform { try await $0.startOver(self.id) }
@@ -155,6 +181,10 @@ public final class AgentSession {
     func update(from listed: SessionState) {
         if state.name != listed.name { state.name = listed.name }
         if state.color != listed.color { state.color = listed.color }
+        // The model is the character's, not the conversation's, so the
+        // events replayed for the conversation may not say it.
+        if state.model != listed.model { state.model = listed.model }
+        if state.fileModel != listed.fileModel { state.fileModel = listed.fileModel }
         caughtUpAt = listed.lastSeq
         finishCatchingUp()
     }

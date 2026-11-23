@@ -33,6 +33,11 @@ public enum SessionEvent: Equatable, Sendable {
     /// How full the character's Claude Code session is, or the model playing
     /// it, changed.
     case contextChanged(SessionContext)
+    /// The model the character runs on, and the one the agents file gives
+    /// it, said at the start of each conversation and whenever it is
+    /// changed, such as in a front end's model picker. `nil` is Claude
+    /// Code's own default.
+    case modelChanged(ClaudeModel?, fileModel: ClaudeModel?)
     /// An event type this version doesn't know. It is skipped.
     case unknown(type: String)
 
@@ -50,6 +55,7 @@ public enum SessionEvent: Equatable, Sendable {
         case .subagentFinished: return "subagent.finished"
         case .autoApproveChanged: return "session.auto_approve"
         case .contextChanged: return "session.context"
+        case .modelChanged: return "session.model"
         case .unknown(let type): return type
         }
     }
@@ -57,7 +63,7 @@ public enum SessionEvent: Equatable, Sendable {
 
 extension SessionEvent: Codable {
     enum CodingKeys: String, CodingKey {
-        case type, status, activity, message, approval, subagent, outcome, context
+        case type, status, activity, message, approval, subagent, outcome, context, model
         case toolUse = "tool_use"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
@@ -65,6 +71,7 @@ extension SessionEvent: Codable {
         case subagentID = "subagent_id"
         case autoApprove = "auto_approve"
         case resumesAt = "resumes_at"
+        case fileModel = "file_model"
     }
 
     public init(from decoder: Decoder) throws {
@@ -101,6 +108,12 @@ extension SessionEvent: Codable {
             self = .autoApproveChanged(try container.decode(Bool.self, forKey: .autoApprove))
         case "session.context":
             self = .contextChanged(try container.decode(SessionContext.self, forKey: .context))
+        case "session.model":
+            // A model this version doesn't know is as good as none.
+            self = .modelChanged(
+                (try? container.decodeIfPresent(ClaudeModel.self, forKey: .model)) ?? nil,
+                fileModel: (try? container.decodeIfPresent(ClaudeModel.self, forKey: .fileModel)) ?? nil
+            )
         default:
             self = .unknown(type: type)
         }
@@ -135,6 +148,9 @@ extension SessionEvent: Codable {
             try container.encode(autoApprove, forKey: .autoApprove)
         case .contextChanged(let context):
             try container.encode(context, forKey: .context)
+        case .modelChanged(let model, let fileModel):
+            try container.encode(model, forKey: .model)
+            try container.encode(fileModel, forKey: .fileModel)
         case .unknown:
             break
         }
@@ -220,6 +236,13 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     /// playing it. `nil` until the session has started and said, and from
     /// servers from before it did.
     public var context: SessionContext?
+    /// The model the character runs on: the agents file's, unless it was
+    /// changed in a front end. `nil` is Claude Code's own default, and from
+    /// servers from before characters had models.
+    public var model: ClaudeModel?
+    /// The model the agents file gives the character, which the model
+    /// picker can go back to. `nil` if it gives none.
+    public var fileModel: ClaudeModel?
     /// Sequence number of the last event applied.
     public var lastSeq = 0
 
@@ -233,9 +256,13 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         switch envelope.event {
         case .conversationStarted(let conversationID):
             // Auto approve goes too. A server that keeps it on across the
-            // new conversation says so again straight after.
+            // new conversation says so again straight after. The model is
+            // the character's, not the conversation's, so it stays.
+            let (model, fileModel) = (model, fileModel)
             self = SessionState(id: id, name: name, color: color)
             self.conversationID = conversationID
+            self.model = model
+            self.fileModel = fileModel
             status = .idle
         case .statusChanged(let status, let stopReason, let resumesAt):
             self.status = status
@@ -287,6 +314,9 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
             self.autoApprove = autoApprove
         case .contextChanged(let context):
             self.context = context
+        case .modelChanged(let model, let fileModel):
+            self.model = model
+            self.fileModel = fileModel
         case .unknown:
             break
         }
@@ -294,7 +324,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, color, status, activity, messages, approvals, conversation, subagents, context
+        case id, name, color, status, activity, messages, approvals, conversation, subagents, context, model
+        case fileModel = "file_model"
         case autoApprove = "auto_approve"
         case conversationID = "conversation_id"
         case stopReason = "stop_reason"
@@ -335,6 +366,10 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         autoApprove = try container.decodeIfPresent(Bool.self, forKey: .autoApprove) ?? false
         // Nor from before they said how full the session is.
         context = (try? container.decodeIfPresent(SessionContext.self, forKey: .context)) ?? nil
+        // Nor from before characters had models; and a model this version
+        // doesn't know is as good as none.
+        model = (try? container.decodeIfPresent(ClaudeModel.self, forKey: .model)) ?? nil
+        fileModel = (try? container.decodeIfPresent(ClaudeModel.self, forKey: .fileModel)) ?? nil
         lastSeq = try container.decode(Int.self, forKey: .lastSeq)
     }
 
@@ -355,6 +390,8 @@ public struct SessionState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(subagents, forKey: .subagents)
         try container.encode(autoApprove, forKey: .autoApprove)
         try container.encodeIfPresent(context, forKey: .context)
+        try container.encodeIfPresent(model, forKey: .model)
+        try container.encodeIfPresent(fileModel, forKey: .fileModel)
         try container.encode(lastSeq, forKey: .lastSeq)
     }
 }

@@ -493,6 +493,10 @@ private struct ConversationView: View {
             }
 
             HStack {
+                // Works while it waits for you, or for the usage limit, too.
+                if !server.models.isEmpty {
+                    ModelPicker(session: session, options: server.models)
+                }
                 // Works while the character is busy, too: it answers at its
                 // next step. Not while it waits for an answer, though.
                 Group {
@@ -523,6 +527,72 @@ private struct ConversationView: View {
         // Something new to do: whatever it rang about can wait.
         narrator?.hangUp(on: session.id)
         Task { await session.send(text) }
+    }
+}
+
+/// The model the character runs on, to change it, by the text field you
+/// talk to it in: Claude Code's simple names, strongest first, each with the
+/// version it stands for and what it's good for, and the agents file's to
+/// go back to. A change applies at once if the character is working, or
+/// else when it next starts, and every front end sees it.
+private struct ModelPicker: View {
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+    let session: AgentSession
+    let options: [ModelOption]
+
+    var body: some View {
+        Menu {
+            ForEach(options) { option in
+                Button {
+                    Task { await session.setModel(option.model) }
+                } label: {
+                    if session.model == option.model {
+                        Label(option.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(option.displayName)
+                    }
+                    if let description = option.description {
+                        Text(description)
+                    }
+                }
+            }
+            if session.model != session.fileModel {
+                Divider()
+                Button("As in the agents file (\(name(of: session.fileModel)))") {
+                    Task { await session.setModel(nil) }
+                }
+            }
+        } label: {
+            Label(label, systemImage: "cpu")
+                .font(.footnote)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Model: \(name(of: session.model))")
+    }
+
+    /// The model's name and version, or just its family on a narrow screen.
+    private var label: String {
+        guard let model = session.model else { return "Default" }
+        return isNarrow ? model.name : name(of: model)
+    }
+
+    private func name(of model: ClaudeModel?) -> String {
+        guard let model else { return "Claude Code's default" }
+        return options.first { $0.model == model }?.displayName ?? model.name
+    }
+
+    /// Whether there is little room across, as on an iPhone held upright.
+    private var isNarrow: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
     }
 }
 
