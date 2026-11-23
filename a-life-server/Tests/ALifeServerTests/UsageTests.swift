@@ -3,6 +3,9 @@ import ALifeClient
 @testable import ALifeServer
 import Vapor
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// How much of the 5-hour usage window is used: read from what Claude Code
 /// says on every turn, kept across a restart, and sent to the front ends.

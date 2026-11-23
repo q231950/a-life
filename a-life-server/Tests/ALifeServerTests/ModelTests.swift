@@ -3,6 +3,9 @@ import ALifeClient
 @testable import ALifeServer
 import Vapor
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The model each character runs on: the agents file's, switched in a front
 /// end's model picker, at once with `set_model` or from its next start, kept

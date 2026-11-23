@@ -1,0 +1,58 @@
+# a-life-server on a Linux server of your own, such as a DigitalOcean droplet.
+# Copy .env.example to .env, put your Claude token in it, and start it from
+# this directory:
+#
+#   docker compose up -d
+#
+# See "Run it on a server" in README.md.
+
+services:
+  a-life:
+    build:
+      # The whole checkout, since the server needs ALifeKit next to it.
+      context: ..
+      dockerfile: a-life-server/Dockerfile
+    image: a-life-server
+    restart: unless-stopped
+    # Reaps the processes the characters' Claude Code sessions leave behind.
+    init: true
+    # Your Claude token, and the other settings, from .env next to this file.
+    env_file: .env
+    ports:
+      # Only this server can reach it, at 127.0.0.1:8080, and tailscale serve
+      # shares it with your tailnet from there. Never publish it on 0.0.0.0:
+      # there's no login, and whoever reaches it can run commands here.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - lot:/home/alife/a-life-lot
+      - state:/home/alife/a-life-state
+      - voice:/home/alife/a-life-voice
+      - projects:/home/alife/a-life-projects
+      - checkout:/home/alife/a-life
+      - cast:/home/alife/a-life-cast
+      - claude:/home/alife/.claude
+    # Time for the characters to stop their tools and save their sessions.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+
+volumes:
+  # What the characters build and plant.
+  lot:
+  # Who waits for the usage limit, the last usage reading, and the models
+  # chosen in the app.
+  state:
+  # The voice model, from fetch-voice.sh.
+  voice:
+  # The clones of the projects the characters work on.
+  projects:
+  # The Engineer's a*life checkout.
+  checkout:
+  # The agents file.
+  cast:
+  # Claude Code's settings and sessions, so that a session can be resumed
+  # after a restart.
+  claude:

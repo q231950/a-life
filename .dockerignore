@@ -1,0 +1,8 @@
+# The server's image only needs ALifeKit and a-life-server.
+*
+!ALifeKit
+!a-life-server
+**/.build
+**/.swiftpm
+**/.env
+**/.DS_Store

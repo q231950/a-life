@@ -31,7 +31,9 @@ final class VoiceModelTests: XCTestCase {
     }
 
     private func start(voiceDirectory: URL?) async throws {
-        app = try await Application.make(.testing)
+        // Arguments of its own, rather than `.testing`'s, which some test
+        // runners leave the test bundle in, for Vapor to take as a command.
+        app = try await Application.make(Environment(name: "testing", arguments: ["vapor"]))
         try await configure(app, players: .dummies(step: .milliseconds(20)), voiceDirectory: voiceDirectory)
         app.http.server.configuration.hostname = "127.0.0.1"
         app.http.server.configuration.port = 0 // any free port

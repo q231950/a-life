@@ -1,0 +1,34 @@
+# a-life-server as a systemd service, on a Linux server without Docker. It runs
+# as the user alife, from the a*life checkout in its home, which it built with
+# `swift build -c release`. Copy it to /etc/systemd/system/, then:
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now a-life-server
+#
+# See "Without Docker" in a-life-server/README.md.
+
+[Unit]
+Description=a-life-server, the a*life characters' Claude Code sessions
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=alife
+Group=alife
+WorkingDirectory=/home/alife
+Environment=HOME=/home/alife
+# CLAUDE_CODE_OAUTH_TOKEN and any other settings, one per line, as in
+# .env.example. Make it readable by alife only: chmod 600.
+EnvironmentFile=/home/alife/a-life.env
+# On 127.0.0.1 only: tailscale serve shares it with your tailnet.
+ExecStart=/home/alife/a-life/a-life-server/.build/release/ALifeServer serve --env production --hostname 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+# The server stops the characters' Claude Code sessions itself, so it is
+# told first, and anything left over is stopped after it.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

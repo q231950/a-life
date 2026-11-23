@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc // signal and kill, which Foundation brings along on macOS
+#endif
 
 /// Starts Claude Code sessions. `ClaudeCode` runs the real CLI; the tests
 /// put a stand-in here.
@@ -217,17 +220,23 @@ struct ClaudeCode: ClaudeCodeLauncher {
     }
 
     /// The `claude` command: `ALIFE_CLAUDE_PATH` if it is set, otherwise the
-    /// first `claude` on the `PATH` or in the places the installers use.
+    /// first `claude` on the `PATH` or in the places the installers use, on
+    /// a Mac or on a Linux server: the native installer's, Homebrew's, and
+    /// npm's global ones.
     static func findExecutable(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
         if let path = environment["ALIFE_CLAUDE_PATH"], !path.isEmpty {
             return URL(fileURLWithPath: path)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let npmPrefix = environment["NPM_CONFIG_PREFIX"].flatMap { $0.isEmpty ? nil : ["\($0)/bin"] } ?? []
         let directories = (environment["PATH"] ?? "").split(separator: ":").map(String.init) + [
             "\(home)/.local/bin",
             "\(home)/.claude/local",
             "/opt/homebrew/bin",
             "/usr/local/bin",
+            "/usr/bin",
+        ] + npmPrefix + [
+            "\(home)/.npm-global/bin",
         ]
         for directory in directories {
             let path = URL(fileURLWithPath: directory).appendingPathComponent("claude").path
