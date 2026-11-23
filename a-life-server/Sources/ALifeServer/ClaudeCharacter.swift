@@ -44,6 +44,12 @@ import Vapor
 /// answers, the tokens follow the usage on each of the character's own
 /// replies. If it won't say, the ring measures against the window its
 /// turns report instead.
+///
+/// The model it runs on is the agents file's, unless a front end's model
+/// picker changes it: at once, with `set_model`, while its CLI runs, and
+/// otherwise with `--model` when it next starts. What Claude Code then
+/// says it runs on, a full id such as `claude-opus-5-5`, goes to the
+/// context ring.
 actor ClaudeCharacter: SessionBackend {
     /// What a*life says to a character once the usage limit has reset.
     static let pleaseContinue = "please continue"
@@ -62,6 +68,20 @@ actor ClaudeCharacter: SessionBackend {
     private let clock: any WakeClock
     /// Where what Claude Code says about the 5-hour window goes.
     private let usage: UsageHub?
+    /// Where a model chosen in a front end is kept across restarts.
+    private let choices: ModelChoices?
+    /// What Claude Code says about the models, learnt from its answer to
+    /// `initialize`.
+    private let models: ModelCatalog?
+
+    /// The model the character runs on, or `nil` for Claude Code's own
+    /// default.
+    private var model: ClaudeModel?
+    /// The `set_model` request out, and the model to go back to if Claude
+    /// Code refuses it.
+    private var modelSwitch: (id: String, was: ClaudeModel?)?
+    /// The `initialize` request out, whose answer lists the models.
+    private var initializeRequest: String?
 
     /// The CLI playing the character in this conversation, once started.
     private var connection: (any ClaudeCodeConnection)?
@@ -125,7 +145,10 @@ actor ClaudeCharacter: SessionBackend {
         logger: Logger,
         continues: PendingContinues = PendingContinues(file: nil),
         clock: any WakeClock = SystemWakeClock(),
-        usage: UsageHub? = nil
+        usage: UsageHub? = nil,
+        model: ClaudeModel? = nil,
+        choices: ModelChoices? = nil,
+        models: ModelCatalog? = nil
     ) {
         self.character = character
         self.hub = hub
@@ -134,9 +157,12 @@ actor ClaudeCharacter: SessionBackend {
         self.continues = continues
         self.clock = clock
         self.usage = usage
+        self.model = model
+        self.choices = choices
+        self.models = models
     }
 
-    /// The CLI's arguments, apart from the model, which the launcher adds.
+    /// The CLI's arguments.
     var arguments: [String] {
         let agents: JSONValue = [character.helper.name: character.helper.definition]
         var arguments = [
@@ -150,6 +176,9 @@ actor ClaudeCharacter: SessionBackend {
             "--append-system-prompt", character.role,
             "--agents", String(decoding: (try? agents.encoded()) ?? Data("{}".utf8), as: UTF8.self),
         ]
+        if let model {
+            arguments += ["--model", model.rawValue]
+        }
         if let claudeSessionID {
             arguments += ["--resume", claudeSessionID]
         }
@@ -226,6 +255,26 @@ actor ClaudeCharacter: SessionBackend {
         }
         if approvals.isEmpty, turnActive {
             await hub.emit(.statusChanged(.running, stopReason: nil))
+        }
+    }
+
+    func setModel(_ choice: ClaudeModel?) async throws {
+        let model = choice ?? character.model
+        let was = self.model
+        await choices?.choose(choice, for: character)
+        self.model = model
+        await hub.setModel(model)
+        guard model != was else { return }
+        logger.notice("\(character.name) runs on \(model?.rawValue ?? "Claude Code's default") from now on")
+        if let connection {
+            // At its next call to the model, even in the middle of a turn.
+            let id = UUID().uuidString
+            modelSwitch = (id, was)
+            try? connection.send(Self.controlRequest(["subtype": "set_model", "model": model.map { .string($0.rawValue) } ?? .null], id: id))
+        } else if context != SessionContext(), let model, let resolved = await models?.resolved(model) {
+            // It starts on it next time; the ring says so already.
+            context.model = resolved
+            await sayContext()
         }
     }
 
@@ -329,7 +378,10 @@ actor ClaudeCharacter: SessionBackend {
         }
         self.connection = connection
         logger.info("Started Claude Code for \(character.name)")
-        try? connection.send(Self.controlRequest(["subtype": "initialize"]))
+        let initialize = UUID().uuidString
+        initializeRequest = initialize
+        modelSwitch = nil
+        try? connection.send(Self.controlRequest(["subtype": "initialize"], id: initialize))
         askAboutContext(connection)
         Task { [weak self] in
             for await message in connection.messages {
@@ -589,6 +641,7 @@ actor ClaudeCharacter: SessionBackend {
         guard connection === self.connection else { return } // stopped on purpose
         self.connection = nil
         forgetContextQuestion() // the next run is asked afresh
+        modelSwitch = nil // the next run starts on the model it has now
         let wasWorking = turnActive || !approvals.isEmpty || !helpers.isEmpty
         turnActive = false
         swallowNextResult = false
@@ -626,11 +679,23 @@ actor ClaudeCharacter: SessionBackend {
         contextRefused = false
     }
 
-    /// Claude Code's answer to a control request. Only the answer to the
-    /// question about the context is read.
+    /// Claude Code's answer to a control request. Only the answers to
+    /// `initialize`, to switching the model and to the question about the
+    /// context are read.
     private func handleControlResponse(_ message: JSONValue, from connection: any ClaudeCodeConnection) async {
         let response = message["response"]
-        guard let id = response?["request_id"]?.string, id == contextQuestion else { return }
+        guard let id = response?["request_id"]?.string else { return }
+        if id == initializeRequest {
+            initializeRequest = nil
+            await models?.learn(from: response?["response"])
+            return
+        }
+        if let modelSwitch, id == modelSwitch.id {
+            self.modelSwitch = nil
+            await switched(response, from: modelSwitch.was)
+            return
+        }
+        guard id == contextQuestion else { return }
         contextQuestion = nil
         if response?["subtype"]?.string == "success", let answer = response?["response"] {
             if let model = answer["model"]?.string, !model.isEmpty { context.model = model }
@@ -651,6 +716,26 @@ actor ClaudeCharacter: SessionBackend {
             asksAboutContextAgain = false
             askAboutContext(connection)
         }
+    }
+
+    /// Claude Code's answer to switching the model: on success, the model it
+    /// now runs on, as a full id, for the context ring; otherwise the
+    /// character stays on the one it had, `was`, and says why.
+    private func switched(_ response: JSONValue?, from was: ClaudeModel?) async {
+        if response?["subtype"]?.string == "success" {
+            if let resolved = response?["response"]?["model"]?.string, !resolved.isEmpty {
+                context.model = resolved
+                await sayContext()
+            }
+            return
+        }
+        let reason = response?["error"]?.string ?? "no reason given"
+        let wanted = model?.name ?? "Claude Code's default"
+        logger.warning("Claude Code wouldn't switch \(character.name) to \(wanted): \(reason)")
+        model = was
+        await choices?.choose(was, for: character)
+        await hub.setModel(was)
+        await hub.emit(.message(Message(kind: .error, speaker: character.name, text: "Couldn't switch \(character.name) to \(wanted): \(reason)")))
     }
 
     /// The tokens and the model of one of the character's own replies.

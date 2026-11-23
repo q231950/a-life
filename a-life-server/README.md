@@ -10,7 +10,7 @@ If you'd rather not spend tokens, the server can also run dummy characters that 
 
 ## Run it
 
-You need Swift 6 (Xcode 16 or later) on macOS 14 or later, and [Claude Code](https://code.claude.com) installed and logged in: `claude` in a terminal should start a session. The characters use that login, its settings and its model, and what they do counts towards your usage like any other Claude Code session.
+You need Swift 6 (Xcode 16 or later) on macOS 14 or later, and [Claude Code](https://code.claude.com) installed and logged in: `claude` in a terminal should start a session. The characters use that login and its settings, each on the model the [agents file](#the-agents-file) gives it (which the app's model picker can change), and what they do counts towards your usage like any other Claude Code session.
 
 ```sh
 cd a-life-server
@@ -75,16 +75,17 @@ All optional, as environment variables:
 | `ALIFE_LOT_DIR` | The directory the characters work in, and whose buildings and beds the front ends show. `~/a-life-lot` unless set; it is made if it isn't there. The dummy characters don't change it, but the front ends still show what's on it. |
 | `ALIFE_REPO_DIR` | The a\*life checkout the Engineer works in. The checkout the server was built from unless set. See [The Engineer and the a\*life checkout](#the-engineer-and-the-alife-checkout). |
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
-| `ALIFE_CLAUDE_MODEL` | The model for every character, such as `sonnet` or `haiku`. Claude Code's own default unless set. The helpers use their character's model. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
-| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`, and the last usage reading, in `usage.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
+| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`, the last usage reading, in `usage.json`, and the models chosen in the app, in `models.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
 | `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id (with a clone of each repository in it, for a project of several). `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
 
 ```sh
-ALIFE_CLAUDE_MODEL=haiku ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
+ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
 ```
+
+There's no setting for the model: each character has its own, in the agents file (`model`), and the app's model picker can change it. `ALIFE_CLAUDE_MODEL`, which chose one model for every character, isn't read any more; the server says so if it is still set.
 
 ## Make it reachable over Tailscale
 
@@ -140,13 +141,15 @@ A session's `{id}` is its character's, such as `builder` or `engineer`, and neve
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, the whole conversation (`conversation`, see below), helpers out, whether auto approve is on (`auto_approve`), how full the character's Claude Code session is and the model playing it (`context`, see `session.context` below; left out until its session has said), last sequence number. |
+| `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, the whole conversation (`conversation`, see below), helpers out, whether auto approve is on (`auto_approve`), how full the character's Claude Code session is and the model playing it (`context`, see `session.context` below; left out until its session has said), the model it runs on (`model`, see `session.model` below) and the one the agents file gives it (`file_model`), each left out for Claude Code's own default, last sequence number. |
 | `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
 | `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
 | `POST` | `/v1/sessions/{id}/messages` | `{"text": "…"}` | Says something to the character. Works while it is busy: it answers at its next step. `409` while it waits for an approval. |
 | `POST` | `/v1/sessions/{id}/interrupt` | | Stops whatever the character is doing, and withdraws a pending approval. |
 | `POST` | `/v1/sessions/{id}/approvals/{approval id}` | `{"allow": true}` | Answers a tool call that is waiting. `404` if there is no such approval. |
 | `PUT` | `/v1/sessions/{id}/auto-approve` | `{"enabled": true}` | Turns auto approve on or off for this character only. While it's on, each tool call that asks is allowed straight away, and still shows in the conversation, settled as `auto_approved`. Turning it on allows whatever is waiting, too. It stays as it is when the session is started over, and is off when the server starts. |
+| `PUT` | `/v1/sessions/{id}/model` | `{"model": "opus"}` | Changes the model the character runs on, for every front end: `fable`, `opus`, `sonnet` or `haiku`, or `null` to go back to the agents file's. While its Claude Code runs, it switches at once (`set_model`), from its next call to the model, even mid-turn and while it waits for you; otherwise it starts on it next time. It stays across starting over, and across a restart of the server, in `models.json`, until the agents file gives the character another model. `400` for any other name. See [The model](#the-model). |
+| `GET` | `/v1/models` | | The models a character can be switched to, strongest first: `model`, and, once Claude Code has said, `name` with the version it stands for (`"Opus 5.5"`), `description` and `resolved` (`claude-opus-5-5`). |
 | `POST` | `/v1/sessions/{id}/reset` | | Ends the session's conversation and starts an empty one, for every front end. The other sessions carry on. |
 | `GET` | `/v1/lot` | | Everything built and planted on the lot. See [below](#the-lot-and-its-stream). |
 | `GET` | `/v1/lot/events` | | The lot's stream (server-sent events): the lot as it is now, then again each time it changes. |
@@ -188,6 +191,7 @@ A front end follows every session at once: it reads `GET /v1/sessions` to learn 
 | `subagent.started` | `subagent` | The character sent a helper (a subagent) off to do part of its work: `id`, `task`. |
 | `subagent.finished` | `subagent_id` | The helper reported back to the character, or was called back because the character was stopped or started over. |
 | `session.auto_approve` | `auto_approve` | Auto approve was turned on (`true`) or off for the session. A new conversation starts with it off, so a server that keeps it on sends this again straight after `conversation.started`. |
+| `session.model` | `model` | The model the character runs on changed: `fable`, `opus`, `sonnet` or `haiku`, or `null` for Claude Code's own default. It stays across `conversation.started`. See [The model](#the-model). |
 | `session.context` | `context` | How full the character's Claude Code session is, and the model playing it: `model`, `used_tokens` (what its context holds as of its last call; its helpers' don't count), `compacts_at` (the tokens at which Claude Code compacts the conversation by itself), `context_window`, and `auto_compact` (whether it does). Each is left out until it is known. A new conversation starts without one. See [How full a session is](#how-full-a-session-is). |
 
 Clients skip event types they don't know, so new ones can be added.
@@ -283,6 +287,7 @@ How a session maps onto the events:
 | A call to the `Agent` tool, or `Task` in older versions | `subagent.started`, until the call returns or Claude Code reports the task done: `subagent.finished` |
 | A permission request (`can_use_tool`) | `approval.requested`, and the session is idle with `requires_action` until you answer. Allowing or denying goes back to Claude Code as the answer, and is `approval.resolved` with `allowed` or `denied`; with auto approve on, Claude Code is told yes at once and it is `auto_approved`, without waiting; one Claude Code no longer needs is `withdrawn`. |
 | The end of a turn (`result`) | `session.status` idle with `end_turn`. If it ended in an error, such as not being logged in, the error is a `message` of kind `error`. |
+| Switching the model (`PUT …/model`) | `session.model`, and the control request `set_model`, while its Claude Code runs; its answer's `model`, the full id, goes to `session.context`. See [The model](#the-model). |
 | The model (the `init` message's `model`), the usage on each of the character's own replies, and `get_context_usage`'s answers | `session.context`. See [How full a session is](#how-full-a-session-is). |
 | The 5-hour usage limit (a `rate_limit_event` that is `rejected`, then the error `rate_limit`) | `session.status` idle with `usage_limit` and `resumes_at`, and later a `message` from `a*life`, "please continue". See [The usage limit](#the-usage-limit). |
 
@@ -292,6 +297,18 @@ How a session maps onto the events:
 - **If Claude Code stops by itself**, the error is shown in the conversation and the next thing you say resumes the same session (`--resume`).
 - Helpers run in the foreground (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`): the character waits for its helper to report back before it carries on, so it stays at work in the house meanwhile. Helpers that Claude Code runs in the background anyway are followed until they report back.
 - Each session is saved like any other Claude Code session. The server logs each one's id when it starts, so `claude --resume <id>` in the directory the character works in (the lot, or the Engineer's a\*life checkout) picks the conversation up in a terminal. The server itself keeps no conversations: after a restart, every character starts a new session, unless it was waiting for the usage limit.
+
+### The model
+
+Each character runs on the model the agents file gives it (`model`), by Claude Code's simple name for the latest of each family: `fable`, `opus`, `sonnet` or `haiku`; one without runs on Claude Code's own default. The server starts its Claude Code with `--model`. Its helper runs on the same model, unless the agents file gives the helper one of its own.
+
+The app's model picker, by the field you type in, changes it (`PUT /v1/sessions/{id}/model`), for every front end (`session.model`):
+
+- **At once, while its Claude Code runs**: the server sends the control request `set_model`, and Claude Code switches from its next call to the model, even in the middle of a turn, and while it waits for you or for the usage limit. The conversation goes on, in the same session. Its answer says the model it runs on now, as a full id such as `claude-opus-5-5`, which goes to the context ring. If it refuses, the character stays on the model it had, and the conversation says why.
+- **Otherwise from its next start**, with `--model`; the ring shows the new model's version straight away if it is known.
+- **It stays** across starting over, and across a restart of the server: a choice is kept in `models.json` in `ALIFE_STATE_DIR`, with the agents file's model at the time, until the agents file gives the character another model, which then wins. Choosing the agents file's own model, or "As in the agents file", forgets it.
+
+The versions the simple names stand for, such as Opus 5.5 for `opus`, come from Claude Code's answer to `initialize`, its `models`. The server asks a Claude Code of its own once when it starts, with nothing else to do (so it takes no turn and calls no model), and again each time a character's Claude Code starts, and offers them at `GET /v1/models`. Until it has an answer, the models go by their plain names. The dummy characters take a model from the picker but run on none, and their choices aren't kept.
 
 ### How full a session is
 
@@ -377,7 +394,7 @@ The shipped [`agents.yaml`](Sources/ALifeServer/agents.yaml) has such a characte
 
 ### The Team Lead and the agents file
 
-The Team Lead adds new agents to the [agents file](#the-agents-file), so that you can have someone new on the lot without writing their entry yourself. Tell it "I'd like a Painter who paints the houses" and it works out with you who they are: their name, what they do, where they work (the lot, a\*life, or a project of yours, a directory or a git repository's ssh address), their colour and how careful they should be. Then it sends its recruiter off, the `recruiter` subagent, which reads the agents file, writes the new agent the way the others are written, with a role and a helper of its own, and adds it with the server's own command:
+The Team Lead adds new agents to the [agents file](#the-agents-file), so that you can have someone new on the lot without writing their entry yourself. Tell it "I'd like a Painter who paints the houses" and it works out with you who they are: their name, what they do, where they work (the lot, a\*life, or a project of yours, a directory or a git repository's ssh address), their colour, how careful they should be, and how strong a model they need (unless you say, the recruiter gives `haiku` to one who builds or plants on the lot, `sonnet` to one who mostly talks, and `opus` to an engineer). Then it sends its recruiter off, the `recruiter` subagent, which reads the agents file, writes the new agent the way the others are written, with a role and a helper of its own, and adds it with the server's own command:
 
 ```sh
 "$ALIFE_SERVER_COMMAND" add-agent <<'AGENT'
@@ -396,7 +413,7 @@ Unless `ALIFE_AGENTS_FILE` is set, the agents file is the one in the a\*life che
 
 ### The agents file
 
-The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Builder, the Engineer, the Flamingo Engineer, the Team Lead and the Conservationist above, among others. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode or where it works (the lot, a\*life or a project of your own), or to add or take away a character; or have the [Team Lead](#the-team-lead-and-the-agents-file) add one. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
+The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Builder, the Engineer, the Flamingo Engineer, the Team Lead and the Conservationist above, among others. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode, its model or where it works (the lot, a\*life or a project of your own), or to add or take away a character; or have the [Team Lead](#the-team-lead-and-the-agents-file) add one. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
 
 ```sh
 ALIFE_AGENTS_FILE=~/my-agents.yaml swift run ALifeServer
@@ -410,6 +427,7 @@ agents:
     name: Painter           # what the front ends call it
     color: "#3366CC"        # optional: its shirt, which its helper's sheep wear too
     permission_mode: acceptEdits  # optional: what Claude Code asks you before doing; default unless set
+    model: haiku            # optional: fable, opus, sonnet or haiku; Claude Code's default unless set
     works_in: lot           # optional: lot, or a-life for your a*life checkout; lot unless set
     # project: {path: ~/Development/my-app}  # optional, instead of works_in: a project of your own
     changes_things: true    # optional: the dummy's script; false unless set
@@ -418,6 +436,7 @@ agents:
     helper:                 # the subagent it sends off to do its work
       name: brush
       tools: [Read, Glob, Grep, Write, Edit]
+      # model: sonnet       # optional: its own model; its character's unless set
       description: |        # when to send it; Claude Code reads this to decide
         The Painter's brush. Paints the walls of buildings on the lot.
       prompt: |             # the helper's own system prompt
@@ -430,6 +449,7 @@ agents:
 | `name` | required | What the front ends call the character. No two agents can share one, whatever their capitals. |
 | `color` | optional | Its shirt on the lot, which its helper's sheep wear too, as `"#RRGGBB"`. Quote it: in YAML, `#` starts a comment. Without one, the front ends choose. |
 | `permission_mode` | optional | [Claude Code's permission mode](https://code.claude.com/docs/en/permission-modes) for the session, which decides what it asks you before doing: `default` (or `manual`) asks before every change, `acceptEdits` lets changes to files go ahead, and `plan`, `auto`, `dontAsk` and `bypassPermissions` are also taken. `default` unless set. |
+| `model` | optional | The model the character's session runs on, by Claude Code's simple name for the latest of each family: `fable` (the strongest, and costliest), `opus`, `sonnet` or `haiku` (the quickest). Nothing else is taken, full ids such as `claude-opus-5-5` included. Claude Code's own default unless set. The app's model picker can change it; see [The model](#the-model). |
 | `works_in` | optional | Where the character's session works: `lot`, the directory the characters share, or `a-life`, your a\*life checkout, as the [Engineer](#the-engineer-and-the-alife-checkout) does. `lot` unless set, or unless it has a `project`. |
 | `project` | optional | Instead of `works_in`: a project of your own for the character to work on. See [A character for another project](#a-character-for-another-project). |
 | `project.path` | | A directory on your Mac, as a full path or from `~`. It has to be there. |
@@ -440,16 +460,20 @@ agents:
 | `role` | required | Who the character is, added to Claude Code's own system prompt (`--append-system-prompt`). |
 | `helper.name` | required | The subagent's name, which the character uses to send it off: lowercase letters, digits and hyphens. |
 | `helper.tools` | required | The Claude Code tools the helper may use, such as `[Read, Write]`. At least one. |
+| `helper.model` | optional | The helper's own model, one of the same four. Its character's unless set, whatever that is at the time. |
 | `helper.description` | required | When to send the helper. Claude Code reads it to decide. |
-| `helper.prompt` | required | The helper's own system prompt. It runs on its character's model. |
+| `helper.prompt` | required | The helper's own system prompt. |
 
-Text is passed on as written, without the line break a `|` block ends with. Write each paragraph on one line, as the shipped file does: a line break inside a `|` block reaches Claude Code as a line break. The model, the lot and the a\*life checkout are the same for every character; set them with `ALIFE_CLAUDE_MODEL`, `ALIFE_LOT_DIR` and `ALIFE_REPO_DIR`.
+Text is passed on as written, without the line break a `|` block ends with. Write each paragraph on one line, as the shipped file does: a line break inside a `|` block reaches Claude Code as a line break. The lot and the a\*life checkout are the same for every character; set them with `ALIFE_LOT_DIR` and `ALIFE_REPO_DIR`.
+
+The shipped characters' models: `haiku` for the Builder and the Conservationist, whose helpers write a few lines into the lot; `sonnet` for the Team Lead, who mostly talks and writes one entry `add-agent` checks; and `opus` for the engineers (the Engineer, the Flamingo Engineer, the BTLB Engineer and lo-life) and the Apple Specialist, whose researcher runs on `sonnet`, as it mostly looks things up.
 
 The server checks the whole file when it starts and won't start if anything is wrong, saying what and where:
 
 ```
 agents.yaml: agents[2].color should be a colour like "#8050C8", not "purple".
-agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, works_in, project, changes_things, role and helper.
+agents.yaml: agents[0].permision_mode isn't a field of an agent. The fields are id, name, color, permission_mode, model, works_in, project, changes_things, role and helper.
+agents.yaml: agents[1].model "opus-5" isn't one of the models a character can run on: fable, opus, sonnet or haiku. Leave it out for Claude Code's own default.
 agents.yaml: agents[3].project.path /Users/you/Development/my-app isn't a directory on this machine. A project's path has to be there already; for one that isn't, give its repo instead.
 agents.yaml: agents[3].project.repos[0].repo "https://github.com/you/my-app.git" is an https address, which the server can't clone: it clones without asking for a password. Use the repository's ssh address instead, such as git@github.com:you/my-app.git.
 agents.yaml: agents[1].id "builder" is agents[0]'s id too. Each agent needs an id of its own.
@@ -506,6 +530,8 @@ With `ALIFE_BACKEND=dummy`, each character is a `DummyCharacter` instead, which 
 
 Each helper is out for a few steps (the looker's for four and six, the Builder's for four); while they are out, the character's activity is `agent`.
 
+Each takes a model from the app's model picker, so it can be tried, but runs on none, and its choice isn't kept across a restart.
+
 Each also fills a made-up context, so the app's context ring can be tried: model `dummy`, a window of 200,000 tokens that compacts at 167,000, starting at 15,000 with the first message and growing with each step and reply, then dropping back to 20,000 once it would pass the compaction point, as Claude Code's would. Starting over empties it.
 
 Both can be talked to while they work: something said mid-task is answered at the next step ("Still on … Right now I'm …") and the work carries on. Something said after the last step becomes the next instruction. While the Builder waits for an approval, messages to it are refused with `409` until the approval is answered.
@@ -523,7 +549,7 @@ An interrupt stops one character and leaves the others be, and calls back any he
 The routes know nothing about what plays a character. For each session they talk to two things:
 
 - `SessionHub` keeps the session's event log and its open streams. Whatever drives the session calls `hub.emit(_:)` for each thing that happens.
-- `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `setAutoApprove`, `reset`, and `shutdown` when the server stops.
+- `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `setAutoApprove`, `setModel`, `reset`, and `shutdown` when the server stops.
 
 The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, looks at the lot's directory every second, and sends the lot to its open streams when it changes.
 
@@ -535,21 +561,22 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 |---|---|
 | `entrypoint.swift` | Starts Vapor, or runs `add-agent` without it. |
 | `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, the usage's hub, and the routes. |
-| `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode and its helper. See [The agents file](#the-agents-file). |
+| `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode, its model and its helper. See [The agents file](#the-agents-file). |
 | `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`, and adds a new agent after the last one without changing the others. |
 | `AddAgent.swift` | The `add-agent` command, which the Team Lead's recruiter runs to add an agent to the agents file. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). |
-| `routes.swift` | The HTTP API, including the event streams, the lot's and the usage's, and the voice model's files. |
+| `routes.swift` | The HTTP API, including the event streams, the lot's and the usage's, the models, and the voice model's files. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many animals fit in a bed, and writes `lot.md`, with the animals the app draws. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
-| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects, waits out the 5-hour usage limit before it carries on, and follows how full the session is, asking Claude Code where it compacts (`get_context_usage`). |
+| `ClaudeCharacter.swift` | A character played by a Claude Code session: turns its stream-json into the session's events, and approvals, interrupts and starting over into what the CLI expects, waits out the 5-hour usage limit before it carries on, switches its model (`set_model`), and follows how full the session is, asking Claude Code where it compacts (`get_context_usage`). |
 | `UsageLimit.swift` | Reads what Claude Code says about its usage limits, and the 5-hour window from its `unifiedWindows`, tells the 5-hour limit from the weekly ones and when it resets, and `WakeClock`, the clock a character waits on. |
 | `Usage.swift` | `UsageHub`: the last reading of the 5-hour usage window, from the characters' runs (or made up by the dummies), kept in `usage.json` and sent to the clients following it when it changes. |
+| `ModelChoices.swift` | `ModelChoices`, the models chosen in the app, kept in `models.json` until the agents file changes, and `ModelCatalog`, the versions the models' simple names stand for, from Claude Code's answer to `initialize`. See [The model](#the-model). |
 | `PendingContinues.swift` | The characters waiting for the usage limit to reset, kept in `continues.json` so they outlast a restart. |
 | `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, with the agents file and the server's command in its environment, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
-| `DummyCharacter.swift` | The scripted stand-in, with a made-up context that fills and compacts. |
+| `DummyCharacter.swift` | The scripted stand-in, with a made-up context that fills and compacts, and a model it takes from the picker but doesn't run on. |
 | `fetch-voice.sh` | Not in `Sources`: fetches the voice model into `ALIFE_VOICE_DIR`. See [Voices](#voices). |
 
 ## Tests
@@ -560,16 +587,16 @@ swift test
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 
-`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `ContextTests` follow how full a session is: Claude Code asked where it compacts when it starts, after each turn and after compacting, one question at a time, answers to other requests ignored, auto-compact off, the whole window from the turn's `modelUsage` when Claude Code won't say, the tokens on the character's own replies and not its helpers', the same reading not said twice, starting over and resuming, the dummies' made-up context filling and compacting, and a front end following it. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ClaudeCodeProcessTests` check the pipes to a real child process, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
+`ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `ContextTests` follow how full a session is: Claude Code asked where it compacts when it starts, after each turn and after compacting, one question at a time, answers to other requests ignored, auto-compact off, the whole window from the turn's `modelUsage` when Claude Code won't say, the tokens on the character's own replies and not its helpers', the same reading not said twice, starting over and resuming, the dummies' made-up context filling and compacting, and a front end following it. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ModelTests` follow each character's model: the agents file's with `--model`, kept when resumed, Claude Code's default for one without, switching while it runs (`set_model`, and the full id in its answer going to the ring), a switch Claude Code refuses going back, switching while it isn't running and while it waits for you, starting over keeping it, `models.json` keeping it until the agents file changes, the versions asked of a Claude Code with nothing to do, plain names without an answer, and a front end switching a dummy's model and refused a name it doesn't know. `ClaudeCodeProcessTests` check the pipes to a real child process, that the launcher adds no arguments of its own, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Conservationist's foals, bears, polar bears, birds, unicorns, pegasuses and dinosaurs and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the keeper being told where the house is, the keeper being told about every animal the app draws, and a front end seeing a restaurant and an oak appear.
 
 `VoiceModelTests` fetch a voice model's files from the address the client package gives, names with spaces in them included, and check that nothing outside it, and no hidden file, is served, and that a server without a model has nothing to fetch.
 
-`CastTests` read the agents file: the shipped one and what is in it, every field, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Flamingo Engineer, the Team Lead and its recruiter, the App Engineer in the shipped file once its comments are taken off, adding an agent (after the last one, leaving the others and the comments as they are, and refusing one whose id or name is taken or whose fields are wrong, without touching the file), the `add-agent` command, `ALIFE_AGENTS_FILE` and the checkout's agents file, and a server with a cast of its own.
+`CastTests` read the agents file: the shipped one and what is in it, each shipped character's model, every field, the four models a character or its helper can have, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Flamingo Engineer, the Team Lead and its recruiter, the App Engineer in the shipped file once its comments are taken off, adding an agent (after the last one, leaving the others and the comments as they are, and refusing one whose id or name is taken or whose fields are wrong, without touching the file), the `add-agent` command, `ALIFE_AGENTS_FILE` and the checkout's agents file, and a server with a cast of its own.
 
-One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It costs a little, so it only runs when asked:
+One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It runs on the Builder's model, `haiku`, and costs a little, so it only runs when asked:
 
 ```sh
-ALIFE_LIVE_CLAUDE=1 ALIFE_CLAUDE_MODEL=haiku swift test --filter LiveClaudeCodeTests
+ALIFE_LIVE_CLAUDE=1 swift test --filter LiveClaudeCodeTests
 ```

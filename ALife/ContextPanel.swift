@@ -4,16 +4,21 @@ import SwiftUI
 /// The small panel under the usage panel at the top left with how full the
 /// Claude Code session of the character you're talking to is: a ring with
 /// how far it is to where Claude Code compacts the conversation by itself
-/// (or, if it doesn't, to the end of the window), the tokens, and the model
-/// playing it. It follows the character you pick, and fills as it works.
+/// (or, if it doesn't, to the end of the window), the tokens, whose they
+/// are, and on a line of its own the model playing it, with its version,
+/// such as "Opus 5.5": the one Claude Code says it runs on, or before it
+/// has started, the one it will. It follows the character you pick, and
+/// fills as it works.
 struct ContextPanel: View {
+    @Environment(ServerConnection.self) private var server
     @Environment(\.shirts) private var shirts
     let session: AgentSession
 
     var body: some View {
         let context = session.context
-        // Laid out as the usage panel is, so the two are the same size: the
-        // tokens, then whose they are and the model, on one line.
+        let model = session.modelName(among: server.models)
+        // Laid out as the usage panel is: the tokens, then whose they are,
+        // then the model.
         TopLeftPanel(
             ring: ShareRing(
                 share: context?.share,
@@ -28,12 +33,13 @@ struct ContextPanel: View {
                 Circle()
                     .fill(shirt)
                     .frame(width: 6, height: 6)
-                Text([session.name, context?.modelName].compactMap { $0 }.joined(separator: " · "))
+                Text(session.name)
             }
+            Text(model)
         }
         .animation(.easeInOut, value: context)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityText(context))
+        .accessibilityLabel(accessibilityText(context, model: model))
     }
 
     /// What the tokens come to, to show; shorter on a narrow screen.
@@ -58,8 +64,8 @@ struct ContextPanel: View {
         #endif
     }
 
-    private func accessibilityText(_ context: SessionContext?) -> String {
-        guard let context else { return "\(session.name)'s context: not started" }
+    private func accessibilityText(_ context: SessionContext?, model: String) -> String {
+        guard let context else { return "\(session.name)'s context: not started, \(model)" }
         var parts = ["\(session.name)'s context"]
         switch (context.measure, context.percent) {
         case (.compaction, let percent?): parts.append("\(percent) percent of the way to compacting")
@@ -67,7 +73,7 @@ struct ContextPanel: View {
         default: break
         }
         if let tokens = context.spokenTokens { parts.append(tokens) }
-        if let model = context.modelName { parts.append(model) }
+        parts.append(model)
         return parts.joined(separator: ", ")
     }
 }

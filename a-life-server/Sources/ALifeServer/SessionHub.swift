@@ -14,12 +14,18 @@ actor SessionHub {
     private var nextSeq = 1
     private var streams: [UUID: AsyncStream<EventEnvelope>.Continuation] = [:]
 
-    init(id: String, name: String, color: String? = nil) {
+    /// `model` is the one the character runs on to begin with, and
+    /// `fileModel` the one the agents file gives it.
+    init(id: String, name: String, color: String? = nil, model: ClaudeModel? = nil, fileModel: ClaudeModel? = nil) {
         state = SessionState(id: id, name: name, color: color)
+        state.model = model
+        state.fileModel = fileModel
     }
 
     /// Ends the current conversation and begins an empty one. Auto approve
-    /// stays as it was: it is the session's, not the conversation's.
+    /// and the model stay as they were: they are the session's, not the
+    /// conversation's, so they are said again, for the new conversation's
+    /// events to say all there is.
     func startConversation() {
         let autoApprove = state.autoApprove
         log = [] // older events belong to a conversation nobody can ask for any more
@@ -27,12 +33,22 @@ actor SessionHub {
         if autoApprove {
             emit(.autoApproveChanged(true))
         }
+        if state.model != nil || state.fileModel != nil {
+            emit(.modelChanged(state.model, fileModel: state.fileModel))
+        }
     }
 
     /// Turns auto approve on or off, saying so only if that changes it.
     func setAutoApprove(_ enabled: Bool) {
         guard state.autoApprove != enabled else { return }
         emit(.autoApproveChanged(enabled))
+    }
+
+    /// Says which model the character runs on now, only if that changes it.
+    /// It stays when the conversation starts over.
+    func setModel(_ model: ClaudeModel?) {
+        guard state.model != model else { return }
+        emit(.modelChanged(model, fileModel: state.fileModel))
     }
 
     func emit(_ event: SessionEvent) {

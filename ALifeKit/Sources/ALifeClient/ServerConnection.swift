@@ -36,6 +36,10 @@ public final class ServerConnection {
     /// heard. No window until the server has read one, and for servers from
     /// before it told.
     public private(set) var usage = Usage()
+    /// The models a character can be switched to, strongest first, for the
+    /// model picker. Empty until the server says, and for servers from before
+    /// characters had models.
+    public private(set) var models: [ModelOption] = []
     /// What the characters have been up to, to look back on, including what
     /// they did while you were away.
     public let log: EventLog
@@ -111,6 +115,7 @@ public final class ServerConnection {
         sessions = []
         lot = Lot()
         usage = Usage()
+        models = []
         log.clear()
         connect()
         return true
@@ -136,6 +141,13 @@ public final class ServerConnection {
                 let listed = try await client.sessions()
                 try Task.checkCancellation() // disconnected meanwhile
                 adopt(listed)
+                // The models, which the server may take a few seconds to
+                // learn when it has just started, so they don't hold up the
+                // rest.
+                Task { [weak self] in
+                    guard let models = try? await client.models(), !models.isEmpty else { return }
+                    if self?.models != models { self?.models = models }
+                }
                 // The server replays what this front end missed of each
                 // session, then goes live.
                 var streams: [(AgentSession, AsyncThrowingStream<EventEnvelope, Error>)] = []

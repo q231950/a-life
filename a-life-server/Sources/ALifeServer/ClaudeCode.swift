@@ -34,8 +34,6 @@ struct ClaudeCode: ClaudeCodeLauncher {
     /// such as the Engineer: a checkout of the a*life repository. `nil` if
     /// there is none, and then they can't start.
     var repository: URL?
-    /// The model for every character, or `nil` for Claude Code's default.
-    var model: String?
     /// The clone of each project that is a git repository, by the id of the
     /// character who works on it, or why there isn't one: see `checkOut`.
     /// For a project of several repositories, the directory their clones
@@ -92,8 +90,6 @@ struct ClaudeCode: ClaudeCodeLauncher {
         if let agentsFile { environment["ALIFE_AGENTS_FILE"] = agentsFile.path }
         if let serverCommand { environment["ALIFE_SERVER_COMMAND"] = serverCommand.path }
 
-        var arguments = arguments
-        if let model { arguments += ["--model", model] }
         return try ClaudeCodeProcess(
             executable: executable,
             arguments: arguments,

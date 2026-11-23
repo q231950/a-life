@@ -16,8 +16,6 @@ enum Players: Sendable {
     ///   a*life work in, such as the Engineer. The checkout the server was
     ///   built from unless set.
     /// - `ALIFE_CLAUDE_PATH`: the `claude` command, if it isn't on the `PATH`.
-    /// - `ALIFE_CLAUDE_MODEL`: the model for every character, such as
-    ///   `sonnet`. Claude Code's own default unless set.
     /// - `ALIFE_PROJECTS_DIR`: where the projects that are git repositories
     ///   are cloned, a directory per character. `~/a-life-projects` unless set.
     ///
@@ -25,6 +23,10 @@ enum Players: Sendable {
     /// each character works.
     static func fromEnvironment(for cast: [Character], lot: URL, logger: Logger) throws -> Players {
         let environment = ProcessInfo.processInfo.environment
+        if let model = environment["ALIFE_CLAUDE_MODEL"], !model.isEmpty {
+            // It chose the model for every character, before each had its own.
+            logger.warning("ALIFE_CLAUDE_MODEL (\(model)) isn't read any more: give each agent a model in the agents file, or choose one in the app")
+        }
         switch environment["ALIFE_BACKEND"]?.lowercased() ?? "claude" {
         case "dummy", "dummies":
             return .dummies(step: .milliseconds(1500))
@@ -36,9 +38,8 @@ enum Players: Sendable {
                 )
             }
             let repository = try ClaudeCode.findRepository(in: environment)
-            let model = environment["ALIFE_CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 }
             logger.notice("The characters are Claude Code sessions (\(executable.path))")
-            var claudeCode = ClaudeCode(executable: executable, lot: lot, repository: repository, model: model)
+            var claudeCode = ClaudeCode(executable: executable, lot: lot, repository: repository)
             // So the Team Lead can add agents to the cast.
             claudeCode.agentsFile = Cast.file(in: environment)
             claudeCode.serverCommand = Bundle.main.executableURL
@@ -117,7 +118,8 @@ enum Players: Sendable {
 
     /// Where the server keeps what it must remember between starts, such as
     /// the characters waiting for the usage limit to reset
-    /// (`continues.json`) and the last usage reading (`usage.json`):
+    /// (`continues.json`), the last usage reading (`usage.json`) and the
+    /// models chosen in the app (`models.json`):
     /// `ALIFE_STATE_DIR`, or `~/a-life-state` unless it
     /// is set. It is made when there is something to keep.
     static func stateDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -208,14 +210,32 @@ func configure(
         app.logger.notice("The last usage reading, from \(file.path): \(window.utilization.map { "\(Int(($0 * 100).rounded()))%" } ?? "unknown") used, resetting at \(window.resetsAt)")
     }
 
+    // The models chosen in the app, which outlast a restart; the dummies'
+    // aren't kept. And which versions the models stand for, as the
+    // server's Claude Code says.
+    var choicesFile: URL?
+    if case .claudeCode = players { choicesFile = stateDirectory?.appendingPathComponent("models.json") }
+    let choices = ModelChoices(file: choicesFile, logger: app.logger)
+    let models = ModelCatalog()
+    if case .claudeCode(let claudeCode) = players {
+        await models.ask(claudeCode, logger: app.logger)
+    }
+
     var sessions: [HostedSession] = []
     for character in cast {
-        let hub = SessionHub(id: character.id, name: character.name, color: character.color)
+        let model = await choices.model(for: character)
+        if model != character.model, let model {
+            app.logger.notice("\(character.name) runs on \(model.rawValue), as chosen in the app, rather than the agents file's \(character.model?.rawValue ?? "default")")
+        }
+        let hub = SessionHub(id: character.id, name: character.name, color: character.color, model: model, fileModel: character.model)
         // The one place that chooses what plays each character.
         let backend: any SessionBackend
         switch players {
         case .claudeCode(let claudeCode):
-            backend = ClaudeCharacter(character, hub: hub, claudeCode: claudeCode, logger: app.logger, continues: continues, usage: usage)
+            backend = ClaudeCharacter(
+                character, hub: hub, claudeCode: claudeCode, logger: app.logger, continues: continues, usage: usage,
+                model: model, choices: choices, models: models
+            )
         case .dummies(let step):
             backend = DummyCharacter(character, hub: hub, step: step, usage: usage)
         }
@@ -227,7 +247,7 @@ func configure(
     }
 
     app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot, usage: usage))
-    routes(app, sessions: sessions, lot: lot, usage: usage, voice: voiceDirectory)
+    routes(app, sessions: sessions, lot: lot, usage: usage, models: models, voice: voiceDirectory)
 }
 
 /// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the

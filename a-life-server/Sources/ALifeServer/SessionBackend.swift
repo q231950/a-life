@@ -19,6 +19,11 @@ protocol SessionBackend: Sendable {
     /// call that asks is allowed straight away and settled as
     /// `autoApproved`; turning it on settles any waiting that way, too.
     func setAutoApprove(_ enabled: Bool) async
+    /// Changes the model the character runs on: at once if its session is
+    /// running, or else from its next start. `nil` goes back to the agents
+    /// file's. Kept across starting over, and, for a Claude Code session,
+    /// across a restart of the server.
+    func setModel(_ model: ClaudeModel?) async throws
     /// Drops the conversation and begins an empty one.
     func reset() async
     /// The server is stopping: stops anything the session runs.

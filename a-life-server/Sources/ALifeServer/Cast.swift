@@ -1,3 +1,4 @@
+import ALifeAPI
 import Foundation
 import Yams
 
@@ -18,6 +19,9 @@ struct Character: Equatable, Sendable {
     /// Claude Code's permission mode for the character's session, which
     /// decides what it asks you about before it goes ahead.
     let permissionMode: String
+    /// The model Claude Code plays the character on, unless it is changed in
+    /// a front end's model picker. `nil` is Claude Code's own default.
+    let model: ClaudeModel?
     /// Where the character's session works: on the lot, on a*life itself, or
     /// on a project of your own.
     let workspace: Workspace
@@ -100,14 +104,17 @@ struct Helper: Equatable, Sendable {
     /// The helper's own system prompt.
     let prompt: String
     let tools: [String]
+    /// The model it runs on, or `nil` for its character's, whatever that is
+    /// at the time.
+    let model: ClaudeModel?
 
-    /// The `--agents` entry for it. It runs on its character's model.
+    /// The `--agents` entry for it.
     var definition: JSONValue {
         [
             "description": .string(description),
             "prompt": .string(prompt),
             "tools": .array(tools.map(JSONValue.string)),
-            "model": "inherit",
+            "model": .string(model?.rawValue ?? "inherit"),
         ]
     }
 }
@@ -410,6 +417,7 @@ private struct AgentEntry: Decodable {
     enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, color
         case permissionMode = "permission_mode"
+        case model
         case worksIn = "works_in"
         case project
         case changesThings = "changes_things"
@@ -435,6 +443,8 @@ private struct AgentEntry: Decodable {
                 "\"\(permissionMode)\" isn't one of Claude Code's permission modes: \(Cast.permissionModes.joined(separator: ", "))."
             )
         }
+
+        let model = try checkModel(container, .model, otherwise: "for Claude Code's own default")
 
         let worksIn = try container.optional(String.self, .worksIn)
         var workspace: Workspace
@@ -463,6 +473,7 @@ private struct AgentEntry: Decodable {
             color: color,
             changesThings: try container.optional(Bool.self, .changesThings) ?? false,
             permissionMode: permissionMode,
+            model: model,
             workspace: workspace,
             role: try container.text(.role),
             helper: try container.decode(HelperEntry.self, forKey: .helper).helper
@@ -651,7 +662,7 @@ private struct HelperEntry: Decodable {
     let helper: Helper
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case name, tools, description, prompt
+        case name, tools, model, description, prompt
     }
 
     init(from decoder: any Decoder) throws {
@@ -671,11 +682,14 @@ private struct HelperEntry: Decodable {
             throw FieldError(container.codingPath + [CodingKeys.tools, ListIndex(blank)], "is empty.")
         }
 
+        let model = try checkModel(container, .model, otherwise: "to run it on its character's model")
+
         helper = Helper(
             name: name,
             description: try container.text(.description),
             prompt: try container.text(.prompt),
-            tools: tools
+            tools: tools,
+            model: model
         )
     }
 }
@@ -688,6 +702,20 @@ private func checkName(_ name: String, at codingPath: [any CodingKey], what: Str
     guard allowed, name.first != "-" else {
         throw FieldError(codingPath, "\"\(name)\" won't do. \(what) has only lowercase letters, digits and hyphens, such as \"\(example)\".")
     }
+}
+
+/// The model a `model` field names, if it is there: one of the simple names
+/// in `ClaudeModel`, such as `opus`. Anything else is refused, saying which
+/// names there are.
+private func checkModel<Key: CodingKey>(_ container: KeyedDecodingContainer<Key>, _ key: Key, otherwise: String) throws -> ClaudeModel? {
+    guard let name = try container.optional(String.self, key)?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+    guard let model = ClaudeModel(rawValue: name) else {
+        throw FieldError(
+            container.codingPath + [key],
+            "\"\(name)\" isn't one of the models a character can run on: \(ClaudeModel.names). Leave it out \(otherwise)."
+        )
+    }
+    return model
 }
 
 /// Refuses a field the decoder doesn't know, which is most likely a typo
