@@ -3,6 +3,9 @@ import ALifeClient
 @testable import ALifeServer
 import Vapor
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// How full a character's context is, and the model playing it: asked of
 /// Claude Code and followed from its replies, made up by the dummies, and

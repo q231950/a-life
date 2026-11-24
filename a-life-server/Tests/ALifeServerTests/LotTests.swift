@@ -287,7 +287,11 @@ final class LotTests: XCTestCase {
     func testTheFrontEndsSeeWhatIsBuiltAndPlanted() async throws {
         try write(restaurant, to: "buildings/restaurant.md")
 
-        let app = try await Application.make(.testing)
+        // Arguments of its own, rather than `.testing`'s, which some test
+
+        // runners leave the test bundle in, for Vapor to take as a command.
+
+        let app = try await Application.make(Environment(name: "testing", arguments: ["vapor"]))
         do {
             try await configure(app, players: .dummies(step: .milliseconds(20)), lotDirectory: lot, lotSurveyInterval: .milliseconds(20))
             app.http.server.configuration.hostname = "127.0.0.1"

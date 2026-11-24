@@ -1,8 +1,8 @@
 # a-life-server
 
-The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) server meant to run on your own Mac and be reached over [Tailscale](https://tailscale.com).
+The backend the a*life front ends talk to. It is a [Vapor](https://vapor.codes) server meant to run on your own Mac, or on a Linux server of your own (see [Run it on a server](#run-it-on-a-server)), and be reached over [Tailscale](https://tailscale.com).
 
-It holds one session per character on the lot. **Each character is a Claude Code session of its own**, run by the Claude Code installed on your Mac: its conversation, what it is doing, the helpers (subagents) it has sent off, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
+It holds one session per character on the lot. **Each character is a Claude Code session of its own**, run by the Claude Code installed where the server runs: its conversation, what it is doing, the helpers (subagents) it has sent off, and any tool call it is waiting on you to allow. Front ends follow every session over a stream of events, and talk to each character directly. No character coordinates the others; that's up to you.
 
 The characters work on a *lot*: a directory they share, `~/a-life-lot` unless you say otherwise. The Builder's buildings and the Conservationist's beds are Markdown files in it, and the server sends the front ends what stands where, so a restaurant the Builder builds appears on the lot in the app. See [The lot](#the-lot). The Engineer works on a\*life itself instead, in your a\*life checkout. See [The characters](#the-characters).
 
@@ -10,7 +10,7 @@ If you'd rather not spend tokens, the server can also run dummy characters that 
 
 ## Run it
 
-You need Swift 6 (Xcode 16 or later) on macOS 14 or later, and [Claude Code](https://code.claude.com) installed and logged in: `claude` in a terminal should start a session. The characters use that login and its settings, each on the model the [agents file](#the-agents-file) gives it (which the app's model picker can change), and what they do counts towards your usage like any other Claude Code session.
+You need Swift 6 (Xcode 16 or later) on macOS 14 or later, or Swift 6 on Linux, and [Claude Code](https://code.claude.com) installed and logged in: `claude` in a terminal should start a session. The characters use that login and its settings, each on the model the [agents file](#the-agents-file) gives it (which the app's model picker can change), and what they do counts towards your usage like any other Claude Code session.
 
 ```sh
 cd a-life-server
@@ -74,7 +74,7 @@ All optional, as environment variables:
 |---|---|
 | `ALIFE_LOT_DIR` | The directory the characters work in, and whose buildings and beds the front ends show. `~/a-life-lot` unless set; it is made if it isn't there. The dummy characters don't change it, but the front ends still show what's on it. |
 | `ALIFE_REPO_DIR` | The a\*life checkout the Engineer works in. The checkout the server was built from unless set. See [The Engineer and the a\*life checkout](#the-engineer-and-the-alife-checkout). |
-| `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself. |
+| `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself on the `PATH`, in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` or npm's global `bin`. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
@@ -131,6 +131,213 @@ Then use `http://100.101.102.103:8080` in the app. The app allows plain HTTP to 
 ### On the same Mac
 
 The macOS app and the iOS simulator can use `http://localhost:8080` with no Tailscale involved. The settings have a button for it.
+
+## Run it on a server
+
+The server can run on a Linux server of your own rather than on your Mac, so that the characters carry on while your Mac is asleep or away. It is the same server, reached the same way, over your tailnet. These steps use a [DigitalOcean](https://www.digitalocean.com) droplet with Ubuntu LTS and Docker, but any Linux machine you can install Docker and Tailscale on will do. If you'd rather not use Docker, see [Without Docker](#without-docker).
+
+**One person, one server.** a\*life isn't a shared service. Everyone who uses it runs their own server, on their own tailnet, with their own Claude subscription. The server has no accounts and no login: whoever can reach it is you, as far as it knows. Read [Keep it to yourself](#keep-it-to-yourself) before you start.
+
+### 1. Make a droplet
+
+In DigitalOcean, create a droplet:
+
+- **Image**: Ubuntu, the latest LTS (24.04 at the time of writing).
+- **Size**: about 4 GB of memory. Each character's session is a Claude Code process of its own, which keeps running between turns, so several characters at once need room; building the server needs some too.
+- **Authentication**: your SSH key.
+
+Log in to it, and add some swap, so that building the server doesn't run out of memory:
+
+```sh
+ssh root@<the droplet's address>
+fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+Nothing on the droplet needs to be reachable from the internet but SSH. A DigitalOcean cloud firewall that lets in SSH and nothing else is a good idea; the server's port is never published there anyway (see below).
+
+### 2. Install Docker and Tailscale
+
+```sh
+curl -fsSL https://get.docker.com | sh
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up
+```
+
+`tailscale up` prints a link: open it and sign the droplet in to your tailnet, the same one as the devices you run the app on. In the Tailscale admin console, on the DNS page, turn on **MagicDNS** and **HTTPS Certificates**, if you haven't already for your Mac.
+
+### 3. Get your Claude token
+
+The characters run on your Claude Pro or Max subscription. On your own computer, where Claude Code is installed and logged in, run:
+
+```sh
+claude setup-token
+```
+
+It has you log in in the browser and prints a long-lived token, starting `sk-ant-oat`. That token is your subscription: keep it secret, and don't put it anywhere but the server's `.env` below.
+
+### 4. Get a\*life and fill in `.env`
+
+On the droplet:
+
+```sh
+git clone https://github.com/q231950/a-life.git
+cd a-life/a-life-server
+cp .env.example .env
+chmod 600 .env
+nano .env
+```
+
+Put your token after `CLAUDE_CODE_OAUTH_TOKEN=`. The other settings in [`.env.example`](.env.example) are optional: a GitHub token for the characters who work on repositories (see [Git on the server](#git-on-the-server)), who they commit as, and the a\*life repository the Engineer works on. `.env` stays on the droplet: git leaves it out.
+
+### 5. Start it
+
+```sh
+docker compose up -d
+docker compose logs -f
+```
+
+The first start builds the server's image, which takes a while: it builds the server with Swift, then puts it, Node, [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code) and git into a small image to run in. Once it's up, the log says who is on the lot and where each character works; press Ctrl-C to stop following it. Check it:
+
+```sh
+curl http://127.0.0.1:8080/health
+# {"status":"ok"}
+```
+
+It starts again by itself after a reboot, or if it stops.
+
+### 6. Fetch the voice model
+
+For the characters to speak (see [Voices](#voices)), fetch the voice model into the server's voice volume, and restart it:
+
+```sh
+docker compose exec a-life fetch-voice.sh
+docker compose restart
+```
+
+### 7. Share it with your tailnet
+
+```sh
+tailscale serve --bg 8080
+```
+
+It prints the address, which looks like `https://my-droplet.my-tailnet.ts.net`. From a device on your tailnet, open `https://my-droplet.my-tailnet.ts.net/health` to check it. Then, in the app, open the settings (the gear at the top), enter that address and press **Connect**.
+
+### What it keeps, and where
+
+The server runs as the user `alife` in its container, never root, and keeps everything that matters on Docker volumes, so that it outlasts a new image:
+
+| Volume | In the container | What's in it |
+|---|---|---|
+| `lot` | `/home/alife/a-life-lot` | The lot: what the characters build and plant. |
+| `state` | `/home/alife/a-life-state` | Who is waiting for the usage limit, the last usage reading, and the models chosen in the app. |
+| `voice` | `/home/alife/a-life-voice` | The voice model. |
+| `projects` | `/home/alife/a-life-projects` | The clones of the projects the characters work on. |
+| `checkout` | `/home/alife/a-life` | The Engineer's a\*life checkout. |
+| `cast` | `/home/alife/a-life-cast` | The agents file. |
+| `claude` | `/home/alife/.claude` | Claude Code's settings and sessions (`CLAUDE_CONFIG_DIR`), so that a session can be resumed after a restart. |
+
+**The agents file** is copied from the one the server ships with the first time it starts, into the `cast` volume, and is yours from then on: the Team Lead adds agents to it, and a new image doesn't change it. To edit it, take a copy out, change it, and put it back:
+
+```sh
+docker compose exec a-life cat /home/alife/a-life-cast/agents.yaml > agents.yaml
+nano agents.yaml
+docker compose exec -T a-life sh -c 'cat > /home/alife/a-life-cast/agents.yaml' < agents.yaml
+docker compose restart
+```
+
+The shipped cast has characters for the repo owner's own projects, such as the Flamingo Engineer. They can't clone repositories that aren't yours, so they say why when you talk to them, and the others carry on; take them out of your agents file, or point them at projects of your own (see [A character for another project](#a-character-for-another-project)).
+
+### Git on the server
+
+The characters who work on repositories clone, fetch and push with git on the server, which has none of your Mac's keys. Give it access to only the repositories they work on:
+
+- **A fine-grained GitHub token** is the simplest. On GitHub, under Settings, Developer settings, Personal access tokens, Fine-grained tokens, make one with access to only those repositories, and **Contents: Read and write** (Read is enough if they never push). Put it in `.env` as `GITHUB_TOKEN`. The container then has git use it for every GitHub address, the ssh ones in the agents file (`git@github.com:you/my-app.git`) as well as https ones, without writing it to a file. The characters' sessions can use it too, which is the point: keep its access to what they need.
+- **A deploy key** works as well, for a single repository: an SSH key made on the server, added to the repository under Settings, Deploy keys (with write access if they push). A deploy key only opens one repository, so for several, use the token. With Docker, the key has to be in the container user's `~/.ssh`; the token is easier.
+
+To have them commit as you, set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in `.env`.
+
+**The Engineer** works on a\*life in the server's own a\*life checkout, since your Mac's isn't there. The container clones it the first time it starts, from `ALIFE_REPO_URL` (the a\*life repository on GitHub unless you set it) into the `checkout` volume (`ALIFE_REPO_DIR`), and uses it as it is after that. To have the Engineer push its work, point `ALIFE_REPO_URL` at your own fork, and give your GitHub token access to it. To start afresh, remove the volume (`docker compose down`, then `docker volume rm a-life-server_checkout`) and start it again. The image has no Swift in it, so the Engineer's a\*life expert can change the code there but can't build it or run its tests; [Without Docker](#without-docker), with Swift installed, it can.
+
+### Updating
+
+```sh
+cd ~/a-life
+git pull
+cd a-life-server
+docker compose up -d --build
+```
+
+That builds the server again from the new code and starts it, keeping the volumes. The Claude Code in the image is the one that was newest when the image was built, and doesn't update itself; to fetch a newer one, build it from scratch with `docker compose build --no-cache` and then `docker compose up -d`. Your agents file and the Engineer's checkout aren't changed by an update.
+
+### Backups
+
+What you'd miss is on the volumes, above all `lot`, `cast` and `state`, and the clones in `projects` with work you haven't pushed. To back them all up into the current directory, stop the server for a moment and pack each one:
+
+```sh
+docker compose stop
+for volume in lot state voice projects checkout cast claude; do
+  docker run --rm -v "a-life-server_$volume:/data:ro" -v "$PWD:/backup" debian:bookworm-slim \
+    tar czf "/backup/a-life-$volume.tar.gz" -C /data .
+done
+docker compose start
+```
+
+Copy the archives somewhere off the droplet. `claude` has the characters' conversations in it, so keep the backups as private as the server. DigitalOcean's own droplet backups cover the volumes too. To restore one, unpack it into the volume the same way, with `tar xzf` in place of `tar czf`.
+
+### Keep it to yourself
+
+- **There is no login.** Anyone who can reach the server can tell the characters what to do and answer their approvals, so they can have it run commands on the droplet, with your Claude subscription, and your GitHub token if it has one.
+- **Keep it on your tailnet.** `docker-compose.yml` publishes the server's port on the droplet's `127.0.0.1` only, so nothing outside the droplet reaches it but through `tailscale serve`. Don't change that to `8080:8080` or `0.0.0.0`: Docker opens a published port to the internet, past `ufw`. And never use `tailscale funnel` for it: that publishes it to the whole internet. If others share your tailnet, Tailscale's access rules can keep them away from the droplet.
+- **Your token is yours alone.** The server runs on your Claude subscription, so don't share your instance or your token with anyone; let them run a server of their own. Keep `.env` readable only by you (`chmod 600 .env`), and if the token gets out, revoke it in your Claude account and make a new one.
+
+### Without Docker
+
+The server also runs straight on the droplet, under systemd, as a user of its own. Then it is much as on a Mac: the Engineer works in the checkout the server was built from, and the agents file is that checkout's.
+
+1. Make the user, and install git, Node 18 or later, and Claude Code:
+
+   ```sh
+   adduser --disabled-password --gecos '' alife
+   apt-get install -y git curl unzip nodejs npm
+   npm install -g @anthropic-ai/claude-code
+   ```
+
+2. Install Swift 6 for the user `alife`, as [swift.org](https://www.swift.org/install/linux/) describes.
+
+3. As `alife` (`su - alife`), get a\*life, build the server and fetch the voice model:
+
+   ```sh
+   git clone https://github.com/q231950/a-life.git ~/a-life
+   swift build --package-path ~/a-life/a-life-server -c release --static-swift-stdlib
+   ~/a-life/a-life-server/fetch-voice.sh
+   ```
+
+   `--static-swift-stdlib` builds the Swift runtime into the server, so it doesn't depend on the Swift you built it with staying where it is.
+
+4. Put the settings in `/home/alife/a-life.env`, as in [`.env.example`](.env.example), with at least `CLAUDE_CODE_OAUTH_TOKEN`, and keep it to `alife`: `chmod 600 /home/alife/a-life.env`. The lot, the state, the voice model and the projects go in `alife`'s home, as on a Mac (see [Settings](#settings)).
+
+5. As root, install [`deploy/a-life-server.service`](deploy/a-life-server.service), which runs the server as `alife`, listening on `127.0.0.1:8080` only, and start it:
+
+   ```sh
+   cp /home/alife/a-life/a-life-server/deploy/a-life-server.service /etc/systemd/system/
+   systemctl daemon-reload
+   systemctl enable --now a-life-server
+   journalctl -u a-life-server -f
+   ```
+
+6. Share it with `tailscale serve --bg 8080`, as above.
+
+`GITHUB_TOKEN` only does anything in the container. Without Docker, give `alife` its own git access: an SSH key (`ssh-keygen` as `alife`) added as a deploy key to a repository, or for several, the fine-grained token through git's credential store:
+
+```sh
+git config --global credential.helper store
+printf 'https://x-access-token:%s@github.com\n' '<your token>' > ~/.git-credentials
+chmod 600 ~/.git-credentials
+git config --global url."https://github.com/".insteadOf git@github.com:
+```
+
+To update, `git pull` in `~/a-life`, build it again, and `systemctl restart a-life-server`.
 
 ## The API
 
@@ -350,7 +557,7 @@ The Engineer doesn't work on the lot. It works on a\*life itself, the app, `ALif
 ALIFE_REPO_DIR=~/code/a-life-workshop swift run ALifeServer
 ```
 
-The server says where the Engineer works when it starts, or warns that it can't find a checkout; the Engineer can't start until it has one.
+The server says where the Engineer works when it starts, or warns that it can't find a checkout; the Engineer can't start until it has one. On a server of your own, it has a checkout there: see [Git on the server](#git-on-the-server).
 
 Tell it "make the sheep jump when they take off" and it works out what's wanted and sends its a\*life expert off: the `a-life-expert` subagent, which knows a\*life inside out, from what each file of the app, the package and the server does to how the code and its READMEs are written and which tests cover what. The Engineer sends it for anything that changes a\*life, and answers questions about how a\*life works itself, by reading the code. The a\*life expert has Read, Glob, Grep, Write, Edit and Bash. It looks at `git status` first, so it doesn't undo changes of your own, makes the change with its tests, runs `swift test` for the packages it touched, and reports back what it changed and how the tests went. The Engineer's session runs in the `default` permission mode, so its changes and commands ask you first, labelled with who is asking (`a-life-expert: swift test --package-path a-life-server`).
 
@@ -577,13 +784,20 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `ClaudeCode.swift` | Finds the `claude` CLI and the a\*life checkout, clones the projects that are git repositories (one, or several side by side), starts the CLI where its character works, with the agents file and the server's command in its environment, and reads and writes its stream-json, one message per line. |
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in, with a made-up context that fills and compacts, and a model it takes from the picker but doesn't run on. |
-| `fetch-voice.sh` | Not in `Sources`: fetches the voice model into `ALIFE_VOICE_DIR`. See [Voices](#voices). |
+| `fetch-voice.sh` | Not in `Sources`: fetches the voice model into `ALIFE_VOICE_DIR`, on a Mac or on Linux. See [Voices](#voices). |
+| `Dockerfile` | Not in `Sources`: the server's image, built from the root of the checkout, with Node, Claude Code and git to run in. See [Run it on a server](#run-it-on-a-server). |
+| `docker-compose.yml` | Not in `Sources`: runs the image with its volumes, on `127.0.0.1:8080` only, with the settings in `.env`. |
+| `.env.example` | Not in `Sources`: the settings `.env` has for `docker-compose.yml`, above all your Claude token. |
+| `deploy/docker-entrypoint.sh` | Not in `Sources`: starts the server in its container, after setting git up with your GitHub token, cloning the Engineer's checkout and copying the agents file, the first time. |
+| `deploy/a-life-server.service` | Not in `Sources`: a systemd unit that runs the server as a user of its own, without Docker. See [Without Docker](#without-docker). |
 
 ## Tests
 
 ```sh
 swift test
 ```
+
+They run on macOS and on Linux; the pull request checks run them on both, and build the server's Docker image.
 
 The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
 

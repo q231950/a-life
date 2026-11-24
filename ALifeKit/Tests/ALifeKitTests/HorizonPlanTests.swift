@@ -1,4 +1,6 @@
+#if canImport(simd)
 import simd
+#endif
 import XCTest
 import ALifeAPI
 @testable import ALifeClient

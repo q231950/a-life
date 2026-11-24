@@ -1,6 +1,5 @@
 import ALifeAPI
 import Foundation
-import simd
 
 /// The lot in its box: four walls standing on the lot's edges, with a world
 /// painted on their insides, and a flat sky over the top. Behind the office,
@@ -122,11 +121,12 @@ public enum HorizonPlan {
         let extent = SIMD3<Float>(halfWidth, wallHeight / 2, halfWidth)
         var edges: [Edge] = []
         for (index, first) in sides.enumerated() {
-            for second in sides[(index + 1)...] where simd_dot(first, second) == 0 {
+            for second in sides[(index + 1)...] where (first * second).sum() == 0 {
                 // Back from the middle to both sides, and along the third
                 // way to both ends.
                 let corner = middle - first * extent - second * extent
-                let along = simd_abs(simd_cross(first, second))
+                let third = cross(first, second)
+                let along = third.replacing(with: -third, where: third .< 0)
                 edges.append(Edge(from: corner - along * extent, to: corner + along * extent, sides: (first, second)))
             }
         }
@@ -256,6 +256,12 @@ public enum HorizonPlan {
     private static func radians(_ degrees: Float) -> Float { degrees * .pi / 180 }
 
     private static func sign(_ value: Float) -> Float { value < 0 ? -1 : 1 }
+
+    /// The cross product, written out rather than taken from simd, which
+    /// Linux doesn't have, so the server's tests can build this package there.
+    private static func cross(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+    }
 
     /// How far apart two bearings are, from 0 to π.
     private static func angle(_ bearing: Float, from other: Float) -> Float {
