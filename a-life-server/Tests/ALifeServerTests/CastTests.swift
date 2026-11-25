@@ -40,47 +40,42 @@ final class CastTests: XCTestCase {
 
     // MARK: The shipped file
 
-    func testTheShippedFileStartsWithTheBuilderTheEngineerTheFlamingoEngineerAndTheTeamLead() throws {
+    func testTheShippedFileStartsWithTheBuilderTheEngineerAndTheTeamLead() throws {
         let cast = try Cast.load(contentsOf: Cast.shippedFile)
         // The Team Lead adds agents after the last one, so the file can grow,
-        // but these four always come first, as they are.
-        let founders = Array(cast.prefix(4))
-        XCTAssertEqual(founders.map(\.id), ["builder", "engineer", "flamingo-engineer", "team-lead"])
-        XCTAssertEqual(founders.map(\.name), ["Builder", "Engineer", "Flamingo Engineer", "Team Lead"])
-        XCTAssertEqual(founders.map(\.color), ["#F2A633", "#8050C8", "#F27BA8", "#2A9D8F"])
-        XCTAssertEqual(founders.map(\.permissionMode), ["default", "default", "default", "default"])
-        // The Engineer works on a*life itself, in its checkout, and the
-        // Flamingo Engineer on the three repositories of Flamingo Chess.
-        let flamingoChess = Project(id: "flamingo-engineer", source: .repositories([
-            Project.Repository(address: "git@github.com:q231950/flamingo.git"),
-            Project.Repository(address: "git@github.com:q231950/flamingo-chess-light.git"),
-            Project.Repository(address: "git@github.com:q231950/neoneon.git"),
-        ]))
-        XCTAssertEqual(founders.map(\.workspace), [.lot, .aLife, .project(flamingoChess), .lot])
-        XCTAssertEqual(founders.map(\.changesThings), [true, true, true, true])
+        // but these three always come first, as they are.
+        let founders = Array(cast.prefix(3))
+        XCTAssertEqual(founders.map(\.id), ["builder", "engineer", "team-lead"])
+        XCTAssertEqual(founders.map(\.name), ["Builder", "Engineer", "Team Lead"])
+        XCTAssertEqual(founders.map(\.color), ["#F2A633", "#8050C8", "#2A9D8F"])
+        XCTAssertEqual(founders.map(\.permissionMode), ["default", "default", "default"])
+        // The Engineer works on a*life itself, in its checkout.
+        XCTAssertEqual(founders.map(\.workspace), [.lot, .aLife, .lot])
+        XCTAssertEqual(founders.map(\.changesThings), [true, true, true])
         // Each runs on a model fit for its work, and the helpers on their
         // character's, but for the Apple Specialist's researcher.
         // (Agents added since may have any model, or none.)
         let models: [String: ClaudeModel] = [
-            "builder": .haiku, "conservationist": .haiku, "team-lead": .sonnet, "engineer": .opus, "flamingo-engineer": .opus,
-            "btlb-engineer": .opus, "lo-life": .opus, "apple-specialist": .opus,
+            "builder": .haiku, "conservationist": .haiku, "team-lead": .sonnet, "engineer": .opus, "apple-specialist": .opus,
         ]
         for (id, model) in models {
             let character = try XCTUnwrap(cast.first { $0.id == id }, id)
             XCTAssertEqual(character.model, model, id)
             XCTAssertEqual(character.helper.model, id == "apple-specialist" ? .sonnet : nil, id)
+            // The shipped characters work for anyone, on the lot or on
+            // a*life, with no project of someone's own to find or clone.
+            XCTAssertTrue([Workspace.lot, .aLife].contains(character.workspace), "\(id) has a project of its own")
         }
-        XCTAssertEqual(founders.map(\.helper.name), ["construction-worker", "a-life-expert", "flamingo-expert", "recruiter"])
+        XCTAssertEqual(founders.map(\.helper.name), ["construction-worker", "a-life-expert", "recruiter"])
         XCTAssertEqual(founders.map(\.helper.tools), [
             ["Read", "Glob", "Grep", "Write", "Edit"],
-            ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
             ["Read", "Glob", "Grep", "Write", "Edit", "Bash"],
             // The recruiter adds agents with the server's command, never by
             // writing the agents file itself.
             ["Read", "Glob", "Grep", "Bash"],
         ])
 
-        // Every agent, the four and any added since, has a name and a helper
+        // Every agent, the three and any added since, has a name and a helper
         // of its own, and a role and helper that say who they are.
         XCTAssertEqual(Set(cast.map(\.id)).count, cast.count)
         XCTAssertEqual(Set(cast.map(\.name)).count, cast.count)
@@ -108,17 +103,6 @@ final class CastTests: XCTestCase {
         XCTAssertTrue(expert.contains("\n1. Run git status first."))
         XCTAssertTrue(expert.contains("swift test --package-path a-life-server"))
         XCTAssertFalse(expert.contains("--cloud"))
-
-        // The Flamingo Engineer sends its expert for any change to Flamingo
-        // Chess, and the expert knows which checkout is which.
-        XCTAssertTrue(Character.flamingoEngineer.role.contains("`flamingo-expert`"))
-        XCTAssertTrue(Character.flamingoEngineer.helper.description.contains("Use it whenever Flamingo Chess is to be changed."))
-        let flamingoExpert = Character.flamingoEngineer.helper.prompt
-        for part in ["flamingo/ is the iOS app", "flamingo-chess-light/ is the app for the Light Phone", "neoneon/ is the server"] {
-            XCTAssertTrue(flamingoExpert.contains(part), "the Flamingo expert doesn't know \(part)")
-        }
-        XCTAssertTrue(flamingoExpert.contains("\n1. Run git status in each repository you'll touch, first."))
-        XCTAssertTrue(flamingoExpert.contains("Don't commit, push or switch branches"))
 
         // The Team Lead sends its recruiter to add agents, and leaves the
         // lot's work to the others; the recruiter adds them with the
@@ -293,6 +277,28 @@ final class CastTests: XCTestCase {
         XCTAssertFalse(again.added)
         XCTAssertEqual(again.said, "\(file.path): agents[2].id \"plumber\" is agents[1]'s id too. Each agent needs an id of its own.\nNothing was changed in \(file.path).")
         XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), before)
+    }
+
+    func testWithAnAgentsFileOfYourOwnANewAgentJoinsItAndNotTheShippedOne() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("my-agents.yaml")
+        try painter.write(to: file, atomically: true, encoding: .utf8)
+        let environment = ["ALIFE_AGENTS_FILE": file.path]
+        let checkout = try XCTUnwrap(Cast.checkoutFile)
+        let checkoutBefore = try String(contentsOf: checkout, encoding: .utf8)
+        let shippedBefore = try String(contentsOf: Cast.shippedFile, encoding: .utf8)
+
+        // The server reads the cast from, and tells its sessions about, the
+        // same file the command adds to.
+        XCTAssertEqual(Cast.file(in: environment), file)
+        XCTAssertTrue(AddAgent.run(entry: plumber, environment: environment).added)
+        XCTAssertEqual(try Cast.load(contentsOf: Cast.file(in: environment)).map(\.id), ["painter", "plumber"])
+
+        // The checkout's agents file, and the shipped copy, are as they were.
+        XCTAssertEqual(try String(contentsOf: checkout, encoding: .utf8), checkoutBefore)
+        XCTAssertEqual(try String(contentsOf: Cast.shippedFile, encoding: .utf8), shippedBefore)
     }
 
     // MARK: What a file says

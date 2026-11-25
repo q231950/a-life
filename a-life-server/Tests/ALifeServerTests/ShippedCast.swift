@@ -13,7 +13,6 @@ let shippedCast: [Character] = {
 extension Character {
     static var builder: Character { shipped("builder") }
     static var engineer: Character { shipped("engineer") }
-    static var flamingoEngineer: Character { shipped("flamingo-engineer") }
     static var teamLead: Character { shipped("team-lead") }
     static var conservationist: Character { shipped("conservationist") }
 
