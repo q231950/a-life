@@ -108,6 +108,13 @@ public final class EventLog {
         entries.filter(isUnseen)
     }
 
+    /// The unseen entries that happened while you were away, oldest first.
+    /// These are what the log button's badge counts; what the characters do
+    /// while you watch is logged, but not badged.
+    public var unseenWhileAway: [Entry] {
+        unseen.filter(\.isWhileAway)
+    }
+
     /// Marks everything logged so far as seen, now and on later launches.
     public func markSeen() {
         // By the newest entry's own clock, which is the server's for most,

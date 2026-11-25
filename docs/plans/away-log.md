@@ -53,7 +53,8 @@ marked seen or unseen across launches.
 
 - A button in the top bar (`SessionStatusBar`) opens the log as a sheet (or
   popover on macOS).
-- It shows a badge with the number of unseen entries.
+- It shows a badge with the number of unseen entries from while you were away (live entries
+  are logged but not badged).
 - The log lists entries newest first, grouped by character or as one timeline,
   with the "While you were away" entries highlighted at the top until seen.
 - Tapping an entry selects that character (opens its chat in the agent panel).
@@ -98,7 +99,7 @@ marked seen or unseen across launches.
   differences between the server and the device don't hide new entries.
   Changing servers clears the entries but not what you have seen.
 - **The button** is in the status pill on both platforms and opens a sheet
-  (`EventLogView`), with a red badge for unseen entries. Unseen entries from
+  (`EventLogView`), with a red badge for unseen entries from while you were away. Unseen entries from
   while you were away are picked out at the top until the sheet closes;
   opening it (and closing it) marks everything seen. Tapping an entry picks
   that character and unfolds the panel.
