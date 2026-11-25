@@ -8,6 +8,256 @@ The characters work on a *lot*: a directory they share, `~/a-life-lot` unless yo
 
 If you'd rather not spend tokens, the server can also run dummy characters that play a short script. See [The dummy characters](#the-dummy-characters).
 
+## Architecture
+
+### Who talks to whom
+
+The front ends never talk to Claude themselves. They talk to the server, over HTTPS on your tailnet, and the server runs one Claude Code CLI per character, which talks to the Anthropic API on your Claude subscription. Everything a character does comes back to the front ends as events on its session's stream.
+
+```mermaid
+flowchart TB
+    subgraph fronts["Front ends, on your devices"]
+        app["a*life app, iOS or macOS<br/>ALifeClient: ServerConnection,<br/>an AgentSession per character"]
+        curl["curl, or any HTTP client"]
+    end
+
+    serve["tailscale serve<br/>HTTPS on your tailnet"]
+
+    subgraph alife["a-life-server, Vapor, on 127.0.0.1:8080"]
+        routes["routes.swift<br/>/v1/sessions/..., /v1/lot, /v1/usage,<br/>/v1/models, /v1/voice/..."]
+        hub["SessionHub, one per character<br/>event log, snapshot, open streams"]
+        character["ClaudeCharacter, one per agent<br/>in agents.yaml"]
+        lothub["LotHub<br/>looks at the lot every second"]
+        usagehub["UsageHub<br/>the 5-hour usage window"]
+        models["ModelCatalog and ModelChoices"]
+    end
+
+    subgraph claudes["Claude Code, one process per character"]
+        cli["claude --print<br/>--input-format stream-json<br/>--output-format stream-json<br/>--permission-prompt-tool stdio<br/>--permission-mode<br/>--append-system-prompt, its role<br/>--agents, its helper<br/>--model<br/>--resume"]
+        helper["its helper, a subagent,<br/>in the same process"]
+    end
+
+    anthropic["Anthropic API<br/>your subscription's OAuth token,<br/>or the Mac's Claude Code login"]
+
+    subgraph disk["Files where the server runs"]
+        lot["the lot, ALIFE_LOT_DIR<br/>buildings/, garden/, lot.md"]
+        repos["the Engineer's a*life checkout, ALIFE_REPO_DIR<br/>the project clones, ALIFE_PROJECTS_DIR"]
+        state["ALIFE_STATE_DIR<br/>continues.json, usage.json, models.json"]
+        cast["agents.yaml, ALIFE_AGENTS_FILE"]
+        voice["the voice model, ALIFE_VOICE_DIR"]
+        claudedir["~/.claude<br/>Claude Code's settings and sessions"]
+    end
+
+    app -->|"HTTPS: requests, and server-sent events back"| serve
+    curl --> serve
+    serve -->|"HTTP to 127.0.0.1:8080"| routes
+    routes -->|"messages, approvals, interrupt,<br/>auto approve, model, reset"| character
+    routes <-->|"snapshots, and the /events streams"| hub
+    character -->|"hub.emit, one event per thing that happens"| hub
+    routes <-->|"/v1/lot and its stream"| lothub
+    routes <-->|"/v1/usage and its stream"| usagehub
+    routes --> models
+    routes -->|"/v1/voice/..."| voice
+    character -->|"the five_hour window of each rate_limit_event"| usagehub
+    character <-->|"stream-json, one message per line,<br/>on its stdin and stdout"| cli
+    models -.->|"initialize, for the models' versions"| cli
+    cli --- helper
+    cli -->|"HTTPS"| anthropic
+    helper -->|"writes buildings and beds"| lot
+    lothub -->|"reads buildings/ and garden/, writes lot.md"| lot
+    cli -->|"works in the lot, a*life or a project"| repos
+    cli --> claudedir
+    character --> state
+    usagehub --> state
+    models --> state
+    cast -->|"read once at the start,<br/>add-agent adds to it"| character
+```
+
+- **The front ends** use `ALifeClient`: a `ServerConnection` reads `GET /v1/sessions` to learn who is on the lot, opens one event stream per session, and follows `/v1/lot/events` and `/v1/usage/events` too. Each character is an `AgentSession`, which sends what you say and your answers as plain HTTP requests. See [The API](#the-api).
+- **The server** keeps a `SessionHub` per character, which holds its events and sends them to every stream that's open, and a backend per character that plays it: `ClaudeCharacter`, or the [dummies](#the-dummy-characters). See [How it fits together](#how-it-fits-together).
+- **Each character** is a `claude` process of its own, started with the first thing you say to it, in the directory it works in, and kept running between turns. Its helper is a subagent in that same process, defined with `--agents`. When a CLI has stopped, the next thing you say starts it again with `--resume`, in the same Claude Code session. See [The characters](#the-characters).
+- **The files** are all where the server runs: the lot the characters build and plant on, which `LotHub` reads every second; the checkouts and clones they work in; what the server remembers between starts; the agents file; the voice model; and Claude Code's own sessions.
+
+### One round trip
+
+Here you tell the Builder to build a restaurant. It sends its construction worker off, which asks before it writes the building, you allow it, and the restaurant appears on the lot. Every arrow back to the app is an event on one of the streams it follows.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant App as a*life app, ALifeClient
+    participant Routes as routes.swift
+    participant Builder as ClaudeCharacter, the Builder
+    participant Hub as SessionHub, builder
+    participant CLI as the Builder's claude CLI
+    participant API as Anthropic API
+    participant Lot as the lot directory
+    participant LotHub
+    participant Usage as UsageHub
+
+    App->>Routes: GET /v1/sessions/builder/events?after=n&conversation=id
+    App->>Routes: GET /v1/lot/events and GET /v1/usage/events
+    Note over App,Routes: The streams stay open, with a ping every 15 seconds
+
+    You->>App: Build me a restaurant
+    App->>Routes: POST /v1/sessions/builder/messages with the text
+    Routes->>Builder: handleMessage
+    Routes-->>App: 202 Accepted
+    Builder->>Hub: message from You, session.status running
+    Hub-->>App: message, session.status running
+    Builder->>CLI: starts it if it isn't running, with --resume if it ran before
+    Builder->>CLI: a user message, on its stdin
+    CLI->>API: the conversation so far
+    API-->>CLI: a call to the Agent tool, subagent_type construction-worker
+    CLI-->>Builder: an assistant message with that tool_use, on its stdout
+    Builder->>Hub: tool.used, subagent.started, session.activity agent
+    Hub-->>App: subagent.started, and a sheep pops up in the Builder's room
+
+    Note over CLI,API: The construction worker runs in the same CLI and calls the model itself
+    CLI-->>Builder: control_request can_use_tool, Write buildings/restaurant.md
+    Builder->>Hub: approval.requested, session.status idle requires_action
+    Hub-->>App: approval.requested, and a ! over the Builder
+    App->>You: Allow or Deny
+    You->>App: Allow
+    App->>Routes: POST /v1/sessions/builder/approvals/{approval id} with allow true
+    Routes->>Builder: decide
+    Routes-->>App: 202 Accepted
+    Builder->>CLI: control_response with behavior allow
+    Builder->>Hub: approval.resolved allowed, session.status running
+    Hub-->>App: approval.resolved, session.status running
+
+    CLI->>Lot: writes buildings/restaurant.md
+    loop every second
+        LotHub->>Lot: reads buildings/ and garden/, writes lot.md
+    end
+    LotHub-->>App: lot, and the restaurant appears
+
+    CLI-->>Builder: the Agent call's tool_result
+    Builder->>Hub: subagent.finished
+    Hub-->>App: subagent.finished, and the sheep pops
+    CLI->>API: the conversation, with the construction worker's report
+    API-->>CLI: the Builder's reply
+    CLI-->>Builder: an assistant message with the text
+    Builder->>Hub: message from the Builder
+    Hub-->>App: message
+    CLI-->>Builder: rate_limit_event, with unifiedWindows
+    Builder->>Usage: record, the five_hour window
+    Note over Usage: kept in usage.json
+    Usage-->>App: usage
+    CLI-->>Builder: result
+    Builder->>Hub: session.status idle end_turn
+    Builder->>CLI: control_request get_context_usage
+    CLI-->>Builder: control_response, how full the session is
+    Builder->>Hub: session.context
+    Hub-->>App: session.context
+```
+
+Claude Code writes a `rate_limit_event` whenever what it knows about the limits changes, which is on every turn, so the usage can arrive at any point in a turn, not only at the end. With auto approve on, nobody is asked: the server answers `can_use_tool` itself, straight after `approval.requested`, so steps 19 to 23 don't happen, the session stays `running`, and the approval is resolved as `auto_approved`. The table in [The characters](#the-characters) has the rest of how Claude Code's messages become events.
+
+### On a droplet
+
+This is the setup in [Run it on a server](#run-it-on-a-server): a DigitalOcean droplet, with the server in a Docker container, shared with your tailnet by `tailscale serve`. The container publishes its port on the droplet's `127.0.0.1` only, so nothing reaches the server but what comes in through Tailscale.
+
+```mermaid
+flowchart TB
+    subgraph tailnet["Your tailnet: the trust boundary. Whoever is in it can drive the characters"]
+        phone["iPhone or iPad<br/>a*life app"]
+        mac["Mac<br/>a*life app"]
+
+        subgraph droplet["DigitalOcean droplet, Ubuntu LTS"]
+            tailscaled["tailscaled, signed in to your tailnet<br/>tailscale serve --bg 8080<br/>https://my-droplet.my-tailnet.ts.net"]
+            loopback["127.0.0.1:8080 on the droplet<br/>the only port docker-compose.yml publishes"]
+            envfile[".env, chmod 600<br/>CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN,<br/>GIT_AUTHOR_NAME and the like, ALIFE_REPO_URL"]
+
+            subgraph container["Docker container a-life: user alife, never root, init: true, restart: unless-stopped"]
+                entry["deploy/docker-entrypoint.sh<br/>git uses GITHUB_TOKEN for github.com,<br/>clones ALIFE_REPO_URL the first time,<br/>copies agents.yaml the first time"]
+                server["ALifeServer serve<br/>--hostname 0.0.0.0 --port 8080"]
+                clis["a claude CLI per character<br/>Claude Code from npm, on Node"]
+            end
+
+            subgraph volumes["Docker volumes, in /home/alife"]
+                vlot["lot: a-life-lot<br/>buildings/, garden/, lot.md"]
+                vstate["state: a-life-state<br/>continues.json, usage.json, models.json"]
+                vvoice["voice: a-life-voice<br/>from fetch-voice.sh"]
+                vprojects["projects: a-life-projects<br/>the projects' clones"]
+                vcheckout["checkout: a-life<br/>the Engineer's a*life checkout"]
+                vcast["cast: a-life-cast<br/>agents.yaml"]
+                vclaude["claude: .claude<br/>CLAUDE_CONFIG_DIR, Claude Code's sessions"]
+            end
+        end
+    end
+
+    internet["The internet"]
+    anthropic["Anthropic API"]
+    github["GitHub"]
+
+    phone -->|"HTTPS over Tailscale"| tailscaled
+    mac -->|"HTTPS over Tailscale"| tailscaled
+    tailscaled -->|"HTTP"| loopback
+    loopback --> server
+    envfile -.->|"env_file"| container
+    entry -->|"then runs"| server
+    server <-->|"stream-json"| clis
+    server --- vlot
+    server --- vstate
+    server --- vvoice
+    server --- vcast
+    clis --- vlot
+    clis --- vcheckout
+    clis --- vprojects
+    clis --- vclaude
+    clis -->|"HTTPS, with CLAUDE_CODE_OAUTH_TOKEN"| anthropic
+    clis -->|"git fetch and push, with GITHUB_TOKEN"| github
+    entry -->|"git clone"| github
+    server -->|"git clone of the projects"| github
+    internet -.->|"SSH only, behind a cloud firewall.<br/>Port 8080 is never published"| droplet
+```
+
+- **The trust boundary is your tailnet.** The server has no login: any device that can reach `https://my-droplet.my-tailnet.ts.net` can tell the characters what to do and answer their approvals, and so run commands in the container, on your subscription and with your GitHub token. That's why the port is published on `127.0.0.1` only, and why it is `tailscale serve` and never `tailscale funnel`. See [Keep it to yourself](#keep-it-to-yourself).
+- **Inside the container** the server listens on `0.0.0.0`, which only Docker's port mapping can reach. `init: true` reaps whatever the characters' Claude Code sessions leave behind.
+- **Going out**, the droplet only talks to the Anthropic API, for the characters' calls to the model, and to GitHub, for the Engineer's checkout and the projects' clones, and whatever else the characters fetch or push.
+- **What matters is on the volumes**, so a new image keeps it. See [What it keeps, and where](#what-it-keeps-and-where).
+
+[Without Docker](#without-docker) it is the same picture without the container: the server runs under systemd as the user `alife`, on `127.0.0.1:8080`, with its settings in `/home/alife/a-life.env` and its files in `alife`'s home.
+
+### On your Mac
+
+On your own Mac, the server runs natively with `swift run ALifeServer`, on your Claude Code login, or in Docker with the same `docker-compose.yml` and a `.env` with your token. The app on the same Mac, or the iOS Simulator, uses `http://localhost:8080` without Tailscale; your other devices come in through `tailscale serve`, as they would to a droplet.
+
+```mermaid
+flowchart LR
+    subgraph tailnet["Your tailnet: the trust boundary"]
+        phone["iPhone or iPad<br/>a*life app"]
+
+        subgraph mac["Your Mac"]
+            localapp["a*life app on macOS,<br/>or in the iOS Simulator"]
+            ts["tailscale serve --bg 8080<br/>https://my-mac.my-tailnet.ts.net"]
+            port["127.0.0.1:8080"]
+
+            subgraph either["Either"]
+                native["swift run ALifeServer<br/>with your Claude Code login,<br/>in ~/a-life-lot, ~/a-life-state, ~/a-life-voice,<br/>~/a-life-projects and your a*life checkout"]
+                docker["docker compose up -d<br/>with CLAUDE_CODE_OAUTH_TOKEN in .env,<br/>and the files on Docker's volumes"]
+            end
+
+            clis["a claude CLI per character"]
+        end
+    end
+
+    anthropic["Anthropic API"]
+
+    localapp -->|"http://localhost:8080"| port
+    phone -->|"HTTPS over Tailscale"| ts
+    ts -->|"HTTP"| port
+    port --> native
+    port --> docker
+    native <-->|"stream-json"| clis
+    docker <-->|"stream-json"| clis
+    clis -->|"HTTPS"| anthropic
+```
+
+Natively, the Engineer works in the checkout you ran `swift run` in, and the Team Lead adds agents to its `agents.yaml`; in Docker, both are on the container's volumes, as on a droplet. Either way the server listens on `127.0.0.1`, which only this Mac can reach, until `tailscale serve` shares it with your tailnet. See [Make it reachable over Tailscale](#make-it-reachable-over-tailscale).
+
 ## Run it
 
 You need Swift 6 (Xcode 16 or later) on macOS 14 or later, or Swift 6 on Linux, and [Claude Code](https://code.claude.com) installed and logged in: `claude` in a terminal should start a session. The characters use that login and its settings, each on the model the [agents file](#the-agents-file) gives it (which the app's model picker can change), and what they do counts towards your usage like any other Claude Code session.
@@ -235,7 +485,7 @@ The server runs as the user `alife` in its container, never root, and keeps ever
 | `projects` | `/home/alife/a-life-projects` | The clones of the projects the characters work on. |
 | `checkout` | `/home/alife/a-life` | The Engineer's a\*life checkout. |
 | `cast` | `/home/alife/a-life-cast` | The agents file. |
-| `claude` | `/home/alife/.claude` | Claude Code's settings and sessions (`CLAUDE_CONFIG_DIR`), so that a session can be resumed after a restart. |
+| `claude` | `/home/alife/.claude` | Claude Code's settings and sessions (`CLAUDE_CONFIG_DIR`), so that a character waiting for the usage limit can resume its session after a restart, and `claude --resume` in the container finds the characters' conversations. |
 
 **The agents file** is copied from the one the server ships with the first time it starts, into the `cast` volume, and is yours from then on: the Team Lead adds agents to it, and a new image doesn't change it. To edit it, take a copy out, change it, and put it back:
 
@@ -753,7 +1003,7 @@ An interrupt stops one character and leaves the others be, and calls back any he
 
 ## How it fits together
 
-The routes know nothing about what plays a character. For each session they talk to two things:
+[Architecture](#architecture) has diagrams of all this. The routes know nothing about what plays a character. For each session they talk to two things:
 
 - `SessionHub` keeps the session's event log and its open streams. Whatever drives the session calls `hub.emit(_:)` for each thing that happens.
 - `SessionBackend` is the protocol the routes call: `handleMessage`, `interrupt`, `decide`, `setAutoApprove`, `setModel`, `reset`, and `shutdown` when the server stops.

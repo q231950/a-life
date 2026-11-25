@@ -53,6 +53,6 @@ volumes:
   checkout:
   # The agents file.
   cast:
-  # Claude Code's settings and sessions, so that a session can be resumed
-  # after a restart.
+  # Claude Code's settings and sessions, so that a character waiting for the
+  # usage limit can resume its session after a restart.
   claude:
