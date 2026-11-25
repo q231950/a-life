@@ -94,7 +94,7 @@ Every floor tile is its own entity with a `CollisionComponent` and an `InputTarg
 
 ### The server
 
-[`a-life-server/`](a-life-server) is a separate Swift package (Vapor), which builds and runs on macOS and Linux. Its README covers running it, on your Mac or a server of your own, Tailscale, the API, and how each character's Claude Code session and its helper are set up.
+[`a-life-server/`](a-life-server) is a separate Swift package (Vapor), which builds and runs on macOS and Linux. Its README covers running it, on your Mac or a server of your own, Tailscale, the API, and how each character's Claude Code session and its helper are set up. Its [Architecture](a-life-server/README.md#architecture) section has diagrams of how the apps reach Claude through the server, one message's round trip through the events, and the setups on a DigitalOcean droplet with Docker and on your own Mac, with your tailnet as the only way in.
 
 ### Tests
 
