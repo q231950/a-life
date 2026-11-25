@@ -72,6 +72,19 @@ final class EventLogTests: XCTestCase {
         XCTAssertEqual(relaunched.unseen.map(\.text), ["After."])
     }
 
+    func testOnlyWhatHappenedWhileAwayIsBadged() {
+        let log = EventLog(seenStore: InMemoryLogSeenStore())
+        log.record(.reply, "Live.", sessionID: "gardener", name: "Gardener", time: start)
+        XCTAssertEqual(log.unseen.count, 1)
+        XCTAssertTrue(log.unseenWhileAway.isEmpty)
+
+        log.record(.jobDone, "Done.", sessionID: "gardener", name: "Gardener", time: start + 1, isWhileAway: true)
+        XCTAssertEqual(log.unseenWhileAway.map(\.text), ["Done."])
+
+        log.markSeen()
+        XCTAssertTrue(log.unseenWhileAway.isEmpty)
+    }
+
     func testClearingKeepsWhatYouHaveSeen() {
         let log = EventLog(seenStore: InMemoryLogSeenStore())
         log.record(.reply, "Hello.", sessionID: "gardener", name: "Gardener", time: start)

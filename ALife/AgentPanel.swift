@@ -2,7 +2,7 @@ import ALifeClient
 import SwiftUI
 
 /// How the server connection is doing, who is busy or waiting for you, the
-/// button that opens the log, with a badge counting what you haven't seen,
+/// button that opens the log, with a badge counting what happened while you were away and you haven't seen,
 /// and the one that opens the settings.
 struct SessionStatusBar: View {
     @Environment(ServerConnection.self) private var server
@@ -47,7 +47,7 @@ struct SessionStatusBar: View {
     }
 
     /// How many of the log's entries you haven't seen.
-    private var unseen: Int { server.log.unseen.count }
+    private var unseen: Int { server.log.unseenWhileAway.count }
     private var waiting: [String] { server.sessions.filter { $0.isWaitingForYou }.map { $0.name } }
     private var working: [String] { server.sessions.filter { $0.status == .running }.map { $0.name } }
     /// Who is waiting for the usage limit to reset, and when the first is back.
