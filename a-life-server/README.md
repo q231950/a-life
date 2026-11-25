@@ -326,7 +326,7 @@ All optional, as environment variables:
 | `ALIFE_REPO_DIR` | The a\*life checkout the Engineer works in. The checkout the server was built from unless set. See [The Engineer and the a\*life checkout](#the-engineer-and-the-alife-checkout). |
 | `ALIFE_CLAUDE_PATH` | The `claude` command, if the server doesn't find it by itself on the `PATH`, in `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` or npm's global `bin`. |
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
-| `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
+| `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Set it to a file of your own, such as `~/.config/a-life/agents.yaml`, to keep your own cast outside the checkout. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
 | `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`, the last usage reading, in `usage.json`, and the models chosen in the app, in `models.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
 | `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id (with a clone of each repository in it, for a project of several). `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
@@ -496,7 +496,7 @@ docker compose exec -T a-life sh -c 'cat > /home/alife/a-life-cast/agents.yaml' 
 docker compose restart
 ```
 
-The shipped cast has characters for the repo owner's own projects, such as the Flamingo Engineer. They can't clone repositories that aren't yours, so they say why when you talk to them, and the others carry on; take them out of your agents file, or point them at projects of your own (see [A character for another project](#a-character-for-another-project)).
+To use a cast of your own instead, such as the one you keep on your Mac in `~/.config/a-life/agents.yaml`, copy it to the droplet and put it in the volume the same way, with the last two lines. (The image already sets `ALIFE_AGENTS_FILE` to the file in the volume, so there is nothing to add to `.env`.) The shipped cast only has characters that work for anyone; add your own with the Team Lead, or by editing the file, with projects of your own (see [A character for another project](#a-character-for-another-project)). Their repositories are cloned with `GITHUB_TOKEN`, so give it access to each of them.
 
 ### Git on the server
 
@@ -543,7 +543,7 @@ Copy the archives somewhere off the droplet. `claude` has the characters' conver
 
 ### Without Docker
 
-The server also runs straight on the droplet, under systemd, as a user of its own. Then it is much as on a Mac: the Engineer works in the checkout the server was built from, and the agents file is that checkout's.
+The server also runs straight on the droplet, under systemd, as a user of its own. Then it is much as on a Mac: the Engineer works in the checkout the server was built from, and the agents file is that checkout's, unless you set `ALIFE_AGENTS_FILE` in `/home/alife/a-life.env` to a file of your own, such as `/home/alife/.config/a-life/agents.yaml`.
 
 1. Make the user, and install git, Node 18 or later, and Claude Code:
 
@@ -727,10 +727,9 @@ The characters are listed in the [agents file](#the-agents-file). Each character
 |---|---|---|---|
 | **Builder** | `construction-worker` | Builds buildings: reads `lot.md` for room, then writes `buildings/<name>.md` with its kind and where it stands at the top, so it appears on the lot, and its rooms and a floor plan; or edits one that's there. | every change (Claude Code's `default` permission mode) |
 | **Engineer** | `a-life-expert` | Changes a\*life itself, the app, `ALifeKit` and this server, in your a\*life checkout: knows its way around all of it, makes the change, keeps the tests and READMEs in step, and runs the tests. | every change and command (`default`) |
-| **Flamingo Engineer** | `flamingo-expert` | Changes Flamingo Chess, in its three repositories cloned side by side: `flamingo` (the iOS app), `flamingo-chess-light` (the Light Phone app) and `neoneon` (the server). Keeps a change that spans them in step, runs their tests. See [A character for another project](#a-character-for-another-project). | every change and command (`default`) |
 | **Team Lead** | `recruiter` | Adds a new agent to the agents file: reads it, writes the new agent as the others are written, and adds it with the server's `add-agent` command, which checks it and leaves everyone else as they are. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). | every command (`default`) |
 
-Each character has a colour of its own, which the front ends dress it in: the Builder's shirt is orange, the Engineer's purple, the Flamingo Engineer's pink, the Team Lead's teal and the Conservationist's green. Its helpers' sheep wear the same colour. Each speaks in a voice of its own too, chosen by its place in the agents file.
+Each character has a colour of its own, which the front ends dress it in: the Builder's shirt is orange, the Engineer's purple, the Team Lead's teal and the Conservationist's green. Its helpers' sheep wear the same colour. Each speaks in a voice of its own too, chosen by its place in the agents file.
 
 Say "build me an office" to the Builder and it sends its construction worker off to build it: Claude Code calls its `Agent` tool with `subagent_type` `construction-worker`, which a front end sees as `subagent.started`, a sheep on the lot. The construction worker asks before it writes the file, as an approval on the Builder's session, labelled with who is asking (`construction-worker: buildings/office.md`). Once it reports back (`subagent.finished`), the Builder tells you what was built. The Conservationist works the same way with its keeper, but its changes to files on the lot go ahead without asking. Their helpers have only Read, Glob, Grep, Write and Edit, and the characters are told to leave the building and the planting to them.
 
@@ -847,7 +846,7 @@ A `path` is a full path, or one from `~`, and has to be there when the server st
 
 When it starts, the server says which directory each character works in, and whether it cloned a project just now or found it from before. If a clone fails, even one of a character's several, it says why and carries on: the others work as usual, and that character says why when you talk to it, until the clone works on a later start.
 
-The shipped [`agents.yaml`](Sources/ALifeServer/agents.yaml) has such a character, the Flamingo Engineer, who looks after Flamingo Chess: its iOS app, `flamingo`, its Light Phone app, `flamingo-chess-light`, and its server, `neoneon`, cloned into `~/a-life-projects/flamingo-engineer`. It sends its helper, the `flamingo-expert`, for every change, and the expert keeps a change that spans the repositories, such as one to the server's API and the apps that use it, in step. The file ends with another, the App Engineer, commented out: take the `#`s off, point it at your project, and restart the server.
+The shipped [`agents.yaml`](Sources/ALifeServer/agents.yaml) has no such character switched on, since a project is somebody's own, but it ends with one, the App Engineer, commented out: copy it into [your own agents file](#the-agents-file), take the `#`s off, point it at your project, and restart the server.
 
 ### The Team Lead and the agents file
 
@@ -866,15 +865,21 @@ The server gives every Claude Code session it starts `ALIFE_AGENTS_FILE`, the ag
 
 The Team Lead works on the lot but leaves it alone, and its recruiter has Read, Glob, Grep and Bash but neither Write nor Edit: it never writes the agents file itself, and can't change or take away an agent that's there. Its session runs in the `default` permission mode, so `add-agent` asks you first (`recruiter: "$ALIFE_SERVER_COMMAND" add-agent ...`), and you see the new agent before it's added. Restart the server and the new agent joins the lot; the front ends pick it up when they reconnect.
 
-Unless `ALIFE_AGENTS_FILE` is set, the agents file is the one in the a\*life checkout the server was built from, `Sources/ALifeServer/agents.yaml`, so a new agent is a change in that checkout, there for you to look over and commit, and joins the lot without building the server again. If that checkout is gone, the server reads, and the Team Lead adds to, the copy it was built with.
+The Team Lead adds to the file the server read its cast from. With `ALIFE_AGENTS_FILE` set, that is your own file, and the checkout's is left alone. Unless it is set, the agents file is the one in the a\*life checkout the server was built from, `Sources/ALifeServer/agents.yaml`, so a new agent is a change in that checkout, there for you to look over, and joins the lot without building the server again. If that checkout is gone, the server reads, and the Team Lead adds to, the copy it was built with.
 
 ### The agents file
 
-The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml): the Builder, the Engineer, the Flamingo Engineer, the Team Lead and the Conservationist above, among others. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode, its model or where it works (the lot, a\*life or a project of your own), or to add or take away a character; or have the [Team Lead](#the-team-lead-and-the-agents-file) add one. Or keep a file of your own and point `ALIFE_AGENTS_FILE` at it:
+The cast is a YAML file, read once when the server starts. The server ships with [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml), a cast that works for anyone: the Builder, the Engineer, the Team Lead, the Apple Specialist and the Conservationist, who work on the lot or on a\*life itself. Edit it and restart the server to change what a character is told, its colour, its helper, its permission mode, its model or where it works (the lot, a\*life or a project of your own), or to add or take away a character; or have the [Team Lead](#the-team-lead-and-the-agents-file) add one.
+
+For a cast of your own, with characters for your own projects, keep a file of your own outside the checkout, so it isn't committed and a `git pull` doesn't change it, and point `ALIFE_AGENTS_FILE` at it. Start from a copy of the shipped one:
 
 ```sh
-ALIFE_AGENTS_FILE=~/my-agents.yaml swift run ALifeServer
+mkdir -p ~/.config/a-life
+cp Sources/ALifeServer/agents.yaml ~/.config/a-life/agents.yaml
+ALIFE_AGENTS_FILE=~/.config/a-life/agents.yaml swift run ALifeServer
 ```
+
+The server only reads that file when `ALIFE_AGENTS_FILE` says so, wherever you run it: in your shell's profile (`export ALIFE_AGENTS_FILE=~/.config/a-life/agents.yaml`), in the scheme's environment variables in Xcode (where `~` works too), in `/home/alife/a-life.env` [under systemd](#without-docker), or in the `cast` volume [in Docker](#run-it-on-a-server). When it starts, the server says which file it read the cast from. The Team Lead adds new agents to the same file.
 
 The front ends pick the cast up when they next connect. Each character is one entry under `agents`, in the order the front ends list them:
 
@@ -923,7 +928,7 @@ agents:
 
 Text is passed on as written, without the line break a `|` block ends with. Write each paragraph on one line, as the shipped file does: a line break inside a `|` block reaches Claude Code as a line break. The lot and the a\*life checkout are the same for every character; set them with `ALIFE_LOT_DIR` and `ALIFE_REPO_DIR`.
 
-The shipped characters' models: `haiku` for the Builder and the Conservationist, whose helpers write a few lines into the lot; `sonnet` for the Team Lead, who mostly talks and writes one entry `add-agent` checks; and `opus` for the engineers (the Engineer, the Flamingo Engineer, the BTLB Engineer and lo-life) and the Apple Specialist, whose researcher runs on `sonnet`, as it mostly looks things up.
+The shipped characters' models: `haiku` for the Builder and the Conservationist, whose helpers write a few lines into the lot; `sonnet` for the Team Lead, who mostly talks and writes one entry `add-agent` checks; and `opus` for the Engineer and the Apple Specialist, whose researcher runs on `sonnet`, as it mostly looks things up.
 
 The server checks the whole file when it starts and won't start if anything is wrong, saying what and where:
 
@@ -1057,7 +1062,7 @@ The tests start the server on a free local port with the dummy characters and dr
 
 `VoiceModelTests` fetch a voice model's files from the address the client package gives, names with spaces in them included, and check that nothing outside it, and no hidden file, is served, and that a server without a model has nothing to fetch.
 
-`CastTests` read the agents file: the shipped one and what is in it, each shipped character's model, every field, the four models a character or its helper can have, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Flamingo Engineer, the Team Lead and its recruiter, the App Engineer in the shipped file once its comments are taken off, adding an agent (after the last one, leaving the others and the comments as they are, and refusing one whose id or name is taken or whose fields are wrong, without touching the file), the `add-agent` command, `ALIFE_AGENTS_FILE` and the checkout's agents file, and a server with a cast of its own.
+`CastTests` read the agents file: the shipped one and what is in it, each shipped character's model, every field, the four models a character or its helper can have, what an agent can leave out, the mistakes the server refuses and what it says about each, projects on a path, in a repository or in several, and the mistakes in them, such as an https address, the Team Lead and its recruiter, the App Engineer in the shipped file once its comments are taken off, adding an agent (after the last one, leaving the others and the comments as they are, and refusing one whose id or name is taken or whose fields are wrong, without touching the file), the `add-agent` command, `ALIFE_AGENTS_FILE` and the checkout's agents file, a new agent landing in a file of your own rather than the shipped one, and a server with a cast of its own.
 
 One test runs the Builder on the Claude Code installed on your Mac, tells it to build an office, allows whatever it asks, and checks that its construction worker was sent off and a building is on a temporary lot. It runs on the Builder's model, `haiku`, and costs a little, so it only runs when asked:
 
