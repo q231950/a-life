@@ -1,0 +1,13 @@
+// The project's settings for signing, shared by everyone who builds a*life.
+//
+// Your Apple development team is yours alone, so it isn't kept here. Copy
+// iOS.sample.xcconfig to iOS.xcconfig and macOS.sample.xcconfig to
+// macOS.xcconfig, here in Config/, and put your team's identifier in each.
+// Those two files are ignored by git, and each is optional: without them the
+// project still opens and builds for the simulator, and you can still pick a
+// team under Signing & Capabilities.
+
+DEVELOPMENT_TEAM =
+
+#include? "iOS.xcconfig"
+#include? "macOS.xcconfig"

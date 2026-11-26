@@ -13,6 +13,9 @@
 
 /* Begin PBXFileReference section */
 		A1FE00000000000000000001 /* ALife.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ALife.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1FE00000000000000000016 /* ALife.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ALife.xcconfig; sourceTree = "<group>"; };
+		A1FE00000000000000000017 /* iOS.sample.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = iOS.sample.xcconfig; sourceTree = "<group>"; };
+		A1FE00000000000000000018 /* macOS.sample.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = macOS.sample.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -40,8 +43,19 @@
 			isa = PBXGroup;
 			children = (
 				A1FE00000000000000000002 /* ALife */,
+				A1FE00000000000000000019 /* Config */,
 				A1FE00000000000000000005 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		A1FE00000000000000000019 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A1FE00000000000000000016 /* ALife.xcconfig */,
+				A1FE00000000000000000017 /* iOS.sample.xcconfig */,
+				A1FE00000000000000000018 /* macOS.sample.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		A1FE00000000000000000005 /* Products */ = {
@@ -140,6 +154,7 @@
 /* Begin XCBuildConfiguration section */
 		A1FE0000000000000000000C /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1FE00000000000000000016 /* ALife.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -174,7 +189,6 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = X29V4JPQ55;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -204,6 +218,7 @@
 		};
 		A1FE0000000000000000000D /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1FE00000000000000000016 /* ALife.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -238,7 +253,6 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = X29V4JPQ55;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

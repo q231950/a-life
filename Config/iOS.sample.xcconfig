@@ -1,0 +1,9 @@
+// Your Apple development team for the iPhone and iPad, and the simulator.
+//
+// Copy this file to iOS.xcconfig, here in Config/, and put in your team's
+// identifier: the ten characters under Membership details at
+// https://developer.apple.com/account. iOS.xcconfig is ignored by git, so your
+// team stays with you.
+
+DEVELOPMENT_TEAM[sdk=iphoneos*] = ABCDE12345
+DEVELOPMENT_TEAM[sdk=iphonesimulator*] = ABCDE12345

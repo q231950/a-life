@@ -6,5 +6,8 @@ build/
 .swiftpm/
 .build/
 .env
+# Your own Apple development team, copied from the samples in Config/.
+Config/iOS.xcconfig
+Config/macOS.xcconfig
 # Apple push notification keys, such as a-life-server/AuthKey.p8.
 *.p8
