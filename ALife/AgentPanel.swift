@@ -185,10 +185,10 @@ private struct AutoApproveToggle: View {
     }
 }
 
-/// The first character calling you, with a button to take the call, and how
-/// many more are holding after it. Once none is ringing, the first missed
-/// call, from a character that finished a job while you were away, with a
-/// button to call it back.
+/// The first character calling you, with buttons to take or decline the
+/// call, and how many more are holding after it. Once none is ringing, the
+/// first missed call, from a character that finished a job while you were
+/// away, with buttons to call it back or decline it.
 private struct IncomingCallBar: View {
     @Environment(ServerConnection.self) private var server
     @Environment(\.narrator) private var narrator
@@ -211,6 +211,7 @@ private struct IncomingCallBar: View {
                     }
                 }
                 Spacer(minLength: 0)
+                DeclineButton(name: name) { decline(callFrom: first.speakerID) }
                 Button("Take", systemImage: "phone.fill") {
                     take(first.speakerID)
                 }
@@ -237,6 +238,7 @@ private struct IncomingCallBar: View {
                     }
                 }
                 Spacer(minLength: 0)
+                DeclineButton(name: name) { decline(callFrom: first.speakerID) }
                 Button("Call back", systemImage: "phone.arrow.up.right.fill") {
                     take(first.speakerID)
                 }
@@ -249,6 +251,30 @@ private struct IncomingCallBar: View {
             .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .combine)
         }
+    }
+
+    /// Ends a character's call, ringing or missed, without hearing it or
+    /// opening its conversation, so the next one shows. Its notifications go
+    /// too: you've dealt with what they were about.
+    private func decline(callFrom id: String) {
+        narrator?.decline(callFrom: id)
+        #if os(iOS)
+        PushPermission.removeDelivered(about: id)
+        #endif
+    }
+}
+
+/// The red button that declines a call, ringing or missed.
+private struct DeclineButton: View {
+    let name: String
+    let action: () -> Void
+
+    var body: some View {
+        Button("Decline", systemImage: "phone.down.fill", role: .destructive, action: action)
+            .font(.footnote)
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .accessibilityHint("Ends the call from \(name) without hearing it")
     }
 }
 

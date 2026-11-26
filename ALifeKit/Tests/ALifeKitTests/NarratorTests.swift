@@ -370,6 +370,72 @@ final class NarratorTests: XCTestCase {
         XCTAssertTrue(nextLaunch.hasMissedCall("gardener"))
     }
 
+    // MARK: Declining
+
+    func testDecliningACallEndsItUnheardForGood() async {
+        let store = InMemoryHeardRepliesStore()
+        let notebook = Notebook()
+        let narrator = Narrator(engine: notebook, heardStore: store)
+        let builder = Narrator.Speaker(id: "builder", messages: [agent("b1", "Bricks.")])
+        let done = [agent("g1", "Roses."), agent("g2", "Tulips.")]
+        let gardener = Narrator.Speaker(id: "gardener", messages: done)
+        narrator.listen(to: [gardener, builder], inEarshot: [])
+        XCTAssertEqual(narrator.incomingCalls.map(\.speakerID), ["gardener", "builder"])
+
+        narrator.decline(callFrom: "gardener")
+        XCTAssertFalse(narrator.isCalling("gardener"))
+        XCTAssertFalse(narrator.hasMissedCall("gardener"))
+        XCTAssertFalse(narrator.hasSomethingToSay("gardener"))
+        XCTAssertEqual(narrator.incomingCalls.map(\.speakerID), ["builder"]) // the next one holding
+        await Task.yield()
+        XCTAssertTrue(notebook.said.isEmpty)
+
+        // It doesn't come round again, nor as a missed call on the next launch.
+        narrator.listen(to: [gardener, builder], inEarshot: [])
+        XCTAssertEqual(narrator.calls.map(\.speakerID), ["builder"])
+        let nextLaunch = Narrator(engine: Notebook(), heardStore: store)
+        nextLaunch.listen(to: [Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: done)], inEarshot: [])
+        XCTAssertTrue(nextLaunch.calls.isEmpty)
+    }
+
+    func testDecliningACallKeepsWhatYouMissOfTheNextJob() {
+        let narrator = Narrator(engine: Notebook())
+        let first = [agent("1", "Roses.")]
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: first)], inEarshot: [])
+        let next = first + [agent("2", "Now the tulips.")]
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: next, isWorking: true)], inEarshot: [])
+
+        narrator.decline(callFrom: "gardener")
+        XCTAssertTrue(narrator.calls.isEmpty)
+        narrator.listen(to: [Narrator.Speaker(id: "gardener", messages: next)], inEarshot: [])
+        XCTAssertEqual(narrator.calls.first?.lines, ["Now the tulips."])
+        XCTAssertTrue(narrator.isCalling("gardener"))
+    }
+
+    func testDecliningAMissedCallShowsTheNextOne() {
+        let store = InMemoryHeardRepliesStore()
+        let narrator = Narrator(engine: Notebook(), heardStore: store)
+        let builder = Narrator.Speaker(id: "builder", messages: [], finishedWhileAway: [agent("b1", "Bricks.")])
+        let gardener = Narrator.Speaker(id: "gardener", messages: [], finishedWhileAway: [agent("g1", "Roses.")])
+        narrator.listen(to: [builder, gardener], inEarshot: [])
+
+        narrator.decline(callFrom: "builder")
+        XCTAssertEqual(narrator.missedCalls.map(\.speakerID), ["gardener"])
+        XCTAssertFalse(narrator.hasMissedCall("builder"))
+
+        let nextLaunch = Narrator(engine: Notebook(), heardStore: store)
+        nextLaunch.listen(to: [builder, gardener], inEarshot: [])
+        XCTAssertEqual(nextLaunch.missedCalls.map(\.speakerID), ["gardener"])
+    }
+
+    func testDecliningWhenNoOneCallsDoesNothing() {
+        let store = InMemoryHeardRepliesStore()
+        let narrator = Narrator(engine: Notebook(), heardStore: store)
+        narrator.decline(callFrom: "gardener")
+        XCTAssertTrue(narrator.calls.isEmpty)
+        XCTAssertTrue(store.load().isEmpty)
+    }
+
     // MARK: How it sounds
 
     func testMarkdownIsReadAsProse() {
