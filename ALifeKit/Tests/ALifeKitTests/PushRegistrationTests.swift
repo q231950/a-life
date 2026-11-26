@@ -25,7 +25,7 @@ final class PushRegistrationTests: XCTestCase {
             logSeenStore: InMemoryLogSeenStore()
         )
         let registration = PushRegistration(
-            server: server, environment: .sandbox, bundleID: "com.q231950.alife", deviceName: "iPhone",
+            server: server, environment: .sandbox, bundleID: "dev.neoneon.alife", deviceName: "iPhone",
             store: store, urlSession: urlSession
         )
         return (registration, server)
@@ -94,7 +94,7 @@ final class PushRegistrationTests: XCTestCase {
         let put = try XCTUnwrap(StubServer.requests.first { $0.method == "PUT" })
         XCTAssertEqual(
             try JSONDecoder().decode(DeviceRegistrationRequest.self, from: XCTUnwrap(put.body)),
-            DeviceRegistrationRequest(environment: .sandbox, bundleID: "com.q231950.alife", name: "iPhone")
+            DeviceRegistrationRequest(environment: .sandbox, bundleID: "dev.neoneon.alife", name: "iPhone")
         )
         XCTAssertEqual(registration.serverID, "stub.invalid")
         XCTAssertEqual(store.load(), PushRegistrationRecord(token: token, serverURL: URL(string: "https://stub.invalid")!, serverID: "stub.invalid"))
