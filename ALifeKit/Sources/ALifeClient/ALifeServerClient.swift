@@ -122,6 +122,23 @@ public struct ALifeServerClient: Sendable {
         return try await EventStreamConnection<Usage>().open(request, configuration: urlSession.configuration)
     }
 
+    /// Registers this device's APNs token, in hex, for notifications when a
+    /// character finishes its work, or says it is still here. The server
+    /// takes it even while it isn't set up to send: its answer says.
+    public func registerDevice(token: String, _ registration: DeviceRegistrationRequest) async throws -> DeviceRegistration {
+        try JSONDecoder().decode(DeviceRegistration.self, from: await send("PUT", devicePath(token), body: registration))
+    }
+
+    /// Tells the server this device no longer wants notifications.
+    public func unregisterDevice(token: String) async throws {
+        try await send("DELETE", devicePath(token))
+    }
+
+    /// Asks the server to send this device a test notification.
+    public func sendTestNotification(token: String) async throws {
+        try await send("POST", devicePath(token, "test"))
+    }
+
     /// Where the server offers the voice model the characters speak with:
     /// a Phonon model bundle, its `bundle.json` and every file it lists, at
     /// the same paths under this address. The server answers 404 for all of
@@ -135,6 +152,11 @@ public struct ALifeServerClient: Sendable {
     /// `/v1/sessions/{id}`, then `components`.
     private func path(_ sessionID: String, _ components: String...) -> String {
         "/v1/sessions/" + ([sessionID] + components).joined(separator: "/")
+    }
+
+    /// `/v1/devices/{token}`, then `components`.
+    private func devicePath(_ token: String, _ components: String...) -> String {
+        "/v1/devices/" + ([token] + components).joined(separator: "/")
     }
 
     private func makeRequest(_ method: String, _ path: String, query: [URLQueryItem] = []) -> URLRequest {

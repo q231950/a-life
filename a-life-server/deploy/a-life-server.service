@@ -20,6 +20,8 @@ WorkingDirectory=/home/alife
 Environment=HOME=/home/alife
 # CLAUDE_CODE_OAUTH_TOKEN and any other settings, one per line, as in
 # .env.example. Make it readable by alife only: chmod 600.
+# For push notifications, the four ALIFE_APNS_* settings go here too, with
+# ALIFE_APNS_KEY_FILE=/home/alife/a-life-apns.p8, readable by alife only.
 EnvironmentFile=/home/alife/a-life.env
 # On 127.0.0.1 only: tailscale serve shares it with your tailnet.
 ExecStart=/home/alife/a-life/a-life-server/.build/release/ALifeServer serve --env production --hostname 127.0.0.1 --port 8080

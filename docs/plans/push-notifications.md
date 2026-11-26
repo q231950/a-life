@@ -584,3 +584,27 @@ when turned off, and reports `serverHasNoPush`.
 7. **The Mac.** The same works for the macOS app with little more (an
    `NSApplicationDelegateAdaptor` and the entitlement for macOS). Wanted
    now, or later?
+
+## What was decided
+
+Implemented with the plan's defaults for the open questions:
+
+1. **Waiting for you** doesn't notify: only `finished` and `error` are sent.
+2. **Your own words** may go: the summary quotes the first line of what you
+   asked, cut short, and names the files changed.
+3. **No model-written summary**: the line is put together by `JobSummary`
+   from the job's events, and calls no model.
+4. **One notification per job**, with no waiting to see if another turn
+   follows.
+5. **Other devices** aren't held back while you're in the app; only the
+   device you're using hides them.
+6. **No app icon badge.**
+7. **iOS only** for now: everything is in `#if os(iOS)`, the entitlement is
+   set for `iphoneos` builds only, and the Mac app works as before.
+
+Two small departures from the text above: the entitlements file is
+`ALife.entitlements` at the root of the checkout, next to
+`ALife-Info.plist`, rather than in the `ALife/` folder Xcode keeps in sync
+with the target, so it is never taken for a resource; and the server uses
+APNSwift 7.x, since 8.0 needs macOS 15 and the server still runs on
+macOS 14.

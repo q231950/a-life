@@ -11,6 +11,10 @@ struct WorldView: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+    /// Where a tapped notification leads, and this device's registration
+    /// for them. Only the iPhone and iPad app has them.
+    @Environment(NotificationRouter.self) private var router: NotificationRouter?
+    @Environment(PushRegistration.self) private var registration: PushRegistration?
     @State private var world: World?
     /// Says the characters' lines out loud while you stand near them.
     @State private var narrator: Narrator?
@@ -54,6 +58,13 @@ struct WorldView: View {
             // Opening a character's conversation shows what it said, so its
             // missed call can go.
             if let id { narrator?.clearMissedCall(from: id) }
+            #if os(iOS)
+            // Nor its notifications.
+            if let id { PushPermission.removeDelivered(about: id) }
+            #endif
+        }
+        .task(id: router?.pending) {
+            await followTappedNotification()
         }
         .onChange(of: speakers) { _, speakers in
             narrator?.listen(to: speakers, inEarshot: world?.residentsInEarshot() ?? [])
@@ -132,6 +143,28 @@ struct WorldView: View {
         #else
         false
         #endif
+    }
+
+    /// Opens the conversation a tapped notification is about, at its reply,
+    /// as picking an entry in the log does, once the server has listed that
+    /// character: on a cold launch that waits for the connection, for ten
+    /// seconds at most. A notification from another server than this one
+    /// opens the app as it is, since that character may not be here.
+    private func followTappedNotification() async {
+        guard let router, let route = router.pending else { return }
+        guard registration?.isFromThisServer(route) == true else {
+            router.pending = nil
+            return
+        }
+        for _ in 0..<100 where server.session(route.session) == nil {
+            try? await Task.sleep(for: .milliseconds(100))
+            if Task.isCancelled { return }
+        }
+        router.pending = nil
+        guard server.session(route.session) != nil else { return }
+        selectedID = route.session
+        panelIsExpanded = true
+        router.reply = route.message.map { NotificationRouter.Reply(session: route.session, message: $0) }
     }
 
     /// The character you are talking to.

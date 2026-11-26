@@ -587,20 +587,33 @@ private struct ConversationHistory: View {
 
     @State private var contentHeight: CGFloat = 0
     @State private var isAtBottom = true
+    /// Where a tapped notification leads, on the iPhone and iPad.
+    @Environment(NotificationRouter.self) private var router: NotificationRouter?
+
+    /// The row of the reply a tapped notification asked to show, once it is
+    /// in this conversation.
+    private var requestedRow: String? {
+        guard let reply = router?.reply, reply.session == session.id else { return nil }
+        let row = ConversationEntry.message(Message(id: reply.message, kind: .agent, speaker: "", text: "")).id
+        return session.conversation.contains { $0.id == row } ? row : nil
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(session.conversation) { entry in
-                        switch entry {
-                        case .message(let message):
-                            MessageRow(message: message)
-                        case .toolUse(let toolUse):
-                            ToolUseRow(toolUse: toolUse)
-                        case .approval(let approval, let outcome):
-                            ApprovalRow(session: session, approval: approval, outcome: outcome, canAnswer: server.phase == .live)
+                        Group {
+                            switch entry {
+                            case .message(let message):
+                                MessageRow(message: message)
+                            case .toolUse(let toolUse):
+                                ToolUseRow(toolUse: toolUse)
+                            case .approval(let approval, let outcome):
+                                ApprovalRow(session: session, approval: approval, outcome: outcome, canAnswer: server.phase == .live)
+                            }
                         }
+                        .id(entry.id)
                     }
                     Color.clear
                         .frame(height: 1)
@@ -620,6 +633,23 @@ private struct ConversationHistory: View {
             .onChange(of: session.conversation.last) {
                 guard isAtBottom else { return }
                 withAnimation { proxy.scrollTo(bottomID, anchor: .bottom) }
+            }
+            .onChange(of: requestedRow, initial: true) { _, row in
+                // A tapped notification's reply, from its start, once the
+                // conversation has caught up with the server.
+                guard let row else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300)) // let the rows settle
+                    withAnimation { proxy.scrollTo(row, anchor: .top) }
+                    router?.reply = nil
+                }
+            }
+            .task(id: router?.reply) {
+                // A reply that never comes, as after starting over, leaves
+                // the conversation at the latest.
+                guard let reply = router?.reply else { return }
+                try? await Task.sleep(for: .seconds(10))
+                if !Task.isCancelled, router?.reply == reply { router?.reply = nil }
             }
             .frame(height: min(max(contentHeight, 20), maxHeight))
             .overlay(alignment: .bottomTrailing) {
