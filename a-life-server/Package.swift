@@ -8,6 +8,9 @@ let package = Package(
         .package(url: "https://github.com/vapor/vapor.git", from: "4.115.0"),
         // Reads the agents file.
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.0"),
+        // Sends push notifications through Apple. 7.x is the newest that
+        // still runs on macOS 14.
+        .package(url: "https://github.com/swift-server-community/APNSwift.git", from: "7.1.0"),
         // The wire format, shared with the front ends.
         .package(path: "../ALifeKit"),
     ],
@@ -17,6 +20,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "APNS", package: "apnswift"),
+                .product(name: "APNSCore", package: "apnswift"),
                 .product(name: "ALifeAPI", package: "ALifeKit"),
             ],
             // The cast the server ships with.

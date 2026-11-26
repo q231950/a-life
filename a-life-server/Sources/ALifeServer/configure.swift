@@ -118,8 +118,9 @@ enum Players: Sendable {
 
     /// Where the server keeps what it must remember between starts, such as
     /// the characters waiting for the usage limit to reset
-    /// (`continues.json`), the last usage reading (`usage.json`) and the
-    /// models chosen in the app (`models.json`):
+    /// (`continues.json`), the last usage reading (`usage.json`), the
+    /// models chosen in the app (`models.json`) and the devices registered
+    /// for notifications (`devices.json`):
     /// `ALIFE_STATE_DIR`, or `~/a-life-state` unless it
     /// is set. It is made when there is something to keep.
     static func stateDirectory(in environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
@@ -143,15 +144,41 @@ struct ConfigurationError: Error, CustomStringConvertible {
     }
 }
 
+/// How the server sends push notifications: what sends them, or `nil` while
+/// they're off, and the app's bundle id devices must register with, if it
+/// is known.
+struct PushSetup: Sendable {
+    var sender: (any PushSender)?
+    var topic: String?
+
+    /// No notifications, and any bundle id may register.
+    static let off = PushSetup(sender: nil, topic: nil)
+
+    /// From the `ALIFE_APNS_*` settings: notifications through Apple if all
+    /// four are set, or else off, saying why.
+    static func fromEnvironment(_ app: Application) -> PushSetup {
+        let settings = PushSettings.read()
+        guard let credentials = settings.credentials else {
+            app.logger.notice("\(settings.problem ?? "Push notifications are off. See Push notifications in the README.")")
+            return PushSetup(sender: nil, topic: settings.topic)
+        }
+        app.logger.notice("Push notifications are on, for \(credentials.topic), with key \(credentials.keyID)")
+        let sender = APNSPushSender(credentials: credentials, eventLoopGroup: app.eventLoopGroup, logger: app.logger)
+        return PushSetup(sender: sender, topic: credentials.topic)
+    }
+}
+
 /// Sets the server up with a session per character in `cast`, played by
 /// `players`, the lot in `lotDirectory`, the voice model in
-/// `voiceDirectory`, and what it remembers between starts in
-/// `stateDirectory`. Each is as the environment says if `nil`: the cast is
-/// read from the agents file, `ALIFE_AGENTS_FILE` or the checkout's
-/// `agents.yaml`, the lot is `ALIFE_LOT_DIR`, the voice model
-/// `ALIFE_VOICE_DIR` and the state `ALIFE_STATE_DIR`. Given `players` but no
+/// `voiceDirectory`, what it remembers between starts in `stateDirectory`,
+/// and push notifications as `push` says. Each is as the environment says
+/// if `nil`: the cast is read from the agents file, `ALIFE_AGENTS_FILE` or
+/// the checkout's `agents.yaml`, the lot is `ALIFE_LOT_DIR`, the voice
+/// model `ALIFE_VOICE_DIR`, the state `ALIFE_STATE_DIR` and push
+/// notifications the `ALIFE_APNS_*` settings. Given `players` but no
 /// `lotDirectory`, the lot stays empty, with no `voiceDirectory` there's no
-/// voice model either, and with no `stateDirectory` nothing is remembered.
+/// voice model either, with no `stateDirectory` nothing is remembered, and
+/// with no `push` no notifications are sent.
 func configure(
     _ app: Application,
     players playersGiven: Players? = nil,
@@ -159,6 +186,7 @@ func configure(
     lotDirectory: URL? = nil,
     voiceDirectory: URL? = nil,
     stateDirectory: URL? = nil,
+    push pushGiven: PushSetup? = nil,
     lotSurveyInterval: Duration = .seconds(1)
 ) async throws {
     let cast = try cast ?? loadCast(logger: app.logger)
@@ -175,6 +203,7 @@ func configure(
         stateDirectory = stateDirectory ?? Players.stateDirectory()
         players = try Players.fromEnvironment(for: cast, lot: directory, logger: app.logger)
     }
+    let pushSetup = pushGiven ?? (playersGiven == nil ? PushSetup.fromEnvironment(app) : .off)
 
     // The characters' voices, for the front ends to download.
     if let voiceDirectory {
@@ -246,8 +275,19 @@ func configure(
         sessions.append(HostedSession(id: character.id, hub: hub, backend: backend))
     }
 
-    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot, usage: usage))
-    routes(app, sessions: sessions, lot: lot, usage: usage, models: models, voice: voiceDirectory)
+    // The devices registered for notifications, and telling them when any
+    // character finishes its work. They're kept whoever plays the
+    // characters, since they're the phones', not the characters'.
+    let devices = DeviceRegistry(file: stateDirectory?.appendingPathComponent("devices.json"), logger: app.logger)
+    let push = PushNotifier(registry: devices, sender: pushSetup.sender, topic: pushSetup.topic, logger: app.logger)
+    await push.follow(sessions)
+    if push.isEnabled {
+        let count = await devices.all.count
+        app.logger.notice("\(count) device(s) registered for notifications")
+    }
+
+    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot, usage: usage, push: push))
+    routes(app, sessions: sessions, lot: lot, usage: usage, models: models, voice: voiceDirectory, push: push)
 }
 
 /// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
@@ -260,16 +300,18 @@ private func loadCast(logger: Logger) throws -> [Character] {
 }
 
 /// When the server stops, ends the open event streams, so shutdown doesn't
-/// wait on clients that are still listening, and stops each session and
-/// watching the lot.
+/// wait on clients that are still listening, and stops each session,
+/// watching the lot and sending notifications.
 private struct EndSessionsOnShutdown: LifecycleHandler {
     let sessions: [HostedSession]
     let lot: LotHub
     let usage: UsageHub
+    let push: PushNotifier
 
     func shutdownAsync(_ application: Application) async {
         await lot.stop()
         await usage.stop()
+        await push.stop()
         for session in sessions {
             await session.hub.closeStreams()
             await session.backend.shutdown()

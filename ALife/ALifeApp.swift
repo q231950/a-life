@@ -9,9 +9,24 @@ struct ALifeApp: App {
     @State private var server: ServerConnection
     /// The characters' voices, which speak on this device.
     @State private var voices = Voices()
+    #if os(iOS)
+    /// Push notifications when a character finishes, and where tapping one
+    /// leads. The iPhone and iPad app only.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var registration: PushRegistration
+    #endif
 
     init() {
-        _server = State(initialValue: ServerConnection())
+        let server = ServerConnection()
+        _server = State(initialValue: server)
+        #if os(iOS)
+        _registration = State(initialValue: PushRegistration(
+            server: server,
+            environment: AppDelegate.pushEnvironment,
+            bundleID: Bundle.main.bundleIdentifier ?? "com.q231950.alife",
+            deviceName: UIDevice.current.name
+        ))
+        #endif
 
         TileComponent.registerComponent()
         LotComponent.registerComponent()
@@ -47,6 +62,18 @@ struct ALifeApp: App {
             WorldView()
                 .environment(server)
                 .environment(voices)
+                #if os(iOS)
+                .environment(appDelegate.router)
+                .environment(registration)
+                .task {
+                    appDelegate.attach(server: server, registration: registration)
+                    await PushPermission.resume(registration)
+                }
+                .onChange(of: server.serverURL) {
+                    // Moves the registration to the new server.
+                    Task { await registration.refresh() }
+                }
+                #endif
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 800)

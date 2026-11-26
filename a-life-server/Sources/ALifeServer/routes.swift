@@ -5,6 +5,7 @@ extension SessionState: @retroactive Content {}
 extension Lot: @retroactive Content {}
 extension Usage: @retroactive Content {}
 extension ModelOption: @retroactive Content {}
+extension DeviceRegistration: @retroactive Content {}
 
 func routes(
     _ app: Application,
@@ -12,7 +13,8 @@ func routes(
     lot: LotHub,
     usage: UsageHub = UsageHub(file: nil),
     models: ModelCatalog = ModelCatalog(),
-    voice: URL? = nil
+    voice: URL? = nil,
+    push: PushNotifier = PushNotifier(registry: DeviceRegistry(file: nil), sender: nil, topic: nil)
 ) {
     let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
 
@@ -134,6 +136,60 @@ func routes(
     app.get("v1", "usage", "events") { _ -> Response in
         eventStream(await usage.subscribe()) { usage in
             try serverSentEvent(id: usage.revision, type: "usage", data: usage)
+        }
+    }
+
+    // A device that wants to hear when a character finishes its work, by
+    // its APNs token in hex. Registering again updates it and says it was
+    // seen, so the app does it on every launch. Taken while notifications
+    // are off, too, so the devices are there once they're on.
+    let device = app.grouped("v1", "devices", ":token")
+
+    /// The token a request names in its path, if it looks like one.
+    @Sendable func deviceToken(_ request: Request) throws -> String {
+        guard let token = request.parameters.get("token"), DeviceRegistry.isToken(token) else {
+            throw Abort(.badRequest, reason: "That isn't a device token: it's the APNs token, in hex.")
+        }
+        return token.lowercased()
+    }
+
+    device.put { request -> DeviceRegistration in
+        let token = try deviceToken(request)
+        let registration = try request.content.decode(DeviceRegistrationRequest.self)
+        guard registration.environment != .unknown else {
+            throw Abort(.badRequest, reason: "The environment can be sandbox or production.")
+        }
+        if let topic = push.topic, registration.bundleID != topic {
+            throw Abort(.badRequest, reason: "This server sends notifications for \(topic), not \(registration.bundleID). See Push notifications in a-life-server/README.md.")
+        }
+        await push.registry.register(token: token, registration)
+        return DeviceRegistration(serverID: push.registry.serverID, pushEnabled: push.isEnabled)
+    }
+
+    device.delete { request -> HTTPStatus in
+        let token = try deviceToken(request)
+        await push.registry.unregister(token: token)
+        return .noContent
+    }
+
+    // Sends the device a test notification, to see that it can be reached.
+    device.post("test") { request -> HTTPStatus in
+        guard push.isEnabled else {
+            throw Abort(.serviceUnavailable, reason: "This server isn't set up to send notifications. See Push notifications in a-life-server/README.md.")
+        }
+        let token = try deviceToken(request)
+        guard let registered = await push.registry.device(token) else {
+            throw Abort(.notFound, reason: "That device isn't registered for notifications.")
+        }
+        switch await push.sendTest(to: registered) {
+        case .delivered:
+            return .noContent
+        case .goneForGood:
+            throw Abort(.gone, reason: "Apple says the device's token is no longer valid, so it was forgotten. Register it again.")
+        case .failed(let reason):
+            throw Abort(.badGateway, reason: "Apple didn't take the notification: \(reason)")
+        case nil:
+            throw Abort(.serviceUnavailable, reason: "This server isn't set up to send notifications.")
         }
     }
 

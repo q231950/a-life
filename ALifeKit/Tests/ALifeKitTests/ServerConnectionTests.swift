@@ -449,6 +449,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var _hasLot = true
     nonisolated(unsafe) private static var _hasUsage = true
     nonisolated(unsafe) private static var _models: String?
+    nonisolated(unsafe) private static var _pushEnabled = true
 
     static var requests: [Recorded] { lock.withLock { _requests } }
     /// What `GET /v1/sessions` answers.
@@ -482,8 +483,15 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         set { lock.withLock { _hasUsage = newValue } }
     }
 
+    /// Whether it says it sends notifications when a device registers.
+    static var pushEnabled: Bool {
+        get { lock.withLock { _pushEnabled } }
+        set { lock.withLock { _pushEnabled = newValue } }
+    }
+
     static func reset() {
         lock.withLock {
+            _pushEnabled = true
             _requests = []
             streams = [:]
             _roster = [SessionState(id: "gardener", name: "Gardener"), SessionState(id: "builder", name: "Builder")]
@@ -564,6 +572,11 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             }
         } else if method == "GET", url.path == "/v1/sessions" {
             respond(200, body: String(decoding: try! JSONEncoder().encode(Self.roster), as: UTF8.self))
+        } else if method == "PUT", url.path.hasPrefix("/v1/devices/") {
+            // Each address is a server of its own, with its host for its id.
+            respond(200, body: #"{"server_id":"\#(url.host ?? "")","push_enabled":\#(Self.pushEnabled)}"#)
+        } else if method == "DELETE", url.path.hasPrefix("/v1/devices/") {
+            respond(204, body: "")
         } else if let failure = Self.failPosts {
             respond(failure.status, body: #"{"error":true,"reason":"\#(failure.reason)"}"#)
         } else {

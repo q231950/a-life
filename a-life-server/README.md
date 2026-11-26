@@ -42,7 +42,7 @@ flowchart TB
     subgraph disk["Files where the server runs"]
         lot["the lot, ALIFE_LOT_DIR<br/>buildings/, garden/, lot.md"]
         repos["the Engineer's a*life checkout, ALIFE_REPO_DIR<br/>the project clones, ALIFE_PROJECTS_DIR"]
-        state["ALIFE_STATE_DIR<br/>continues.json, usage.json, models.json"]
+        state["ALIFE_STATE_DIR<br/>continues.json, usage.json, models.json, devices.json"]
         cast["agents.yaml, ALIFE_AGENTS_FILE"]
         voice["the voice model, ALIFE_VOICE_DIR"]
         claudedir["~/.claude<br/>Claude Code's settings and sessions"]
@@ -178,7 +178,7 @@ flowchart TB
 
             subgraph volumes["Docker volumes, in /home/alife"]
                 vlot["lot: a-life-lot<br/>buildings/, garden/, lot.md"]
-                vstate["state: a-life-state<br/>continues.json, usage.json, models.json"]
+                vstate["state: a-life-state<br/>continues.json, usage.json, models.json, devices.json"]
                 vvoice["voice: a-life-voice<br/>from fetch-voice.sh"]
                 vprojects["projects: a-life-projects<br/>the projects' clones"]
                 vcheckout["checkout: a-life<br/>the Engineer's a*life checkout"]
@@ -328,8 +328,12 @@ All optional, as environment variables:
 | `ALIFE_BACKEND` | `claude` (the default), or `dummy` for the scripted dummies. |
 | `ALIFE_AGENTS_FILE` | The agents file, which lists the characters, and which the Team Lead adds agents to. Set it to a file of your own, such as `~/.config/a-life/agents.yaml`, to keep your own cast outside the checkout. Unless set, [`Sources/ALifeServer/agents.yaml`](Sources/ALifeServer/agents.yaml) in the checkout the server was built from, or the copy the server ships with if that checkout is gone. See [The agents file](#the-agents-file). |
 | `ALIFE_VOICE_DIR` | The voice model the server offers the front ends, for the characters to speak with. `~/a-life-voice` unless set. See [Voices](#voices). |
-| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`, the last usage reading, in `usage.json`, and the models chosen in the app, in `models.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
+| `ALIFE_STATE_DIR` | Where the server keeps what it remembers between starts: the characters waiting for the usage limit to reset, in `continues.json`, the last usage reading, in `usage.json`, the models chosen in the app, in `models.json`, and the devices registered for notifications, with the server's own id, in `devices.json`. `~/a-life-state` unless set; it is made when there is something to keep. See [The usage limit](#the-usage-limit). |
 | `ALIFE_PROJECTS_DIR` | Where the server clones the projects that are git repositories, one directory per character, named after its id (with a clone of each repository in it, for a project of several). `~/a-life-projects` unless set. See [A character for another project](#a-character-for-another-project). |
+| `ALIFE_APNS_KEY_FILE` | The `.p8` key file from your Apple developer account, for sending push notifications. See [Push notifications](#push-notifications). |
+| `ALIFE_APNS_KEY_ID` | That key's id, ten characters. |
+| `ALIFE_APNS_TEAM_ID` | Your Apple developer team's id. |
+| `ALIFE_APNS_TOPIC` | The app's bundle id, `com.q231950.alife` unless you build it under your own. Devices registering for another app are refused. |
 
 ```sh
 ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
@@ -480,7 +484,7 @@ The server runs as the user `alife` in its container, never root, and keeps ever
 | Volume | In the container | What's in it |
 |---|---|---|
 | `lot` | `/home/alife/a-life-lot` | The lot: what the characters build and plant. |
-| `state` | `/home/alife/a-life-state` | Who is waiting for the usage limit, the last usage reading, and the models chosen in the app. |
+| `state` | `/home/alife/a-life-state` | Who is waiting for the usage limit, the last usage reading, the models chosen in the app, and the devices registered for notifications. |
 | `voice` | `/home/alife/a-life-voice` | The voice model. |
 | `projects` | `/home/alife/a-life-projects` | The clones of the projects the characters work on. |
 | `checkout` | `/home/alife/a-life` | The Engineer's a\*life checkout. |
@@ -613,8 +617,11 @@ A session's `{id}` is its character's, such as `builder` or `engineer`, and neve
 | `GET` | `/v1/usage` | | How much of Claude's 5-hour usage window is used, as the server last heard. See [below](#the-usage-and-its-stream). |
 | `GET` | `/v1/usage/events` | | The usage's stream (server-sent events): the usage as it is now, then again each time it changes. |
 | `GET` | `/v1/voice/{path}` | | The voice model's files, as they are in `ALIFE_VOICE_DIR`: `bundle.json`, then each file it lists. `404` for anything else, and for everything if there's no model. See [Voices](#voices). |
+| `PUT` | `/v1/devices/{token}` | `{"environment": "sandbox", "bundle_id": "com.q231950.alife", "name": "iPhone"}` | Registers a device for push notifications by its APNs token, in hex, or registers it again, which says it was seen: the app does it on every launch. `environment` is `sandbox` or `production`, the one its token belongs to, and `name` is only for the log. Answers `{"server_id": "…", "push_enabled": true}`: the server's own id, which its notifications carry, and whether it is set up to send. A device is taken while it isn't, so it hears once it is. `400` for a token that isn't hex, another environment, or a bundle id other than `ALIFE_APNS_TOPIC`. See [Push notifications](#push-notifications). |
+| `DELETE` | `/v1/devices/{token}` | | Forgets the device. `204`, also if it wasn't registered. |
+| `POST` | `/v1/devices/{token}/test` | | Sends the device a test notification, "a*life can reach you.", for the app's Send a test and for trying it with curl. `204` once Apple has taken it, `404` for a device that isn't registered, `410` if Apple says its token is gone (it is forgotten), `502` if Apple turned it away for another reason, and `503` if the server isn't set up to send. |
 
-An unknown session id gets a `404`. The `POST` and `PUT` routes answer `202 Accepted` as soon as the request is taken; what happens next arrives on the event stream. Errors look like `{"error": true, "reason": "…"}`.
+An unknown session id gets a `404`. The `POST` and `PUT` routes on sessions answer `202 Accepted` as soon as the request is taken; what happens next arrives on the event stream. Errors look like `{"error": true, "reason": "…"}`.
 
 ### The event stream
 
@@ -718,6 +725,69 @@ The app says what the characters say out loud, while you stand near them, with [
 ```
 
 That downloads the model from the Phonon release the app is built against, checks it, and unpacks it into `~/a-life-voice` (or `ALIFE_VOICE_DIR`). Restart the server: it says whether it has found the model, and offers it at `/v1/voice/`. The app downloads it from there (about 160 MB, checked file by file), keeps it in its Application Support, and doesn't download it again unless the model there changes. Without a model the server answers `404`, and the characters keep quiet. Any other Phonon Core ML model bundle will do in its place, such as one you exported with voices of your own.
+
+## Push notifications
+
+The iPhone and iPad app can be told when a character finishes its work, while it is in the background or closed. Every character notifies: one notification per job, when it ends with nothing more to do (subtitled "Finished") or on an error (subtitled "Stopped"). Stopping a character, a job that runs into the usage limit (it carries on by itself, and that turn notifies when it ends) and a character waiting for your answer to a tool call don't notify. Only a job the server saw start notifies, so nothing is sent for what happened before it started.
+
+The app registers the device with the server it is connected to when you turn on **Tell me when a character finishes** in its settings, and only devices registered with this server hear from it. The server keeps them in `devices.json` in `ALIFE_STATE_DIR`, with its own id, so a restart doesn't forget them, and forgets a device not seen for 90 days, or one Apple says is gone (such as after the app was deleted). The app registers again on every launch, so a phone in use is never forgotten.
+
+### What a notification says, and what goes through Apple
+
+The notification is titled with the character's name and says what it has been working on in that job, in a line the server puts together from the job's own events, without asking a model, so it costs nothing and is there the moment the job ends:
+
+> Worked on “Add a plan for push notifications” for 12 min: changed push-notifications.md and README.md, ran 4 commands, sent 2 helpers.
+
+That is the first line of what you asked to start the job (cut at a word near 60 characters, with its Markdown taken out), the names of the files it changed (`Edit`, `MultiEdit`, `Write` and `NotebookEdit`; up to three, then "and 4 more"), how many commands it ran and helpers it sent, and how long it took, at most 178 characters in all. A job that stopped on an error says "Stopped after 3 min, working on “…”." and not what the error was. With nothing to say, as for a question answered without any tools, it says "Engineer finished their work." That, and the character's name, is all that goes through Apple's push notification service: never the character's reply, the commands, the other tools' inputs or the errors. The payload carries only the reply's id (under `alife`, with the server's id, the character's, the conversation's and the event's), and tapping the notification opens the app on that character's conversation, at its reply, which the app loads from the server as it loads everything else.
+
+The payload, as it goes to Apple:
+
+```json
+{
+  "aps": {
+    "alert": {"title": "Engineer", "subtitle": "Finished", "body": "Worked on “Add a plan for push notifications” for 12 min: …"},
+    "sound": "default",
+    "thread-id": "engineer",
+    "interruption-level": "active"
+  },
+  "alife": {"server_id": "6B0E…", "session": "engineer", "conversation": "1F3C…", "message": "9A21…", "seq": 482, "kind": "finished"}
+}
+```
+
+`thread-id` groups each character's notifications together. There's no badge, since the server can't know what you've seen, and each goes with `apns-priority` 10 and expires a day later, so a phone that was off for longer isn't sent yesterday's news. A notification Apple doesn't take, or turns away for being busy, isn't sent again.
+
+### Setting it up
+
+It needs an Apple developer account, and these steps can only be done by you:
+
+1. **The App ID.** In Certificates, Identifiers & Profiles, under Identifiers, open `com.q231950.alife` (or your own bundle id) and turn on Push Notifications. Xcode does this for you if it manages signing.
+2. **The key.** Under Keys, make a new key with Apple Push Notifications service (APNs), for sandbox and production. Download the `.p8` file (Apple lets you only once), and note its Key ID and your Team ID. One key serves every app and environment of your team.
+3. **The app.** The project already has the Push Notifications entitlement (`ALife.entitlements`, with `aps-environment`), for iPhone and iPad builds only, so the Mac app is as it was. Build it onto your iPhone with your team, as for any other device build. A development build gets sandbox tokens; TestFlight and App Store builds get production ones, and the server sends to whichever each device registered with.
+4. **The server.** Put the key where the server runs, set the four `ALIFE_APNS_*` settings (see [Settings](#settings)), and restart it. It says "Push notifications are on" as it starts.
+
+```sh
+ALIFE_APNS_KEY_FILE=~/AuthKey_ABC1234567.p8 \
+ALIFE_APNS_KEY_ID=ABC1234567 \
+ALIFE_APNS_TEAM_ID=TEAM123456 \
+ALIFE_APNS_TOPIC=com.q231950.alife \
+swift run ALifeServer
+```
+
+With none of them set, the server says "Push notifications are off" once and works as ever; devices can still register, and hear once it is set up. With some set but not all, or a key it can't read, it says which and carries on with notifications off, rather than not starting. If Apple turns the key, the team or the key id down, the server says so once in its log and keeps the devices.
+
+The server reaches `api.push.apple.com` (or `api.sandbox.push.apple.com`) on port 443, going out. Nothing has to reach it from the internet, so it stays on your tailnet only.
+
+- **In Docker,** copy the key next to `docker-compose.yml` as `AuthKey.p8`, for the container's `alife` (uid 1000) only (`chown 1000 AuthKey.p8 && chmod 600 AuthKey.p8`), uncomment its line under `volumes` there, which mounts it read-only at `/home/alife/a-life-apns/AuthKey.p8`, and the four lines in `.env` (see [`.env.example`](.env.example)), and `docker compose up -d`.
+- **Without Docker,** put the key in `/home/alife/a-life-apns.p8`, readable by `alife` only (`chmod 600`), add the four lines to `/home/alife/a-life.env` with `ALIFE_APNS_KEY_FILE=/home/alife/a-life-apns.p8`, and `systemctl restart a-life-server`.
+- **On a Mac,** set them as any other setting.
+
+To try it: in the app's settings, once it says the server will tell this device, press **Send a test**, or with curl, with the device's token in hex:
+
+```sh
+curl -X POST http://localhost:8080/v1/devices/<token>/test
+```
+
+To try tapping one without a server, run the app in the iOS Simulator and drop a payload on it with `xcrun simctl push booted com.q231950.alife finished.apns`, where `finished.apns` is a payload like the one above, with the `alife` route of a character that is on the lot and a `server_id` the app has registered with.
 
 ## The characters
 
@@ -1022,12 +1092,16 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | File | What it does |
 |---|---|
 | `entrypoint.swift` | Starts Vapor, or runs `add-agent` without it. |
-| `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, the usage's hub, and the routes. |
+| `configure.swift` | Reads the settings, sets up a hub and a backend per character, the lot's hub, the usage's hub, the devices and push notifications (`PushSetup`), and the routes. |
 | `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode, its model and its helper. See [The agents file](#the-agents-file). |
 | `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`, and adds a new agent after the last one without changing the others. |
 | `AddAgent.swift` | The `add-agent` command, which the Team Lead's recruiter runs to add an agent to the agents file. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). |
-| `routes.swift` | The HTTP API, including the event streams, the lot's and the usage's, the models, and the voice model's files. |
-| `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams. |
+| `routes.swift` | The HTTP API, including the event streams, the lot's and the usage's, the models, the voice model's files, and registering devices for notifications. |
+| `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams, and `follow()`, its live events only, for the push notifier. |
+| `DeviceRegistry.swift` | The devices registered for push notifications, and the server's own id, kept in `devices.json`; devices not seen for 90 days are forgotten. See [Push notifications](#push-notifications). |
+| `PushNotifier.swift` | `PushNotifier`, which follows every session and sends each registered device a notification when a character finishes a job, forgetting the devices Apple says are gone, and `JobWatch`, which decides from a session's events when a job has ended and keeps its `JobRecord`: the task, the files changed, the commands, the helpers and when it started. |
+| `JobSummary.swift` | The line a notification says, made from a job's record: what you asked, the files changed, the commands and helpers counted, how long it took, at most 178 characters, never the reply. |
+| `PushSender.swift` | `PushSender`, which the tests fake, `APNSPushSender`, which sends through Apple with APNSwift and your `.p8` key, `PushNotice`, the payload, and `PushSettings`, the four `ALIFE_APNS_*` settings. |
 | `LotSurvey.swift` | Reads the buildings and beds in the lot's `buildings/` and `garden/`, checks them against the lot's edges, the house, each other and how many animals fit in a bed, and writes `lot.md`, with the animals the app draws. |
 | `LotHub.swift` | What stands on the lot: looks at it every second and sends it to the clients following it when it changes. |
 | `SessionBackend.swift` | The protocol a session's backend implements, and `HostedSession`, which pairs it with its hub. |
@@ -1059,6 +1133,8 @@ The tests start the server on a free local port with the dummy characters and dr
 `ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `ContextTests` follow how full a session is: Claude Code asked where it compacts when it starts, after each turn and after compacting, one question at a time, answers to other requests ignored, auto-compact off, the whole window from the turn's `modelUsage` when Claude Code won't say, the tokens on the character's own replies and not its helpers', the same reading not said twice, starting over and resuming, the dummies' made-up context filling and compacting, and a front end following it. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ModelTests` follow each character's model: the agents file's with `--model`, kept when resumed, Claude Code's default for one without, switching while it runs (`set_model`, and the full id in its answer going to the ring), a switch Claude Code refuses going back, switching while it isn't running and while it waits for you, starting over keeping it, `models.json` keeping it until the agents file changes, the versions asked of a Claude Code with nothing to do, plain names without an answer, and a front end switching a dummy's model and refused a name it doesn't know. `ClaudeCodeProcessTests` check the pipes to a real child process, that the launcher adds no arguments of its own, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 
 `LotTests` put buildings and beds on a temporary lot: what a file says and what it can leave out, kinds nobody knows, the Conservationist's foals, bears, polar bears, birds, unicorns, pegasuses and dinosaurs and how many fit in a bed, what keeps a file off the lot and what the server says about it, the older of two overlapping things staying, emptied files, the list and map in `lot.md`, the hub sending each change, the construction worker and the keeper being told where the house is, the keeper being told about every animal the app draws, and a front end seeing a restaurant and an oak appear.
+
+`PushTests` follow jobs to their notifications, without the network: `JobWatch` sending one for a finished job and one for an error, none for an interrupt, the usage limit, a question, a status said again, one with no run before it or starting over, one for each of two jobs, one for carrying on after the usage limit with the task from before it, and the job's record and its seeding from the session; `JobSummary`'s line, the task cut at a word and its Markdown taken out, "and 4 more", the durations, a job that stopped, the 178 characters with the files giving way first, and "Engineer finished their work."; the payload, with a reply's text nowhere in it, under Apple's 4 KB, and its keys; `DeviceRegistry` registering, updating and forgetting devices, keeping them and its id across a restart and forgetting old ones; the four settings; and the routes, with a fake sender, registering, refusing what isn't a device of this app, the test notification, no settings, and the dummies finishing a job with a notification to each device, a device Apple says is gone forgotten, and no notification for stopping one.
 
 `VoiceModelTests` fetch a voice model's files from the address the client package gives, names with spaces in them included, and check that nothing outside it, and no hidden file, is served, and that a server without a model has nothing to fetch.
 

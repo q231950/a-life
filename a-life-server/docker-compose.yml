@@ -31,6 +31,9 @@ services:
       - checkout:/home/alife/a-life
       - cast:/home/alife/a-life-cast
       - claude:/home/alife/.claude
+      # Your Apple push notification key, read-only, for ALIFE_APNS_KEY_FILE.
+      # See "Push notifications" in README.md.
+      #- ./AuthKey.p8:/home/alife/a-life-apns/AuthKey.p8:ro
     # Time for the characters to stop their tools and save their sessions.
     stop_grace_period: 30s
     healthcheck:
@@ -42,8 +45,8 @@ services:
 volumes:
   # What the characters build and plant.
   lot:
-  # Who waits for the usage limit, the last usage reading, and the models
-  # chosen in the app.
+  # Who waits for the usage limit, the last usage reading, the models chosen
+  # in the app, and the devices registered for notifications.
   state:
   # The voice model, from fetch-voice.sh.
   voice:

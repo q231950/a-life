@@ -6,3 +6,5 @@ build/
 .swiftpm/
 .build/
 .env
+# Apple push notification keys, such as a-life-server/AuthKey.p8.
+*.p8

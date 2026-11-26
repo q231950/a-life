@@ -81,6 +81,20 @@ actor SessionHub {
         return stream
     }
 
+    /// The session as it is now, and a stream of the live events from here
+    /// on, with nothing that happened before. For what follows the session
+    /// on the server's own side, such as the push notifier, which mustn't
+    /// act again on what happened before it was there.
+    func follow() -> (state: SessionState, events: AsyncStream<EventEnvelope>) {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<EventEnvelope>.makeStream()
+        streams[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.forget(id) }
+        }
+        return (state, stream)
+    }
+
     func closeStreams() {
         for stream in streams.values {
             stream.finish()

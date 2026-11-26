@@ -6,3 +6,4 @@
 **/.swiftpm
 **/.env
 **/.DS_Store
+**/*.p8
