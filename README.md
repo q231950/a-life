@@ -8,7 +8,16 @@ The lot sits in a box, like a diorama. Four walls stand on its edges with a worl
 
 ## Run it
 
-Open `ALife.xcodeproj` in Xcode 16 or later, pick the **ALife** scheme, and run it on an iPhone/iPad simulator or **My Mac**. To run on a device, set your team under *Signing & Capabilities*.
+Open `ALife.xcodeproj` in Xcode 16 or later, pick the **ALife** scheme, and run it on an iPhone/iPad simulator or **My Mac**.
+
+To run it on your iPhone, iPad or Mac, sign it with your own Apple development team. The project takes it from two files of your own in `Config/`, which git ignores, so your team never ends up in the checkout:
+
+```sh
+cp Config/iOS.sample.xcconfig Config/iOS.xcconfig
+cp Config/macOS.sample.xcconfig Config/macOS.xcconfig
+```
+
+Then put your team's identifier, the ten characters under *Membership details* at [developer.apple.com/account](https://developer.apple.com/account), in place of `ABCDE12345` in each, and open the project again if it was open. You only need the one for the platform you run on. `Config/ALife.xcconfig`, which the project is built on, reads them if they are there; without them it still opens and builds for the simulator. (Picking a team under *Signing & Capabilities* works too, but writes it into the project file, where git sees it.)
 
 Requires iOS 18 / macOS 15, the first releases where `RealityView` and entity-targeted gestures work outside visionOS.
 

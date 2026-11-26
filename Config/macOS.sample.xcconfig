@@ -1,0 +1,8 @@
+// Your Apple development team for the Mac.
+//
+// Copy this file to macOS.xcconfig, here in Config/, and put in your team's
+// identifier: the ten characters under Membership details at
+// https://developer.apple.com/account. macOS.xcconfig is ignored by git, so
+// your team stays with you.
+
+DEVELOPMENT_TEAM[sdk=macosx*] = ABCDE12345
