@@ -35,8 +35,9 @@ public enum Earshot {
 /// came; walking away from a character cuts it off. What a character says
 /// while you are out of earshot, or hadn't heard yet when you walked off, is
 /// kept for it, and once its job is done it calls you with it: take the call
-/// to hear the lot in its voice, wherever you are, or hang up. Each call is
-/// written down in the log too, so hanging up loses nothing.
+/// to hear the lot in its voice, wherever you are, decline it, or hang up.
+/// Each call is written down in the log too, so declining or hanging up
+/// loses nothing.
 ///
 /// What happened while you were away is never said and never rings: an
 /// `AgentSession`'s `newMessages` leave out what was replayed on connecting,
@@ -214,6 +215,17 @@ public final class Narrator {
         if let speaking, speaking.isCall, speaking.speakerID == speakerID {
             engine.stop()
         }
+    }
+
+    /// Declines `speakerID`'s call, ringing or missed, without hearing it or
+    /// opening its conversation: what it said in that call counts as dealt
+    /// with, so it isn't a missed call later, nor on the next launch. Unlike
+    /// hanging up, what you miss of a job it has started since is kept, and
+    /// calls you once that job is done.
+    public func decline(callFrom speakerID: String) {
+        guard let index = calls.firstIndex(where: { $0.speakerID == speakerID }) else { return }
+        let call = calls.remove(at: index)
+        markHeard(call.lastMessageID, from: speakerID)
     }
 
     /// Whether `speakerID` still has something for you: a call, lines kept

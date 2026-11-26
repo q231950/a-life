@@ -185,10 +185,12 @@ private struct AutoApproveToggle: View {
     }
 }
 
-/// The first character calling you, with a button to take the call, and how
-/// many more are holding after it. Once none is ringing, the first missed
-/// call, from a character that finished a job while you were away, with a
-/// button to call it back.
+/// The first character calling you, with how many more are holding after
+/// it, and underneath, buttons to decline or take the call. Once none is
+/// ringing, the first missed call, from a character that finished a job
+/// while you were away, with buttons to decline it or call it back. The
+/// buttons sit under the call rather than beside it, so a narrow phone
+/// doesn't squeeze them.
 private struct IncomingCallBar: View {
     @Environment(ServerConnection.self) private var server
     @Environment(\.narrator) private var narrator
@@ -197,58 +199,126 @@ private struct IncomingCallBar: View {
     var body: some View {
         if let calls = narrator?.incomingCalls, let first = calls.first {
             let name = server.sessions.first { $0.id == first.speakerID }?.name ?? first.speakerID
-            HStack(spacing: 8) {
+            CallBar(tint: .green, backgroundOpacity: 0.15) {
                 Image(systemName: "phone.arrow.down.left.fill")
                     .foregroundStyle(.green)
                     .symbolEffect(.wiggle, options: .repeat(.periodic(delay: 0.6)))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Incoming call from \(name)")
-                        .font(.footnote.bold())
-                    if calls.count > 1 {
-                        Text("\(calls.count - 1) more holding")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 0)
-                Button("Take", systemImage: "phone.fill") {
+                CallText(title: "Incoming call from \(name)",
+                         more: calls.count > 1 ? "\(calls.count - 1) more holding" : nil)
+            } buttons: {
+                DeclineButton(name: name) { decline(callFrom: first.speakerID) }
+                Button {
                     take(first.speakerID)
+                } label: {
+                    CallButtonLabel(title: "Take", systemImage: "phone.fill")
                 }
                 .font(.footnote)
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
                 .accessibilityHint("Plays what \(name) said while you were away")
             }
-            .padding(8)
-            .background(Color.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-            .accessibilityElement(children: .combine)
         } else if let calls = narrator?.missedCalls, let first = calls.first {
             let name = server.sessions.first { $0.id == first.speakerID }?.name ?? first.speakerID
-            HStack(spacing: 8) {
+            CallBar(tint: .red, backgroundOpacity: 0.1) {
                 Image(systemName: "phone.arrow.down.left.fill")
                     .foregroundStyle(.red)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Missed call from \(name)")
-                        .font(.footnote.bold())
-                    if calls.count > 1 {
-                        Text("\(calls.count - 1) more missed")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 0)
-                Button("Call back", systemImage: "phone.arrow.up.right.fill") {
+                CallText(title: "Missed call from \(name)",
+                         more: calls.count > 1 ? "\(calls.count - 1) more missed" : nil)
+            } buttons: {
+                DeclineButton(name: name) { decline(callFrom: first.speakerID) }
+                Button {
                     take(first.speakerID)
+                } label: {
+                    CallButtonLabel(title: "Call back", systemImage: "phone.arrow.up.right.fill")
                 }
                 .font(.footnote)
                 .buttonStyle(.bordered)
                 .tint(.green)
                 .accessibilityHint("Plays what \(name) had to say about the job it finished while you were away")
             }
-            .padding(8)
-            .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            .accessibilityElement(children: .combine)
         }
+    }
+
+    /// Ends a character's call, ringing or missed, without hearing it or
+    /// opening its conversation, so the next one shows. Its notifications go
+    /// too: you've dealt with what they were about.
+    private func decline(callFrom id: String) {
+        narrator?.decline(callFrom: id)
+        #if os(iOS)
+        PushPermission.removeDelivered(about: id)
+        #endif
+    }
+}
+
+/// The red button that declines a call, ringing or missed.
+private struct DeclineButton: View {
+    let name: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            CallButtonLabel(title: "Decline", systemImage: "phone.down.fill")
+        }
+        .font(.footnote)
+        .buttonStyle(.bordered)
+        .tint(.red)
+        .accessibilityHint("Ends the call from \(name) without hearing it")
+    }
+}
+
+/// A call, ringing or missed: who it's from on top, read by VoiceOver as one,
+/// and its buttons in a row underneath, sharing the width, each reachable on
+/// its own.
+private struct CallBar<Caller: View, Buttons: View>: View {
+    let tint: Color
+    let backgroundOpacity: Double
+    @ViewBuilder let caller: Caller
+    @ViewBuilder let buttons: Buttons
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                caller
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            HStack(spacing: 8) {
+                buttons
+            }
+        }
+        .padding(8)
+        .background(tint.opacity(backgroundOpacity), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// Who's calling, and how many more are holding or were missed after them.
+private struct CallText: View {
+    let title: String
+    let more: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.footnote.bold())
+            if let more {
+                Text(more)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// A call button's label, on one line, stretched so the buttons in a row
+/// share its width evenly.
+private struct CallButtonLabel: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
     }
 }
 
