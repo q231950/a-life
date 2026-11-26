@@ -115,6 +115,20 @@ final class CastTests: XCTestCase {
         for part in ["cat \"$ALIFE_AGENTS_FILE\"", "\"$ALIFE_SERVER_COMMAND\" add-agent <<'AGENT'\nid: painter\n", "Never write or edit the file yourself"] {
             XCTAssertTrue(recruiter.contains(part), "the recruiter doesn't know \(part)")
         }
+
+        // It takes agents away too, but only once the person has said yes
+        // to the agent the Team Lead names, and never the three who stay.
+        XCTAssertTrue(teamLead.role.contains("ask them first, naming the agent"))
+        XCTAssertTrue(teamLead.role.contains("Only once they've clearly said yes"))
+        XCTAssertTrue(teamLead.role.contains("You never take away yourself, the Builder or the Conservationist"))
+        XCTAssertTrue(teamLead.helper.description.contains("taken away once the person has said yes"))
+        for part in ["the person said yes", "\"$ALIFE_SERVER_COMMAND\" remove-agent painter\n", "\"$ALIFE_SERVER_COMMAND\" remove-agent painter --confirmed\n"] {
+            XCTAssertTrue(recruiter.contains(part), "the recruiter doesn't know \(part)")
+        }
+        XCTAssertEqual(Cast.keptIDs.sorted(), ["builder", "conservationist", "team-lead"])
+        for id in Cast.keptIDs {
+            XCTAssertTrue(cast.contains { $0.id == id }, "the shipped file has no \(id)")
+        }
     }
 
     // MARK: Adding an agent
@@ -299,6 +313,141 @@ final class CastTests: XCTestCase {
         // The checkout's agents file, and the shipped copy, are as they were.
         XCTAssertEqual(try String(contentsOf: checkout, encoding: .utf8), checkoutBefore)
         XCTAssertEqual(try String(contentsOf: Cast.shippedFile, encoding: .utf8), shippedBefore)
+    }
+
+    // MARK: Taking an agent away
+
+    /// Three agents, with a comment on the second and an example at the end.
+    private let crew = """
+        # The crew.
+        agents:
+          - id: painter
+            name: Painter
+            role: You paint.
+            helper: {name: brush, tools: [Read], description: Paints., prompt: Paint.}
+
+          # The plumber fixes the pipes.
+          - id: plumber
+            name: Plumber
+            role: |
+              You fix the pipes.
+
+              # Not a comment, but part of the role.
+            helper:
+              name: wrench
+              tools: [Read, Edit]
+              description: Fixes pipes.
+              prompt: You fix pipes.
+
+          - id: team-lead
+            name: Team Lead
+            role: You lead.
+            helper: {name: recruiter, tools: [Read], description: Recruits., prompt: Recruit.}
+
+          # An example:
+          # - id: roofer
+
+        """
+
+    func testAnAgentIsTakenAwayWithItsCommentLeavingTheOthersAsTheyAre() throws {
+        let (text, removed) = try Cast.removing("plumber", from: crew, source: "agents.yaml")
+        XCTAssertEqual(removed.name, "Plumber")
+        XCTAssertEqual(text, """
+            # The crew.
+            agents:
+              - id: painter
+                name: Painter
+                role: You paint.
+                helper: {name: brush, tools: [Read], description: Paints., prompt: Paint.}
+
+              - id: team-lead
+                name: Team Lead
+                role: You lead.
+                helper: {name: recruiter, tools: [Read], description: Recruits., prompt: Recruit.}
+
+              # An example:
+              # - id: roofer
+
+            """)
+
+        // The first one, by its name, and the last one before the example.
+        let withoutThePainter = try Cast.removing("painter", from: crew, source: "agents.yaml").text
+        XCTAssertEqual(try Cast.decode(withoutThePainter, from: "agents.yaml").map(\.id), ["plumber", "team-lead"])
+        XCTAssertTrue(withoutThePainter.hasPrefix("# The crew.\nagents:\n\n  # The plumber fixes the pipes.\n  - id: plumber\n"))
+        XCTAssertEqual(try Cast.removing("Painter", from: crew, source: "agents.yaml").text, withoutThePainter)
+    }
+
+    func testAnAgentIsTakenAwayFromTheShippedFileLeavingItsExample() throws {
+        let shipped = try String(contentsOf: Cast.shippedFile, encoding: .utf8)
+        for id in ["engineer", "apple-specialist"] {
+            let (text, removed) = try Cast.removing(id, from: shipped, source: "agents.yaml")
+            XCTAssertEqual(removed.id, id)
+            XCTAssertEqual(try Cast.decode(text, from: "agents.yaml"), shippedCast.filter { $0.id != id })
+            XCTAssertTrue(text.contains("# - id: app-engineer"))
+            XCTAssertFalse(text.contains("\n\n\n"))
+        }
+        // One just added can be taken away again, leaving the file as it was.
+        let added = try Cast.adding(plumber, to: shipped, from: "agents.yaml").text
+        XCTAssertEqual(try Cast.removing("plumber", from: added, source: "agents.yaml").text, shipped)
+    }
+
+    func testTheTeamLeadTheBuilderAndTheConservationistAreNeverTakenAway() throws {
+        let shipped = try String(contentsOf: Cast.shippedFile, encoding: .utf8)
+        let kept = [
+            "team-lead": "The Team Lead (team-lead) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.",
+            "Team Lead": "The Team Lead (team-lead) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.",
+            "builder": "The Builder (builder) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.",
+            "conservationist": "The Conservationist (conservationist) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.",
+        ]
+        for (id, message) in kept {
+            XCTAssertThrowsError(try Cast.removing(id, from: shipped, source: "agents.yaml"), id) { error in
+                XCTAssertEqual("\(error)", message)
+            }
+        }
+        // Even from a file of your own that hasn't got them.
+        XCTAssertThrowsError(try Cast.removing("builder", from: painter, source: "agents.yaml")) { error in
+            XCTAssertEqual("\(error)", "The builder (builder) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.")
+        }
+    }
+
+    func testAnAgentThatIsntThereOrIsTheOnlyOneIsntTakenAway() {
+        XCTAssertThrowsError(try Cast.removing("roofer", from: crew, source: "agents.yaml")) { error in
+            XCTAssertEqual("\(error)", "agents.yaml has no agent \"roofer\". The agents there are painter, plumber, team-lead.")
+        }
+        XCTAssertThrowsError(try Cast.removing("painter", from: painter, source: "agents.yaml")) { error in
+            XCTAssertEqual("\(error)", "The Painter (painter) is the only agent in agents.yaml, and there has to be at least one.")
+        }
+        XCTAssertThrowsError(try Cast.removing("painter", from: "agents: []", source: "agents.yaml")) { error in
+            XCTAssertEqual("\(error)", "agents.yaml: agents is empty. There has to be at least one agent.")
+        }
+    }
+
+    func testTheRemoveAgentCommandOnlyTakesAnAgentAwayOnceConfirmed() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("agents.yaml")
+        try crew.write(to: file, atomically: true, encoding: .utf8)
+        let environment = ["ALIFE_AGENTS_FILE": file.path]
+
+        // Without --confirmed, it only names the agent.
+        let asked = RemoveAgent.run(id: "plumber", confirmed: false, environment: environment)
+        XCTAssertTrue(asked.succeeded)
+        XCTAssertEqual(asked.said, "The Plumber (plumber) can be taken away from \(file.path), but nothing was changed. Ask the person whether to take the Plumber away, and only once they say yes, run this again with --confirmed.")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), crew)
+
+        // A kept agent or one that isn't there is refused, confirmed or not.
+        for (id, confirmed) in [("team-lead", false), ("team-lead", true), ("roofer", true)] {
+            let refused = RemoveAgent.run(id: id, confirmed: confirmed, environment: environment)
+            XCTAssertFalse(refused.succeeded, id)
+            XCTAssertTrue(refused.said.hasSuffix("\nNothing was changed in \(file.path)."), refused.said)
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), crew)
+        }
+
+        let removed = RemoveAgent.run(id: "plumber", confirmed: true, environment: environment)
+        XCTAssertTrue(removed.succeeded)
+        XCTAssertEqual(removed.said, "Took the Plumber (plumber) away from \(file.path). They leave the lot when the server restarts.")
+        XCTAssertEqual(try Cast.load(contentsOf: file).map(\.id), ["painter", "team-lead"])
     }
 
     // MARK: What a file says
