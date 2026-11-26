@@ -72,7 +72,7 @@ in the app: the one switch is the app's, for the whole device.
   brings in `async-http-client`, `swift-nio-http2` and `swift-crypto`,
   which is everything an APNs client needs.
 - **The app** is a SwiftUI `App` with no app delegate, one multiplatform
-  target (`com.q231950.alife`), automatic signing, no entitlements file and
+  target (`dev.neoneon.alife`), automatic signing, no entitlements file and
   no notification code. `WorldView` keeps `selectedID` and the panel's
   `agentPanelIsExpanded`; picking a character from the log sets both, and
   clears that character's missed call. The conversation is a
@@ -169,7 +169,7 @@ signed with the same key, and shut down in `EndSessionsOnShutdown`.
 | `ALIFE_APNS_KEY_FILE` | The `.p8` key file from your Apple developer account. |
 | `ALIFE_APNS_KEY_ID` | Its key id, ten characters. |
 | `ALIFE_APNS_TEAM_ID` | Your team id. |
-| `ALIFE_APNS_TOPIC` | The app's bundle id, `com.q231950.alife` unless you build it under your own. |
+| `ALIFE_APNS_TOPIC` | The app's bundle id, `dev.neoneon.alife` unless you build it under your own. |
 
 If none is set, pushes are off: the server logs "Push notifications are
 off. See Push notifications in the README." once, and everything else
@@ -450,7 +450,7 @@ in this plan; see the open questions.
 These need your Apple developer account and can't be done from here:
 
 1. **The App ID.** In Certificates, Identifiers & Profiles, under
-   Identifiers, open `com.q231950.alife` and turn on Push Notifications.
+   Identifiers, open `dev.neoneon.alife` and turn on Push Notifications.
    (Xcode does this for you if it manages signing.)
 2. **The key.** Under Keys, make a new key with Apple Push Notifications
    service (APNs), for both sandbox and production. Download the `.p8`
@@ -515,7 +515,7 @@ when turned off, and reports `serverHasNoPush`.
 **By hand**, as none of this can be run here:
 
 1. The tap, without a server: run the app in the iOS Simulator and drop a
-   payload on it with `xcrun simctl push booted com.q231950.alife
+   payload on it with `xcrun simctl push booted dev.neoneon.alife
    finished.apns` (the payload above, with a session id that exists).
    Tapping it with the app closed, in the background and open should each
    open that character at its reply; open, it shouldn't show at all.

@@ -23,7 +23,7 @@ struct ALifeApp: App {
         _registration = State(initialValue: PushRegistration(
             server: server,
             environment: AppDelegate.pushEnvironment,
-            bundleID: Bundle.main.bundleIdentifier ?? "com.q231950.alife",
+            bundleID: Bundle.main.bundleIdentifier ?? "dev.neoneon.alife",
             deviceName: UIDevice.current.name
         ))
         #endif

@@ -34,7 +34,7 @@ struct RegisteredDevice: Codable, Equatable, Sendable {
 /// {
 ///   "devices" : [
 ///     {
-///       "bundle_id" : "com.q231950.alife",
+///       "bundle_id" : "dev.neoneon.alife",
 ///       "environment" : "sandbox",
 ///       "last_seen" : 1763820000,
 ///       "name" : "iPhone",

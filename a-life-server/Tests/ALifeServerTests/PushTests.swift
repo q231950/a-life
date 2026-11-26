@@ -363,7 +363,7 @@ final class DeviceRegistryTests: XCTestCase {
 
     private var file: URL { directory.appendingPathComponent("devices.json") }
     private let token = String(repeating: "a1b2c3d4", count: 8)
-    private let phone = DeviceRegistrationRequest(environment: .sandbox, bundleID: "com.q231950.alife", name: "iPhone")
+    private let phone = DeviceRegistrationRequest(environment: .sandbox, bundleID: "dev.neoneon.alife", name: "iPhone")
 
     func testRegistersUpdatesAndUnregisters() async {
         let registry = DeviceRegistry(file: nil)
@@ -375,7 +375,7 @@ final class DeviceRegistryTests: XCTestCase {
 
         // Again, as on every launch: the same device, seen again.
         let later = first.addingTimeInterval(3600)
-        await registry.register(token: token, DeviceRegistrationRequest(environment: .production, bundleID: "com.q231950.alife", name: "iPhone"), now: later)
+        await registry.register(token: token, DeviceRegistrationRequest(environment: .production, bundleID: "dev.neoneon.alife", name: "iPhone"), now: later)
         all = await registry.all
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all.first?.registeredAt, first)
@@ -401,7 +401,7 @@ final class DeviceRegistryTests: XCTestCase {
         let all = await restarted.all
         XCTAssertEqual(all.map { $0.token }, [token])
         XCTAssertEqual(all.first?.name, "iPhone")
-        XCTAssertEqual(all.first?.bundleID, "com.q231950.alife")
+        XCTAssertEqual(all.first?.bundleID, "dev.neoneon.alife")
 
         await restarted.drop(token: token)
         let again = DeviceRegistry(file: file)
@@ -451,9 +451,9 @@ final class PushSettingsTests: XCTestCase {
     }
 
     func testSomeSetSaysWhichAreMissing() {
-        let settings = PushSettings.read(from: ["ALIFE_APNS_KEY_ID": "ABC1234567", "ALIFE_APNS_TOPIC": "com.q231950.alife"])
+        let settings = PushSettings.read(from: ["ALIFE_APNS_KEY_ID": "ABC1234567", "ALIFE_APNS_TOPIC": "dev.neoneon.alife"])
         XCTAssertNil(settings.credentials)
-        XCTAssertEqual(settings.topic, "com.q231950.alife")
+        XCTAssertEqual(settings.topic, "dev.neoneon.alife")
         XCTAssertEqual(
             settings.problem,
             "Push notifications are off: ALIFE_APNS_KEY_FILE and ALIFE_APNS_TEAM_ID aren't set. See Push notifications in the README."
@@ -471,13 +471,13 @@ final class PushSettingsTests: XCTestCase {
             "ALIFE_APNS_KEY_FILE": keyFile.path,
             "ALIFE_APNS_KEY_ID": "ABC1234567",
             "ALIFE_APNS_TEAM_ID": "TEAM123456",
-            "ALIFE_APNS_TOPIC": "com.q231950.alife",
+            "ALIFE_APNS_TOPIC": "dev.neoneon.alife",
         ]
         let settings = PushSettings.read(from: environment)
         XCTAssertNil(settings.problem)
         XCTAssertEqual(
             settings.credentials,
-            PushSettings.Credentials(key: key, keyID: "ABC1234567", teamID: "TEAM123456", topic: "com.q231950.alife")
+            PushSettings.Credentials(key: key, keyID: "ABC1234567", teamID: "TEAM123456", topic: "dev.neoneon.alife")
         )
 
         // A key that isn't one keeps them off, and says so.
@@ -500,7 +500,7 @@ final class PushRoutesTests: XCTestCase {
     private let sender = RecordingPushSender()
     private let token = String(repeating: "a1b2c3d4", count: 8)
     private let otherToken = String(repeating: "0f1e2d3c", count: 8)
-    private let phone = DeviceRegistrationRequest(environment: .sandbox, bundleID: "com.q231950.alife", name: "iPhone")
+    private let phone = DeviceRegistrationRequest(environment: .sandbox, bundleID: "dev.neoneon.alife", name: "iPhone")
 
     override func tearDown() async throws {
         try await app?.asyncShutdown()
@@ -544,7 +544,7 @@ final class PushRoutesTests: XCTestCase {
     }
 
     func testRegistersAndForgetsADevice() async throws {
-        try await start(push: PushSetup(sender: sender, topic: "com.q231950.alife"))
+        try await start(push: PushSetup(sender: sender, topic: "dev.neoneon.alife"))
         let registration = try await client.registerDevice(token: token, phone)
         XCTAssertTrue(registration.pushEnabled)
         XCTAssertFalse(registration.serverID.isEmpty)
@@ -565,14 +565,14 @@ final class PushRoutesTests: XCTestCase {
     }
 
     func testRefusesWhatIsntADeviceOfThisApp() async throws {
-        try await start(push: PushSetup(sender: sender, topic: "com.q231950.alife"))
-        let notHex = try await ask("PUT", "/v1/devices/not-a-token", #"{"environment":"sandbox","bundle_id":"com.q231950.alife"}"#)
+        try await start(push: PushSetup(sender: sender, topic: "dev.neoneon.alife"))
+        let notHex = try await ask("PUT", "/v1/devices/not-a-token", #"{"environment":"sandbox","bundle_id":"dev.neoneon.alife"}"#)
         XCTAssertEqual(notHex.status, 400)
-        let staging = try await ask("PUT", "/v1/devices/\(token)", #"{"environment":"staging","bundle_id":"com.q231950.alife"}"#)
+        let staging = try await ask("PUT", "/v1/devices/\(token)", #"{"environment":"staging","bundle_id":"dev.neoneon.alife"}"#)
         XCTAssertEqual(staging.status, 400)
         let otherApp = try await ask("PUT", "/v1/devices/\(token)", #"{"environment":"sandbox","bundle_id":"com.someone.else"}"#)
         XCTAssertEqual(otherApp.status, 400)
-        XCTAssertTrue(otherApp.body.contains("com.q231950.alife"), otherApp.body)
+        XCTAssertTrue(otherApp.body.contains("dev.neoneon.alife"), otherApp.body)
     }
 
     func testWithoutTheSettingsDevicesRegisterButNothingIsSent() async throws {
@@ -584,7 +584,7 @@ final class PushRoutesTests: XCTestCase {
     }
 
     func testAFinishedJobIsToldToEveryDevice() async throws {
-        try await start(push: PushSetup(sender: sender, topic: "com.q231950.alife"))
+        try await start(push: PushSetup(sender: sender, topic: "dev.neoneon.alife"))
         let registration = try await client.registerDevice(token: token, phone)
         _ = try await client.registerDevice(token: otherToken, phone)
         // Apple will say this one is gone.

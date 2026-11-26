@@ -333,7 +333,7 @@ All optional, as environment variables:
 | `ALIFE_APNS_KEY_FILE` | The `.p8` key file from your Apple developer account, for sending push notifications. See [Push notifications](#push-notifications). |
 | `ALIFE_APNS_KEY_ID` | That key's id, ten characters. |
 | `ALIFE_APNS_TEAM_ID` | Your Apple developer team's id. |
-| `ALIFE_APNS_TOPIC` | The app's bundle id, `com.q231950.alife` unless you build it under your own. Devices registering for another app are refused. |
+| `ALIFE_APNS_TOPIC` | The app's bundle id, `dev.neoneon.alife` unless you build it under your own. Devices registering for another app are refused. |
 
 ```sh
 ALIFE_LOT_DIR=~/Desktop/lot swift run ALifeServer
@@ -617,7 +617,7 @@ A session's `{id}` is its character's, such as `builder` or `engineer`, and neve
 | `GET` | `/v1/usage` | | How much of Claude's 5-hour usage window is used, as the server last heard. See [below](#the-usage-and-its-stream). |
 | `GET` | `/v1/usage/events` | | The usage's stream (server-sent events): the usage as it is now, then again each time it changes. |
 | `GET` | `/v1/voice/{path}` | | The voice model's files, as they are in `ALIFE_VOICE_DIR`: `bundle.json`, then each file it lists. `404` for anything else, and for everything if there's no model. See [Voices](#voices). |
-| `PUT` | `/v1/devices/{token}` | `{"environment": "sandbox", "bundle_id": "com.q231950.alife", "name": "iPhone"}` | Registers a device for push notifications by its APNs token, in hex, or registers it again, which says it was seen: the app does it on every launch. `environment` is `sandbox` or `production`, the one its token belongs to, and `name` is only for the log. Answers `{"server_id": "…", "push_enabled": true}`: the server's own id, which its notifications carry, and whether it is set up to send. A device is taken while it isn't, so it hears once it is. `400` for a token that isn't hex, another environment, or a bundle id other than `ALIFE_APNS_TOPIC`. See [Push notifications](#push-notifications). |
+| `PUT` | `/v1/devices/{token}` | `{"environment": "sandbox", "bundle_id": "dev.neoneon.alife", "name": "iPhone"}` | Registers a device for push notifications by its APNs token, in hex, or registers it again, which says it was seen: the app does it on every launch. `environment` is `sandbox` or `production`, the one its token belongs to, and `name` is only for the log. Answers `{"server_id": "…", "push_enabled": true}`: the server's own id, which its notifications carry, and whether it is set up to send. A device is taken while it isn't, so it hears once it is. `400` for a token that isn't hex, another environment, or a bundle id other than `ALIFE_APNS_TOPIC`. See [Push notifications](#push-notifications). |
 | `DELETE` | `/v1/devices/{token}` | | Forgets the device. `204`, also if it wasn't registered. |
 | `POST` | `/v1/devices/{token}/test` | | Sends the device a test notification, "a*life can reach you.", for the app's Send a test and for trying it with curl. `204` once Apple has taken it, `404` for a device that isn't registered, `410` if Apple says its token is gone (it is forgotten), `502` if Apple turned it away for another reason, and `503` if the server isn't set up to send. |
 
@@ -760,7 +760,7 @@ The payload, as it goes to Apple:
 
 It needs an Apple developer account, and these steps can only be done by you:
 
-1. **The App ID.** In Certificates, Identifiers & Profiles, under Identifiers, open `com.q231950.alife` (or your own bundle id) and turn on Push Notifications. Xcode does this for you if it manages signing.
+1. **The App ID.** In Certificates, Identifiers & Profiles, under Identifiers, open `dev.neoneon.alife` (or your own bundle id) and turn on Push Notifications. Xcode does this for you if it manages signing.
 2. **The key.** Under Keys, make a new key with Apple Push Notifications service (APNs), for sandbox and production. Download the `.p8` file (Apple lets you only once), and note its Key ID and your Team ID. One key serves every app and environment of your team.
 3. **The app.** The project already has the Push Notifications entitlement (`ALife.entitlements`, with `aps-environment`), for iPhone and iPad builds only, so the Mac app is as it was. Build it onto your iPhone with your team, as for any other device build. A development build gets sandbox tokens; TestFlight and App Store builds get production ones, and the server sends to whichever each device registered with.
 4. **The server.** Put the key where the server runs, set the four `ALIFE_APNS_*` settings (see [Settings](#settings)), and restart it. It says "Push notifications are on" as it starts.
@@ -769,7 +769,7 @@ It needs an Apple developer account, and these steps can only be done by you:
 ALIFE_APNS_KEY_FILE=~/AuthKey_ABC1234567.p8 \
 ALIFE_APNS_KEY_ID=ABC1234567 \
 ALIFE_APNS_TEAM_ID=TEAM123456 \
-ALIFE_APNS_TOPIC=com.q231950.alife \
+ALIFE_APNS_TOPIC=dev.neoneon.alife \
 swift run ALifeServer
 ```
 
@@ -787,7 +787,7 @@ To try it: in the app's settings, once it says the server will tell this device,
 curl -X POST http://localhost:8080/v1/devices/<token>/test
 ```
 
-To try tapping one without a server, run the app in the iOS Simulator and drop a payload on it with `xcrun simctl push booted com.q231950.alife finished.apns`, where `finished.apns` is a payload like the one above, with the `alife` route of a character that is on the lot and a `server_id` the app has registered with.
+To try tapping one without a server, run the app in the iOS Simulator and drop a payload on it with `xcrun simctl push booted dev.neoneon.alife finished.apns`, where `finished.apns` is a payload like the one above, with the `alife` route of a character that is on the lot and a `server_id` the app has registered with.
 
 ## The characters
 
