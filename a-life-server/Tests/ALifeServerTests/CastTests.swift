@@ -53,15 +53,14 @@ final class CastTests: XCTestCase {
         XCTAssertEqual(founders.map(\.workspace), [.lot, .aLife, .lot])
         XCTAssertEqual(founders.map(\.changesThings), [true, true, true])
         // Each runs on a model fit for its work, and the helpers on their
-        // character's, but for the Apple Specialist's researcher.
-        // (Agents added since may have any model, or none.)
+        // character's. (Agents added since may have any model, or none.)
         let models: [String: ClaudeModel] = [
-            "builder": .haiku, "conservationist": .haiku, "team-lead": .sonnet, "engineer": .opus, "apple-specialist": .opus,
+            "builder": .haiku, "conservationist": .haiku, "team-lead": .sonnet, "engineer": .opus,
         ]
         for (id, model) in models {
             let character = try XCTUnwrap(cast.first { $0.id == id }, id)
             XCTAssertEqual(character.model, model, id)
-            XCTAssertEqual(character.helper.model, id == "apple-specialist" ? .sonnet : nil, id)
+            XCTAssertNil(character.helper.model, id)
             // The shipped characters work for anyone, on the lot or on
             // a*life, with no project of someone's own to find or clone.
             XCTAssertTrue([Workspace.lot, .aLife].contains(character.workspace), "\(id) has a project of its own")
@@ -379,7 +378,7 @@ final class CastTests: XCTestCase {
 
     func testAnAgentIsTakenAwayFromTheShippedFileLeavingItsExample() throws {
         let shipped = try String(contentsOf: Cast.shippedFile, encoding: .utf8)
-        for id in ["engineer", "apple-specialist"] {
+        for id in ["engineer"] {
             let (text, removed) = try Cast.removing(id, from: shipped, source: "agents.yaml")
             XCTAssertEqual(removed.id, id)
             XCTAssertEqual(try Cast.decode(text, from: "agents.yaml"), shippedCast.filter { $0.id != id })
