@@ -43,11 +43,12 @@ struct ClaudeCode: ClaudeCodeLauncher {
     /// are in.
     var clones: [String: Result<URL, ConfigurationError>] = [:]
     /// The agents file the server read its cast from, which the Team Lead's
-    /// recruiter adds agents to. Its sessions find it in `ALIFE_AGENTS_FILE`.
+    /// recruiter adds agents to and takes them away from. Its sessions find
+    /// it in `ALIFE_AGENTS_FILE`.
     var agentsFile: URL?
     /// This server's own command, which the Team Lead's recruiter runs as
-    /// `add-agent` to add an agent. Its sessions find it in
-    /// `ALIFE_SERVER_COMMAND`.
+    /// `add-agent` to add an agent, or `remove-agent` to take one away. Its
+    /// sessions find it in `ALIFE_SERVER_COMMAND`.
     var serverCommand: URL?
 
     func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
@@ -89,7 +90,8 @@ struct ClaudeCode: ClaudeCodeLauncher {
         // Helpers run in the foreground: the character waits for each one to
         // report back before it carries on, the way the lot shows it.
         environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
-        // For the Team Lead's recruiter, to add an agent to the cast.
+        // For the Team Lead's recruiter, to add an agent to the cast or take
+        // one away.
         if let agentsFile { environment["ALIFE_AGENTS_FILE"] = agentsFile.path }
         if let serverCommand { environment["ALIFE_SERVER_COMMAND"] = serverCommand.path }
 

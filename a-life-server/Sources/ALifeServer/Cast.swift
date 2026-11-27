@@ -123,8 +123,8 @@ struct Helper: Equatable, Sendable {
 /// `agents.yaml` next to this file, which the server ships with, or the file
 /// `ALIFE_AGENTS_FILE` names. The file is read once, when the server starts,
 /// and checked; anything wrong with it stops the server with a message that
-/// says where. New agents can be added to it, as the Team Lead does, and
-/// join the lot when the server next starts.
+/// says where. New agents can be added to it, and agents taken away from it,
+/// as the Team Lead does; either takes effect when the server next starts.
 enum Cast {
     /// The agents file the server ships with. `Package.swift` copies it into
     /// the server's resources.
@@ -309,6 +309,121 @@ enum Cast {
         default:
             throw CastError("The new agent should be one agent's fields, starting with id:, as an agent in the file has them.")
         }
+    }
+
+    // MARK: Taking an agent away
+
+    /// The agents that are never taken away: the Team Lead, who takes them
+    /// away, and the Builder and the Conservationist, who look after the lot.
+    static let keptIDs = ["team-lead", "builder", "conservationist"]
+
+    /// Takes the agent `id` names away from the agents file at `file`, as
+    /// `removing(_:from:source:)` does, and says who it was. The file is left
+    /// as it was if the agent can't be taken away.
+    @discardableResult
+    static func remove(_ id: String, fromFileAt file: URL) throws -> Character {
+        let yaml: String
+        do {
+            yaml = try String(contentsOf: file, encoding: .utf8)
+        } catch {
+            throw CastError("Couldn't read the agents file \(file.path): \(error.localizedDescription)")
+        }
+        let (text, removed) = try removing(id, from: yaml, source: file.path)
+        do {
+            try text.write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            throw CastError("Couldn't write the agents file \(file.path): \(error.localizedDescription)")
+        }
+        return removed
+    }
+
+    /// The agent `id` names, by its id or its name, as the agents file `yaml`
+    /// lists it, once checked that it can be taken away: it is there, it
+    /// isn't one of the `keptIDs`, and it isn't the only agent.
+    static func agent(_ id: String, toRemoveFrom yaml: String, source: String) throws -> Character {
+        let cast = try decode(yaml, from: source)
+        let wanted = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let agent = cast.first(where: { $0.id == wanted })
+            ?? cast.first(where: { $0.name.lowercased() == wanted.lowercased() })
+        else {
+            if keptIDs.contains(wanted) { throw kept(wanted, named: nil) }
+            let ids = cast.map(\.id).joined(separator: ", ")
+            throw CastError("\(source) has no agent \"\(wanted)\". The agents there are \(ids).")
+        }
+        if keptIDs.contains(agent.id) { throw kept(agent.id, named: agent.name) }
+        guard cast.count > 1 else {
+            throw CastError("The \(agent.name) (\(agent.id)) is the only agent in \(source), and there has to be at least one.")
+        }
+        return agent
+    }
+
+    /// Why a kept agent can't be taken away.
+    private static func kept(_ id: String, named name: String?) -> CastError {
+        CastError("The \(name ?? id) (\(id)) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.")
+    }
+
+    /// The text of the agents file `yaml` without the agent `id` names, by
+    /// its id or its name, and who that was. The comments right above the
+    /// agent go with it; everything else in the file, the other agents and
+    /// the other comments, stays as it is, word for word.
+    ///
+    /// Throws, saying why, if the agent isn't there, is one of the
+    /// `keptIDs`, or can't be taken out without changing the others; and if
+    /// the file is wrong already.
+    static func removing(_ id: String, from yaml: String, source: String) throws -> (text: String, removed: Character) {
+        let cast = try decode(yaml, from: source)
+        let agent = try Self.agent(id, toRemoveFrom: yaml, source: source)
+        guard let index = cast.firstIndex(of: agent) else { throw CastError("\(source) has no agent \"\(id)\".") }
+        let byHand = CastError("\(source): the \(agent.name) (\(agent.id)) couldn't be taken away without changing the others. Take it out of the file by hand.")
+
+        var lines = yaml.components(separatedBy: "\n")
+        /// How far a line is indented.
+        func indent(of line: String) -> Int { line.prefix { $0 == " " }.count }
+        /// Whether a line is blank or a comment.
+        func isAside(_ line: String) -> Bool {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            return text.isEmpty || text.hasPrefix("#")
+        }
+        // Each agent starts with a "- " as far in as the first one, such as
+        // "  - id: builder"; lines in a role or a prompt are further in.
+        guard let first = lines.firstIndex(where: { !isAside($0) && $0.dropFirst(indent(of: $0)).hasPrefix("- ") }) else { throw byHand }
+        let margin = indent(of: lines[first])
+        let starts = lines.indices.filter { place in
+            place >= first && indent(of: lines[place]) == margin && lines[place].dropFirst(margin).hasPrefix("- ")
+        }
+        guard starts.count == cast.count else { throw byHand }
+
+        // From its "- ", with the comments right above it, which are about
+        // it, to the next agent's, less the blank lines and the comments at
+        // its end, which belong to what comes after it.
+        var start = starts[index]
+        while start > first, isAside(lines[start - 1]), !lines[start - 1].trimmingCharacters(in: .whitespaces).isEmpty,
+              indent(of: lines[start - 1]) <= margin {
+            start -= 1
+        }
+        var end = index + 1 < starts.count ? starts[index + 1] : lines.count
+        while end > starts[index] + 1, isAside(lines[end - 1]), indent(of: lines[end - 1]) <= margin || lines[end - 1].trimmingCharacters(in: .whitespaces).isEmpty {
+            end -= 1
+        }
+        lines.removeSubrange(start..<end)
+        // One blank line between what came before and after it, not two.
+        while start > 0, start < lines.count, lines[start - 1].trimmingCharacters(in: .whitespaces).isEmpty,
+              lines[start].trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.remove(at: start)
+        }
+
+        let text = lines.joined(separator: "\n")
+        let after: [Character]
+        do {
+            after = try decode(text, from: source)
+        } catch {
+            throw byHand
+        }
+        // Only if everyone else is just as they were.
+        var others = cast
+        others.remove(at: index)
+        guard after == others else { throw byHand }
+        return (text, agent)
     }
 
     // MARK: Explaining what's wrong
