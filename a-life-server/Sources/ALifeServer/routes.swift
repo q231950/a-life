@@ -6,6 +6,7 @@ extension Lot: @retroactive Content {}
 extension Usage: @retroactive Content {}
 extension ModelOption: @retroactive Content {}
 extension DeviceRegistration: @retroactive Content {}
+extension InitialState: @retroactive Content {}
 
 func routes(
     _ app: Application,
@@ -28,6 +29,17 @@ func routes(
 
     app.get("health") { _ in
         ["status": "ok"]
+    }
+
+    // Everything as it is right now: every session, the lot and the usage.
+    // Front ends take it on in one go when they launch or reconnect, then
+    // follow each session's events from the `last_seq` it gives.
+    app.get("v1", "init") { _ -> InitialState in
+        var states: [SessionState] = []
+        for session in sessions {
+            states.append(await session.hub.state)
+        }
+        return InitialState(sessions: states, lot: await lot.lot, usage: await usage.usage)
     }
 
     let all = app.grouped("v1", "sessions")

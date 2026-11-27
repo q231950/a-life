@@ -351,4 +351,28 @@ final class SessionStateTests: XCTestCase {
         XCTAssertTrue(state.messages.isEmpty)
         XCTAssertEqual(state.lastSeq, 11)
     }
+
+    func testTheInitialStateHasEverythingAndSaysWhereEachSessionHadGotTo() throws {
+        var builder = SessionState(id: "builder", name: "Builder", color: "#F2A633")
+        builder.apply(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")))
+        builder.apply(EventEnvelope(seq: 2, event: .subagentStarted(Subagent(id: "s1", task: "Fetch the bricks"))))
+        let shed = LotItem(id: "buildings/shed.md", category: .building, kind: "shed", name: "Shed", area: LotArea(x: 40, y: 40))
+        let initial = InitialState(
+            sessions: [builder, SessionState(id: "gardener", name: "Gardener")],
+            lot: Lot(revision: 2, items: [shed]),
+            usage: Usage(revision: 1)
+        )
+        let data = try JSONEncoder().encode(initial)
+        XCTAssertEqual(try JSONDecoder().decode(InitialState.self, from: data), initial)
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["sessions", "lot", "usage"])
+        let sessions = try XCTUnwrap(json["sessions"] as? [[String: Any]])
+        XCTAssertEqual(sessions.first?["conversation_id"] as? String, "b1")
+        XCTAssertEqual(sessions.first?["last_seq"] as? Int, 2)
+
+        // Without a lot or a usage, it has none of either.
+        let bare = #"{"sessions":[]}"#
+        XCTAssertEqual(try JSONDecoder().decode(InitialState.self, from: Data(bare.utf8)), InitialState(sessions: []))
+    }
 }

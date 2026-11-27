@@ -32,6 +32,10 @@ public final class ServerConnection {
     /// the server says, and for servers from before there was anything to
     /// build.
     public private(set) var lot = Lot()
+    /// Whether the lot's latest change happened while this front end was
+    /// following it, rather than being what it was sent on connecting, so
+    /// what went up while it was away doesn't all pop up at once.
+    public private(set) var lotIsNews = false
     /// How much of Claude's 5-hour usage window is used, as the server last
     /// heard. No window until the server has read one, and for servers from
     /// before it told.
@@ -114,6 +118,7 @@ public final class ServerConnection {
         disconnect()
         sessions = []
         lot = Lot()
+        lotIsNews = false
         usage = Usage()
         models = []
         log.clear()
@@ -136,11 +141,12 @@ public final class ServerConnection {
             var reason = "The server closed the connection."
             var connectedAt: Date?
             do {
-                // Who is on the lot. It is read again after every drop, in
-                // case the server restarted with other characters.
-                let listed = try await client.sessions()
+                // Everything as it is now, taken on in one go. It is read
+                // again after every drop, in case the server restarted with
+                // other characters.
+                let initial = try await initialState(client)
                 try Task.checkCancellation() // disconnected meanwhile
-                adopt(listed)
+                adopt(initial)
                 // The models, which the server may take a few seconds to
                 // learn when it has just started, so they don't hold up the
                 // rest.
@@ -148,14 +154,16 @@ public final class ServerConnection {
                     guard let models = try? await client.models(), !models.isEmpty else { return }
                     if self?.models != models { self?.models = models }
                 }
-                // The server replays what this front end missed of each
-                // session, then goes live.
+                // Each session is followed from where this front end had
+                // got to before: what it missed, which the snapshot has
+                // already, only goes to the log, and what comes after the
+                // snapshot is live.
                 var streams: [(AgentSession, AsyncThrowingStream<EventEnvelope, Error>)] = []
                 for session in sessions {
                     let stream = try await client.events(
                         of: session.id,
-                        conversationID: session.state.conversationID,
-                        after: session.state.lastSeq
+                        conversationID: session.followsFrom.conversationID,
+                        after: session.followsFrom.after
                     )
                     streams.append((session, stream))
                 }
@@ -177,6 +185,7 @@ public final class ServerConnection {
                         if let lotChanges {
                             group.addTask { @MainActor [weak self] in
                                 for try await lot in lotChanges where lot != self?.lot {
+                                    self?.lotIsNews = true
                                     self?.lot = lot
                                 }
                             }
@@ -225,15 +234,33 @@ public final class ServerConnection {
         }
     }
 
-    /// Makes `sessions` match the server's list, keeping what is already
-    /// known about the sessions that are still there.
-    private func adopt(_ listed: [SessionState]) {
-        sessions = listed.map { entry in
-            let kept = session(entry.id) ?? AgentSession(SessionState(id: entry.id, name: entry.name, color: entry.color))
+    /// Everything on the server as it is now: from its init call, or, from
+    /// servers from before there was one, its list of sessions, which has
+    /// every session in full too, with the lot and the usage left as they
+    /// are for their streams to bring.
+    private func initialState(_ client: ALifeServerClient) async throws -> InitialState {
+        do {
+            return try await client.initialState()
+        } catch ALifeClientError.server(status: 404, reason: _) {
+            return InitialState(sessions: try await client.sessions(), lot: lot, usage: usage)
+        }
+    }
+
+    /// Takes on everything in `initial` at once: `sessions` match the
+    /// server's, each as it is now, keeping the same `AgentSession` for the
+    /// ones that are still there, and the lot and the usage are as it says.
+    private func adopt(_ initial: InitialState) {
+        sessions = initial.sessions.map { snapshot in
+            let kept = session(snapshot.id) ?? AgentSession(SessionState(id: snapshot.id, name: snapshot.name, color: snapshot.color))
             kept.log = log
-            kept.update(from: entry)
+            kept.catchUp(to: snapshot)
             kept.client = client
             return kept
         }
+        if lot != initial.lot {
+            lotIsNews = false
+            lot = initial.lot
+        }
+        if usage != initial.usage { usage = initial.usage }
     }
 }

@@ -65,16 +65,17 @@ public final class AgentSession {
     }
 
     /// What was said in the session since this front end caught up with it,
-    /// oldest first, as it happened: not what was said before and replayed
-    /// on connecting, nor what the character said while finishing a job it
-    /// already had when this front end first met it. The most recent few
-    /// only. These are the lines worth saying out loud.
+    /// oldest first, as it happened: not what was said before, which comes
+    /// with the snapshot it takes on when it connects, nor what the
+    /// character said while finishing a job it already had when this front
+    /// end first met it. The most recent few only. These are the lines
+    /// worth saying out loud.
     public private(set) var newMessages: [Message] = []
     /// Whether the character is still on a job it already had when this
-    /// front end first met it, or is still being caught up on. What it does
-    /// meanwhile happened while you were away: it goes to the log, not to
-    /// `newMessages`. It ends once the character is seen without a job, or
-    /// once you answer it or tell it something.
+    /// front end first met it. What it does meanwhile happened while you
+    /// were away: it goes to the log, not to `newMessages`. It ends once the
+    /// character is seen without a job, or once you answer it or tell it
+    /// something.
     public private(set) var isCatchingUp = true
     /// What the character said in the job it finished while you were away,
     /// oldest first: its replies since it was last told something, if
@@ -87,9 +88,18 @@ public final class AgentSession {
     @ObservationIgnored var client: ALifeServerClient?
     /// Where what the character does is written down. Set by the connection.
     @ObservationIgnored weak var log: EventLog?
-    /// The sequence number the server had got to when the connection last
-    /// listed the sessions. Events up to it are replayed, not new.
-    @ObservationIgnored var caughtUpAt = 0
+    /// The sequence number the server had got to in the snapshot the
+    /// connection last took on. Events up to it are in the snapshot
+    /// already: they are only written down in the log, not applied again.
+    @ObservationIgnored private(set) var caughtUpAt = 0
+    /// Where to follow the session's events from: what this front end had
+    /// seen of it before it took on the last snapshot. The server sends what
+    /// happened since, which is written down in the log, then goes live.
+    @ObservationIgnored private(set) var followsFrom: (conversationID: String?, after: Int) = (nil, 0)
+    /// The session as this front end had seen it, brought up to date by the
+    /// events the server sends again up to the snapshot, so the log can say
+    /// what each one changed. `nil` once they are all in.
+    @ObservationIgnored private var history: SessionState?
     /// How many of `newMessages` are kept.
     static let newMessagesKept = 20
 
@@ -163,9 +173,22 @@ public final class AgentSession {
 
     // MARK: Kept up to date by the connection
 
+    /// Takes in one of the session's events. One the last snapshot has
+    /// already is only written down in the log, as while you were away;
+    /// a later one happens now.
     func apply(_ envelope: EventEnvelope) {
+        guard envelope.seq > caughtUpAt else {
+            if var history {
+                let before = history
+                history.apply(envelope)
+                record(envelope, from: before, to: history, isWhileAway: true)
+                self.history = envelope.seq < caughtUpAt ? history : nil
+            }
+            return
+        }
+        history = nil
         let before = state
-        let isWhileAway = envelope.seq <= caughtUpAt || isCatchingUp
+        let isWhileAway = isCatchingUp
         state.apply(envelope)
         if !isWhileAway, case .message(let message) = envelope.event, state.messages.count > before.messages.count {
             newMessages.append(message)
@@ -173,28 +196,32 @@ public final class AgentSession {
                 newMessages.removeFirst(newMessages.count - Self.newMessagesKept)
             }
         }
-        record(envelope, after: before, isWhileAway: isWhileAway)
+        record(envelope, from: before, to: state, isWhileAway: isWhileAway)
         finishCatchingUp()
     }
 
-    /// Takes on what the server's list of sessions says about this one.
-    func update(from listed: SessionState) {
-        if state.name != listed.name { state.name = listed.name }
-        if state.color != listed.color { state.color = listed.color }
-        // The model is the character's, not the conversation's, so the
-        // events replayed for the conversation may not say it.
-        if state.model != listed.model { state.model = listed.model }
-        if state.fileModel != listed.fileModel { state.fileModel = listed.fileModel }
-        caughtUpAt = listed.lastSeq
+    /// Takes on the session as the server has it now, all at once, rather
+    /// than event by event, so a front end that launches or reconnects
+    /// shows where things stand without going through everything that
+    /// happened meanwhile. What did happen meanwhile still comes, from
+    /// `followsFrom`, for the log.
+    func catchUp(to snapshot: SessionState) {
+        // From what the log had got to, if the connection dropped before
+        // what was missed last time had all come in.
+        let seen = history ?? state
+        followsFrom = (seen.conversationID, seen.lastSeq)
+        history = seen
+        if state != snapshot { state = snapshot }
+        caughtUpAt = snapshot.lastSeq
         finishCatchingUp()
     }
 
-    /// Catching up is over once everything listed has been replayed and the
-    /// character isn't working any more: whatever job it had before you came
-    /// is done, or it is waiting for you. If it finished a job, or is
-    /// waiting for you, what it said meanwhile is kept for a missed call.
+    /// Catching up is over once the character isn't working any more:
+    /// whatever job it had before you came is done, or it is waiting for
+    /// you. If it finished a job, or is waiting for you, what it said
+    /// meanwhile is kept for a missed call.
     private func finishCatchingUp() {
-        guard isCatchingUp, state.lastSeq >= caughtUpAt, state.status != .running else { return }
+        guard isCatchingUp, state.status != .running else { return }
         isCatchingUp = false
         guard (state.status == .idle && state.stopReason == .endTurn) || isWaitingForYou else { return }
         let sinceToldSomething = state.messages.reversed().prefix { $0.kind != .user }.reversed()
@@ -202,8 +229,9 @@ public final class AgentSession {
     }
 
     /// Writes down in the log what `envelope` changed, if it is worth
-    /// looking back on. `before` is the session as it was before.
-    private func record(_ envelope: EventEnvelope, after before: SessionState, isWhileAway: Bool) {
+    /// looking back on: `before` is the session as it was before, and
+    /// `state` as it is after.
+    private func record(_ envelope: EventEnvelope, from before: SessionState, to state: SessionState, isWhileAway: Bool) {
         guard let log else { return }
         let entry: (EventLog.Entry.Kind, String)?
         switch envelope.event {

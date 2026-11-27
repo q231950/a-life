@@ -24,7 +24,7 @@ flowchart TB
     serve["tailscale serve<br/>HTTPS on your tailnet"]
 
     subgraph alife["a-life-server, Vapor, on 127.0.0.1:8080"]
-        routes["routes.swift<br/>/v1/sessions/..., /v1/lot, /v1/usage,<br/>/v1/models, /v1/voice/..."]
+        routes["routes.swift<br/>/v1/init, /v1/sessions/..., /v1/lot, /v1/usage,<br/>/v1/models, /v1/voice/..."]
         hub["SessionHub, one per character<br/>event log, snapshot, open streams"]
         character["ClaudeCharacter, one per agent<br/>in agents.yaml"]
         lothub["LotHub<br/>looks at the lot every second"]
@@ -73,7 +73,7 @@ flowchart TB
     cast -->|"read once at the start,<br/>add-agent adds to it"| character
 ```
 
-- **The front ends** use `ALifeClient`: a `ServerConnection` reads `GET /v1/sessions` to learn who is on the lot, opens one event stream per session, and follows `/v1/lot/events` and `/v1/usage/events` too. Each character is an `AgentSession`, which sends what you say and your answers as plain HTTP requests. See [The API](#the-api).
+- **The front ends** use `ALifeClient`: a `ServerConnection` reads `GET /v1/init` to take on who is on the lot and everything as it is now in one go, opens one event stream per session, and follows `/v1/lot/events` and `/v1/usage/events` too. Each character is an `AgentSession`, which sends what you say and your answers as plain HTTP requests. See [The API](#the-api).
 - **The server** keeps a `SessionHub` per character, which holds its events and sends them to every stream that's open, and a backend per character that plays it: `ClaudeCharacter`, or the [dummies](#the-dummy-characters). See [How it fits together](#how-it-fits-together).
 - **Each character** is a `claude` process of its own, started with the first thing you say to it, in the directory it works in, and kept running between turns. Its helper is a subagent in that same process, defined with `--agents`. When a CLI has stopped, the next thing you say starts it again with `--resume`, in the same Claude Code session. See [The characters](#the-characters).
 - **The files** are all where the server runs: the lot the characters build and plant on, which `LotHub` reads every second; the checkouts and clones they work in; what the server remembers between starts; the agents file; the voice model; and Claude Code's own sessions.
@@ -96,6 +96,8 @@ sequenceDiagram
     participant LotHub
     participant Usage as UsageHub
 
+    App->>Routes: GET /v1/init
+    Routes-->>App: every session, the lot and the usage, as they are
     App->>Routes: GET /v1/sessions/builder/events?after=n&conversation=id
     App->>Routes: GET /v1/lot/events and GET /v1/usage/events
     Note over App,Routes: The streams stay open, with a ping every 15 seconds
@@ -602,6 +604,7 @@ A session's `{id}` is its character's, such as `builder` or `engineer`, and neve
 | Method | Path | Body | What it does |
 |---|---|---|---|
 | `GET` | `/health` | | `{"status":"ok"}` |
+| `GET` | `/v1/init` | | Everything as it is right now, for a front end to take on in one go when it launches or reconnects: `{"sessions": […], "lot": {…}, "usage": {…}}`, each as `GET /v1/sessions`, `GET /v1/lot` and `GET /v1/usage` give them. See [Connecting](#connecting). |
 | `GET` | `/v1/sessions` | | Every session as it is right now, one per character: id, name, colour (`#RRGGBB`, the character's shirt), status, what it is doing, messages, pending approvals, the whole conversation (`conversation`, see below), helpers out, whether auto approve is on (`auto_approve`), how full the character's Claude Code session is and the model playing it (`context`, see `session.context` below; left out until its session has said), the model it runs on (`model`, see `session.model` below) and the one the agents file gives it (`file_model`), each left out for Claude Code's own default, last sequence number. |
 | `GET` | `/v1/sessions/{id}` | | One session as it is right now. |
 | `GET` | `/v1/sessions/{id}/events` | | The session's event stream (server-sent events). See below. |
@@ -641,7 +644,16 @@ GET /v1/sessions/builder/events?after=4&conversation=<conversation id>
 
 The server then sends everything after 4 and carries on live, so nothing is missed or repeated. If the conversation id isn't the current one (the session was started over, or the server restarted), or none is given, the server sends the current conversation from its start. A comment line (`: ping`) goes out every 15 seconds to keep the connection open.
 
-A front end follows every session at once: it reads `GET /v1/sessions` to learn who is on the lot, then opens one stream per session.
+### Connecting
+
+A front end follows every session at once. When it launches, and each time it reconnects, it reads `GET /v1/init` and takes on everything in it at once: every session as it is, with its whole conversation, the helpers out now and the approvals waiting now, the lot and the usage. It doesn't go through what happened meanwhile event by event, so a helper that came and went while you were away never shows, and nothing pops up, rings or is said out loud for it.
+
+Each session in it says where it had got to, `conversation_id` and `last_seq`, and the front end then opens one stream per session. It follows each from where it had got to before (`after` and `conversation` as it last saw them, or none on its first launch), so the server sends what it missed and then carries on live, with nothing missed or repeated in between:
+
+- events up to the snapshot's `last_seq` are in the snapshot already, so the a*life app only writes them down in its log, as while you were away;
+- events after it happened since the snapshot was taken, and are shown as they come.
+
+A front end that only wants where things stand can follow on from the snapshot's own `last_seq` and `conversation_id` instead. The lot's and the usage's streams start with the lot and the usage as they are, which the a*life app skips if they are what `GET /v1/init` said. The a*life app falls back to `GET /v1/sessions`, which has every session in full too, for a server from before there was `GET /v1/init`.
 
 | Event | Carries | Meaning |
 |---|---|---|
@@ -1096,7 +1108,7 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `agents.yaml` | The cast the server ships with: who each character is, its colour, its permission mode, its model and its helper. See [The agents file](#the-agents-file). |
 | `Cast.swift` | Reads and checks the agents file into `Character`s, each with its `Helper` and where it works, its `Workspace`, and adds a new agent after the last one without changing the others. |
 | `AddAgent.swift` | The `add-agent` command, which the Team Lead's recruiter runs to add an agent to the agents file. See [The Team Lead and the agents file](#the-team-lead-and-the-agents-file). |
-| `routes.swift` | The HTTP API, including the event streams, the lot's and the usage's, the models, the voice model's files, and registering devices for notifications. |
+| `routes.swift` | The HTTP API, including the init call a front end takes everything on from, the event streams, the lot's and the usage's, the models, the voice model's files, and registering devices for notifications. |
 | `SessionHub.swift` | One session's event log, snapshot, and fan-out to its open streams, and `follow()`, its live events only, for the push notifier. |
 | `DeviceRegistry.swift` | The devices registered for push notifications, and the server's own id, kept in `devices.json`; devices not seen for 90 days are forgotten. See [Push notifications](#push-notifications). |
 | `PushNotifier.swift` | `PushNotifier`, which follows every session and sends each registered device a notification when a character finishes a job, forgetting the devices Apple says are gone, and `JobWatch`, which decides from a session's events when a job has ended and keeps its `JobRecord`: the task, the files changed, the commands, the helpers and when it started. |
@@ -1128,7 +1140,7 @@ swift test
 
 They run on macOS and on Linux; the pull request checks run them on both, and build the server's Docker image.
 
-The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, and bad requests.
+The tests start the server on a free local port with the dummy characters and drive it with the real client package: each character in a session of its own, the Builder's approval, the helpers each character sends off, a second front end joining late, and taking on everything at once from `GET /v1/init`, with what it missed only in its log, auto approve in one session and not the others, starting one session over, interrupting one character while the other carries on (and calling its helpers back), a question answered mid-task, reconnecting mid-session, following the events on from where `GET /v1/init` left off, and bad requests.
 
 `ClaudeCharacterTests` play Claude Code's side of the stream-json with lines like the ones it really writes: "build me an office" sending the Builder's construction worker off and its approval going back to Claude Code, the Conservationist's keeper, the Engineer sending its a\*life expert off in the a\*life checkout, the Team Lead sending its recruiter off to add an agent, denying, auto approve, interrupting with a helper out, Claude Code stopping and being resumed, starting over, helpers in the background, and errors. `UsageTests` read the windows from what Claude Code 2.1.323 wrote on an ordinary turn, and from less, check that the latest reading wins, that it outlasts a restart in `usage.json`, that every turn of a character's run and a turn that ends on the limit reach the hub, and that a front end follows the usage the dummies make up. `ContextTests` follow how full a session is: Claude Code asked where it compacts when it starts, after each turn and after compacting, one question at a time, answers to other requests ignored, auto-compact off, the whole window from the turn's `modelUsage` when Claude Code won't say, the tokens on the character's own replies and not its helpers', the same reading not said twice, starting over and resuming, the dummies' made-up context filling and compacting, and a front end following it. `UsageLimitTests` run into the usage limit with a clock that only moves when the test moves it: the 5-hour limit waited out and "please continue" said once, a minute after it resets, in the same session or a resumed one, waiting again on the next limit, the wait called off by a message, an interrupt or starting over, the weekly limit only reported, the reset read from the text, and `continues.json` carrying the wait across a restart. `ModelTests` follow each character's model: the agents file's with `--model`, kept when resumed, Claude Code's default for one without, switching while it runs (`set_model`, and the full id in its answer going to the ring), a switch Claude Code refuses going back, switching while it isn't running and while it waits for you, starting over keeping it, `models.json` keeping it until the agents file changes, the versions asked of a Claude Code with nothing to do, plain names without an answer, and a front end switching a dummy's model and refused a name it doesn't know. `ClaudeCodeProcessTests` check the pipes to a real child process, that the launcher adds no arguments of its own, which directory each character works in, the agents file and the server's command each session is given, finding the a\*life checkout, and a project's repository being cloned once from a bare repository on disk and then reused as it is, at a branch, and when it can't be cloned, and a project's several repositories cloned side by side the same way.
 

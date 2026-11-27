@@ -60,6 +60,9 @@ final class ServerConnectionTests: XCTestCase {
         server.connect()
         await wait(for: "live") { server.phase == .live }
         XCTAssertEqual(server.sessions.map(\.name), ["Gardener", "Builder"])
+        // Everything comes from the init call, not the list of sessions.
+        XCTAssertTrue(StubServer.requests.contains { $0.url.path == "/v1/init" })
+        XCTAssertFalse(StubServer.requests.contains { $0.url.path == "/v1/sessions" })
         XCTAssertEqual(Set(streamRequests.map(\.url.path)), ["/v1/sessions/gardener/events", "/v1/sessions/builder/events"])
         XCTAssertTrue(streamRequests.allSatisfy { $0.url.query == "after=0" })
 
@@ -141,7 +144,7 @@ final class ServerConnectionTests: XCTestCase {
         await wait(for: "events") { gardener.state.conversationID == "g1" }
 
         // The server comes back with someone else instead of the Builder.
-        StubServer.roster = [SessionState(id: "gardener", name: "Gardener"), SessionState(id: "painter", name: "Painter")]
+        StubServer.roster = [StubServer.roster[0], SessionState(id: "painter", name: "Painter")]
         StubServer.dropStream("gardener")
         await wait(for: "the new list") { server.sessions.map(\.name) == ["Gardener", "Painter"] && server.phase == .live }
         XCTAssertTrue(server.session("gardener") === gardener)
@@ -154,22 +157,146 @@ final class ServerConnectionTests: XCTestCase {
     func testOnlyWhatIsSaidAfterCatchingUpIsNew() async throws {
         let (server, _) = makeConnection()
         // The server had got to 3 before this front end connected.
-        var gardenerListed = SessionState(id: "gardener", name: "Gardener")
-        gardenerListed.lastSeq = 3
-        StubServer.roster = [gardenerListed]
+        StubServer.roster = [SessionState(id: "gardener", name: "Gardener")]
+        let before = Message(id: "m1", kind: .agent, speaker: "Gardener", text: "I watered the roses.")
+        let after = Message(id: "m2", kind: .agent, speaker: "Gardener", text: "The tulips are up.")
+        let missed = [
+            EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")),
+            EventEnvelope(seq: 2, event: .message(before)),
+            EventEnvelope(seq: 3, event: .statusChanged(.idle, stopReason: .endTurn)),
+        ]
+        for envelope in missed { StubServer.push(envelope, to: "gardener") }
         server.connect()
         await wait(for: "live") { server.phase == .live }
         let gardener = try XCTUnwrap(server.session("gardener"))
+        // It has the whole conversation from the start, in one go.
+        XCTAssertEqual(gardener.transcript, [before])
 
-        let before = Message(id: "m1", kind: .agent, speaker: "Gardener", text: "I watered the roses.")
-        let after = Message(id: "m2", kind: .agent, speaker: "Gardener", text: "The tulips are up.")
-        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")), to: "gardener")
-        StubServer.push(EventEnvelope(seq: 2, event: .message(before)), to: "gardener") // replayed
-        StubServer.push(EventEnvelope(seq: 3, event: .statusChanged(.idle, stopReason: .endTurn)), to: "gardener")
+        // What the server sends again goes to the log only.
+        for envelope in missed { StubServer.replay(envelope, to: "gardener") }
         StubServer.push(EventEnvelope(seq: 4, event: .message(after)), to: "gardener") // live
         await wait(for: "the live message") { gardener.transcript.count == 2 }
+        XCTAssertEqual(gardener.transcript, [before, after])
         XCTAssertEqual(gardener.newMessages, [after])
 
+        server.disconnect()
+    }
+
+    func testTakesOnEverythingAtOnceWhenItConnects() async throws {
+        let (server, _) = makeConnection()
+        // While nobody watched, the Builder sent two helpers off, one came
+        // back, and it asked you something; a restaurant went up.
+        StubServer.roster = [SessionState(id: "builder", name: "Builder", color: "#F2A633")]
+        let first = Subagent(id: "s1", task: "Measure the north corner")
+        let second = Subagent(id: "s2", task: "Fetch the bricks")
+        let approval = Approval(id: "p1", toolName: "bash", input: "mv shed.md buildings/")
+        let missed = [
+            EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")),
+            EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil)),
+            EventEnvelope(seq: 3, event: .subagentStarted(first)),
+            EventEnvelope(seq: 4, event: .subagentStarted(second)),
+            EventEnvelope(seq: 5, event: .subagentFinished(subagentID: "s1")),
+            EventEnvelope(seq: 6, event: .message(Message(id: "m1", kind: .agent, speaker: "Builder", text: "May I move the shed?"))),
+            EventEnvelope(seq: 7, event: .approvalRequested(approval)),
+            EventEnvelope(seq: 8, event: .statusChanged(.idle, stopReason: .requiresAction)),
+        ]
+        for envelope in missed { StubServer.push(envelope, to: "builder") }
+        let restaurant = LotItem(
+            id: "buildings/restaurant.md", category: .building, kind: "restaurant", name: "Luigi's",
+            area: LotArea(x: 20, y: 30, width: 5, depth: 4)
+        )
+        StubServer.lot = Lot(revision: 3, items: [restaurant])
+        let window = UsageWindow(utilization: 0.46, resetsAt: Date(timeIntervalSince1970: 1_795_366_800), readAt: Date(timeIntervalSince1970: 1_795_360_000))
+        StubServer.usage = Usage(revision: 2, window: window)
+
+        server.connect()
+        await wait(for: "the snapshot") { server.session("builder") != nil }
+        let builder = try XCTUnwrap(server.session("builder"))
+        // All of it is there at once, as the server has it, without going
+        // through how it got there.
+        XCTAssertEqual(builder.state, StubServer.roster[0])
+        XCTAssertEqual(builder.subagents, [second])
+        XCTAssertEqual(builder.pendingApprovals, [approval])
+        XCTAssertEqual(server.lot, StubServer.lot)
+        XCTAssertFalse(server.lotIsNews) // so it doesn't pop up
+        XCTAssertEqual(server.usage, StubServer.usage)
+        XCTAssertTrue(builder.newMessages.isEmpty)
+        // It is waiting for you, so it leaves a missed call.
+        XCTAssertFalse(builder.isCatchingUp)
+        XCTAssertEqual(builder.finishedWhileAway.map(\.id), ["m1"])
+
+        // It follows on from where it had got to, which was nowhere.
+        await wait(for: "live") { server.phase == .live }
+        XCTAssertEqual(streamRequests.last?.url.query, "after=0")
+        // What the server sends again is written down, as while you were
+        // away, but changes nothing: the helper that came back stays gone.
+        for envelope in missed { StubServer.replay(envelope, to: "builder") }
+        await wait(for: "the log") { server.log.entries.count == 5 }
+        XCTAssertEqual(server.log.entries.map(\.kind), [.helperSent, .helperSent, .helperBack, .reply, .waitingForYou])
+        XCTAssertTrue(server.log.entries.allSatisfy(\.isWhileAway))
+        XCTAssertEqual(builder.state, StubServer.roster[0])
+
+        // What comes after the snapshot happens now.
+        StubServer.push(EventEnvelope(seq: 9, event: .approvalResolved(approvalID: "p1", outcome: .allowed)), to: "builder")
+        StubServer.push(EventEnvelope(seq: 10, event: .subagentFinished(subagentID: "s2")), to: "builder")
+        await wait(for: "the live events") { builder.state.lastSeq == 10 }
+        XCTAssertTrue(builder.subagents.isEmpty)
+        XCTAssertFalse(builder.isWaitingForYou)
+        XCTAssertEqual(server.log.entries.last?.kind, .helperBack)
+        XCTAssertEqual(server.log.entries.last?.isWhileAway, false)
+
+        server.disconnect()
+    }
+
+    func testReconnectingTakesOnWhatWasMissedAtOnce() async throws {
+        let (server, _) = makeConnection()
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let builder = try XCTUnwrap(server.session("builder"))
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
+        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil)), to: "builder")
+        await wait(for: "events") { builder.status == .running }
+
+        // The connection drops, and the Builder carries on meanwhile.
+        StubServer.dropStream("builder")
+        let helper = Subagent(id: "s1", task: "Fetch the bricks")
+        let missed = [
+            EventEnvelope(seq: 3, event: .subagentStarted(helper)),
+            EventEnvelope(seq: 4, event: .subagentFinished(subagentID: "s1")),
+            EventEnvelope(seq: 5, event: .message(Message(id: "m1", kind: .agent, speaker: "Builder", text: "The shed is moved."))),
+            EventEnvelope(seq: 6, event: .statusChanged(.idle, stopReason: .endTurn)),
+        ]
+        for envelope in missed { StubServer.push(envelope, to: "builder") }
+
+        // Back again, it has where things stand at once: the helper never
+        // shows, and the job is done.
+        await wait(for: "reconnect") { streamRequests.count == 4 && server.phase == .live }
+        XCTAssertEqual(builder.state, StubServer.roster[1])
+        XCTAssertTrue(builder.subagents.isEmpty)
+        XCTAssertTrue(builder.newMessages.isEmpty)
+        // It follows on from where it had got to before, for the log.
+        let query = try XCTUnwrap(streamRequests.last { $0.url.path == "/v1/sessions/builder/events" }?.url.query)
+        XCTAssertTrue(query.contains("after=2") && query.contains("conversation=b1"), query)
+        for envelope in missed { StubServer.replay(envelope, to: "builder") }
+        await wait(for: "the log") { server.log.entries.count == 4 }
+        XCTAssertEqual(server.log.entries.map(\.kind), [.helperSent, .helperBack, .reply, .jobDone])
+        XCTAssertTrue(server.log.entries.allSatisfy(\.isWhileAway))
+        XCTAssertEqual(builder.state, StubServer.roster[1])
+
+        server.disconnect()
+    }
+
+    func testAServerWithoutAnInitCallIsCaughtUpFromItsListOfSessions() async throws {
+        let (server, _) = makeConnection()
+        StubServer.hasInit = false
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")), to: "gardener")
+        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil)), to: "gardener")
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        XCTAssertTrue(StubServer.requests.contains { $0.url.path == "/v1/sessions" })
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        XCTAssertEqual(gardener.state, StubServer.roster[0])
+        XCTAssertEqual(gardener.status, .running)
         server.disconnect()
     }
 
@@ -184,14 +311,20 @@ final class ServerConnectionTests: XCTestCase {
         let (server, _) = makeConnection()
         // The Gardener was busy when this front end connected, with a helper
         // out that reports back moments later.
-        var gardenerListed = SessionState(id: "gardener", name: "Gardener")
-        gardenerListed.status = .running
-        gardenerListed.lastSeq = 3
-        StubServer.roster = [gardenerListed]
+        StubServer.roster = [SessionState(id: "gardener", name: "Gardener")]
+        let away = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3600).rounded()) // an hour ago
+        let helper = Subagent(id: "s1", task: "Count the snails")
+        let missed = [
+            EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1"), time: away),
+            EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil), time: away),
+            EventEnvelope(seq: 3, event: .subagentStarted(helper), time: away),
+        ]
+        for envelope in missed { StubServer.push(envelope, to: "gardener") }
         server.connect()
         await wait(for: "live") { server.phase == .live }
         let gardener = try XCTUnwrap(server.session("gardener"))
         XCTAssertTrue(gardener.isCatchingUp)
+        XCTAssertEqual(gardener.subagents, [helper])
 
         let silence = Silence()
         let narrator = Narrator(engine: silence, log: server.log)
@@ -202,12 +335,8 @@ final class ServerConnectionTests: XCTestCase {
             narrator.listen(to: speakers, inEarshot: [])
         }
 
-        let away = Date(timeIntervalSince1970: (Date().timeIntervalSince1970 - 3600).rounded()) // an hour ago
-        let helper = Subagent(id: "s1", task: "Count the snails")
-        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1"), time: away), to: "gardener")
-        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil), time: away), to: "gardener")
-        StubServer.push(EventEnvelope(seq: 3, event: .subagentStarted(helper), time: away), to: "gardener") // replayed
-        await wait(for: "the replay") { gardener.state.lastSeq == 3 }
+        for envelope in missed { StubServer.replay(envelope, to: "gardener") }
+        await wait(for: "the replay") { server.log.entries.count == 1 }
         listen()
         StubServer.push(EventEnvelope(seq: 4, event: .subagentFinished(subagentID: "s1")), to: "gardener") // live, but still the old job
         StubServer.push(EventEnvelope(seq: 5, event: .message(Message(id: "m1", kind: .agent, speaker: "Gardener", text: "Twelve snails."))), to: "gardener")
@@ -246,16 +375,13 @@ final class ServerConnectionTests: XCTestCase {
 
     func testAnsweringACharacterEndsCatchingUp() async throws {
         let (server, _) = makeConnection()
-        var builderListed = SessionState(id: "builder", name: "Builder")
-        builderListed.status = .running
-        builderListed.lastSeq = 2
-        StubServer.roster = [builderListed]
+        StubServer.roster = [SessionState(id: "builder", name: "Builder")]
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
+        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil)), to: "builder")
         server.connect()
         await wait(for: "live") { server.phase == .live }
         let builder = try XCTUnwrap(server.session("builder"))
-        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "b1")), to: "builder")
-        StubServer.push(EventEnvelope(seq: 2, event: .statusChanged(.running, stopReason: nil)), to: "builder")
-        await wait(for: "the replay") { builder.state.lastSeq == 2 }
+        XCTAssertEqual(builder.state.lastSeq, 2)
         XCTAssertTrue(builder.isCatchingUp)
 
         await builder.send("Make it a café instead.")
@@ -288,6 +414,7 @@ final class ServerConnectionTests: XCTestCase {
         )
         StubServer.pushLot(Lot(revision: 1, items: [restaurant]))
         await wait(for: "the restaurant") { server.lot.items == [restaurant] }
+        XCTAssertTrue(server.lotIsNews) // it went up while you watched
 
         let roses = LotItem(
             id: "garden/roses.md", category: .plant, kind: "rose", name: "Roses",
@@ -450,9 +577,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var _hasUsage = true
     nonisolated(unsafe) private static var _models: String?
     nonisolated(unsafe) private static var _pushEnabled = true
+    nonisolated(unsafe) private static var _hasInit = true
+    nonisolated(unsafe) private static var _lot = Lot()
+    nonisolated(unsafe) private static var _usage = Usage()
 
     static var requests: [Recorded] { lock.withLock { _requests } }
-    /// What `GET /v1/sessions` answers.
+    /// The sessions as the server has them, which `GET /v1/init` and
+    /// `GET /v1/sessions` answer with. `push(_:to:)` moves them on.
     static var roster: [SessionState] {
         get { lock.withLock { _roster } }
         set { lock.withLock { _roster = newValue } }
@@ -483,6 +614,25 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         set { lock.withLock { _hasUsage = newValue } }
     }
 
+    /// Whether it answers `GET /v1/init`, as servers from before there was
+    /// one don't.
+    static var hasInit: Bool {
+        get { lock.withLock { _hasInit } }
+        set { lock.withLock { _hasInit = newValue } }
+    }
+
+    /// The lot `GET /v1/init` answers with.
+    static var lot: Lot {
+        get { lock.withLock { _lot } }
+        set { lock.withLock { _lot = newValue } }
+    }
+
+    /// The usage `GET /v1/init` answers with.
+    static var usage: Usage {
+        get { lock.withLock { _usage } }
+        set { lock.withLock { _usage = newValue } }
+    }
+
     /// Whether it says it sends notifications when a device registers.
     static var pushEnabled: Bool {
         get { lock.withLock { _pushEnabled } }
@@ -499,10 +649,27 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             _hasLot = true
             _hasUsage = true
             _models = nil
+            _hasInit = true
+            _lot = Lot()
+            _usage = Usage()
         }
     }
 
+    /// Something happens in a session: the server's snapshot of it moves
+    /// on, and the event goes down its stream, if one is open.
     static func push(_ envelope: EventEnvelope, to sessionID: String) {
+        lock.withLock {
+            if let index = _roster.firstIndex(where: { $0.id == sessionID }) {
+                _roster[index].apply(envelope)
+            }
+        }
+        replay(envelope, to: sessionID)
+    }
+
+    /// Sends an event the server had already down a session's stream, as
+    /// it does for a client that follows on from further back than the
+    /// snapshot it was given.
+    static func replay(_ envelope: EventEnvelope, to sessionID: String) {
         guard let stream = lock.withLock({ streams[sessionID] }) else { return }
         let json = String(decoding: try! JSONEncoder().encode(envelope), as: UTF8.self)
         stream.client?.urlProtocol(stream, didLoad: Data("id: \(envelope.seq)\nevent: \(envelope.event.type)\ndata: \(json)\n\n".utf8))
@@ -567,6 +734,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         } else if method == "GET", url.path == "/v1/models" {
             if let models = Self.models {
                 respond(200, body: models)
+            } else {
+                respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
+            }
+        } else if method == "GET", url.path == "/v1/init" {
+            if Self.hasInit {
+                let initial = InitialState(sessions: Self.roster, lot: Self.lot, usage: Self.usage)
+                respond(200, body: String(decoding: try! JSONEncoder().encode(initial), as: UTF8.self))
             } else {
                 respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
             }
