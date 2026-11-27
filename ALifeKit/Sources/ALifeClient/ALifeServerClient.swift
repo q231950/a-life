@@ -25,6 +25,13 @@ public struct ALifeServerClient: Sendable {
         self.urlSession = urlSession
     }
 
+    /// Everything on the server as it is right now: every session, the lot
+    /// and the usage, to take on in one go. A 404 from servers from before
+    /// they offered it.
+    public func initialState() async throws -> InitialState {
+        try JSONDecoder().decode(InitialState.self, from: await send("GET", "/v1/init"))
+    }
+
     /// Every session on the server, one per character, as it is right now.
     public func sessions() async throws -> [SessionState] {
         try JSONDecoder().decode([SessionState].self, from: await send("GET", "/v1/sessions"))
@@ -80,7 +87,9 @@ public struct ALifeServerClient: Sendable {
     /// Follows a session. Pass what you last saw and the server first sends
     /// everything after it, then live events as they happen; pass nothing and
     /// it starts from the beginning of the session's current conversation.
-    /// Returns once the server has accepted the connection.
+    /// Returns once the server has accepted the connection. A front end that
+    /// has taken on `initialState()` already has everything up to its
+    /// `lastSeq`: see `AgentSession` for what it does with those.
     public func events(of sessionID: String, conversationID: String? = nil, after seq: Int = 0) async throws -> AsyncThrowingStream<EventEnvelope, Error> {
         var query = [URLQueryItem(name: "after", value: String(seq))]
         if let conversationID { query.append(URLQueryItem(name: "conversation", value: conversationID)) }

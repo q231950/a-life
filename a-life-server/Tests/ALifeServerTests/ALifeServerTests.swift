@@ -318,6 +318,60 @@ final class ALifeServerTests: XCTestCase {
         }
     }
 
+    func testTheInitCallHasEverythingAndEventsCarryOnFromIt() async throws {
+        let client = makeClient()
+        try await client.sendMessage("Plant a tree", to: "builder")
+        for try await envelope in try await client.events(of: "builder") {
+            if envelope.event == .statusChanged(.idle, stopReason: .requiresAction) { break }
+        }
+
+        // Every session, the lot and the usage, as they are.
+        let initial = try await client.initialState()
+        let (listed, lot, usage) = (try await client.sessions(), try await client.lot(), try await client.usage())
+        XCTAssertEqual(initial.sessions.map(\.id), ["birdwatcher", "builder", "engineer"])
+        XCTAssertEqual(initial.sessions, listed)
+        XCTAssertEqual(initial.lot, lot)
+        XCTAssertEqual(initial.usage, usage)
+        var builder = initial.sessions[1]
+        XCTAssertEqual(builder.stopReason, .requiresAction)
+        XCTAssertEqual(builder.messages.first?.text, "Plant a tree")
+
+        // Followed from where it says, the events carry on from the very
+        // next one, and bring it to where the server is.
+        try await client.decide(approvalID: XCTUnwrap(builder.approvals.first).id, allow: true, in: "builder")
+        var first: Int?
+        for try await envelope in try await client.events(of: "builder", conversationID: builder.conversationID, after: builder.lastSeq) {
+            first = first ?? envelope.seq
+            builder.apply(envelope)
+            if builder.stopReason == .endTurn { break }
+        }
+        XCTAssertEqual(first, initial.sessions[1].lastSeq + 1)
+        let now = try await client.state(of: "builder")
+        XCTAssertEqual(builder, now)
+    }
+
+    func testALatecomerTakesOnEverythingAtOnceAndLogsWhatItMissed() async throws {
+        let (server, birdwatcher, _) = try await connect()
+        await birdwatcher.send("Look for snails")
+        await wait(for: "the Birdwatcher to finish") { birdwatcher.stopReason == .endTurn }
+
+        let (latecomer, lateBirdwatcher, _) = try await connect()
+        // The whole job is there as soon as it is live, without its helpers
+        // coming and going, and nothing of it is new.
+        XCTAssertEqual(lateBirdwatcher.state, birdwatcher.state)
+        XCTAssertTrue(lateBirdwatcher.subagents.isEmpty)
+        XCTAssertTrue(lateBirdwatcher.newMessages.isEmpty)
+        // It finished while the latecomer was away: a missed call.
+        XCTAssertEqual(lateBirdwatcher.finishedWhileAway.map(\.id), birdwatcher.transcript.suffix(1).map(\.id))
+        // And what it did is in the log, as while you were away.
+        await wait(for: "the log") { latecomer.log.entries.contains { $0.kind == .jobDone } }
+        XCTAssertEqual(latecomer.log.entries.filter { $0.kind == .helperSent }.count, 2)
+        XCTAssertTrue(latecomer.log.entries.allSatisfy(\.isWhileAway))
+
+        server.disconnect()
+        latecomer.disconnect()
+    }
+
     func testBadRequestsAreRefused() async throws {
         let client = makeClient()
         do {

@@ -77,8 +77,9 @@ struct WorldView: View {
         }
         .onChange(of: server.lot) { old, new in
             // Only news from the server this app has heard from already
-            // pops up, not what was on the lot when it connected.
-            world?.show(new, popsUp: old.revision > 0 && new.revision > old.revision)
+            // pops up, not what was on the lot when it connected, nor what
+            // went up while it was away and comes in one go on reconnecting.
+            world?.show(new, popsUp: server.lotIsNews && old.revision > 0 && new.revision > old.revision)
         }
         .onChange(of: server.usage) { _, usage in
             // The lot's day is the usage window; the sky eases over to a
