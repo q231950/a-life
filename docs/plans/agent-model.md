@@ -1,5 +1,18 @@
 # Plan: choose the model each character runs on
 
+> **Since this was written**, the agents are in three layers: the Team Lead,
+> the Builder, the Conservationist and the a*life Engineer (still `engineer`)
+> are built into the server (`builtin-agents.yaml`), so their models, roles
+> and helpers are fixed by the server and update with it; `agents.yaml` is
+> the person's own, which only they edit; and the agents the Team Lead adds
+> are in a file of their own, `ALIFE_ADDED_AGENTS_FILE`, where `add-agent`
+> writes and `remove-agent` takes away, and which the running server watches
+> so agents join and leave at once. Below, "the agents file" is where a
+> character's `model` comes from, which for the built-in agents is the
+> server's own definition, and "`Cast` only ever adds to it" now holds for
+> the added agents file. See "The Team Lead and the added agents" in
+> `a-life-server/README.md`.
+
 ## The problem
 
 Every character runs on the same model. The person asked: "create a plan
