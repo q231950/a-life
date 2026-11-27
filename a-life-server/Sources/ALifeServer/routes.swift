@@ -10,18 +10,16 @@ extension InitialState: @retroactive Content {}
 
 func routes(
     _ app: Application,
-    sessions: [HostedSession],
+    team: Team,
     lot: LotHub,
     usage: UsageHub = UsageHub(file: nil),
     models: ModelCatalog = ModelCatalog(),
     voice: URL? = nil,
     push: PushNotifier = PushNotifier(registry: DeviceRegistry(file: nil), sender: nil, topic: nil)
 ) {
-    let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
-
     /// The session a request names in its path.
-    @Sendable func session(_ request: Request) throws -> HostedSession {
-        guard let id = request.parameters.get("session"), let session = byID[id] else {
+    @Sendable func session(_ request: Request) async throws -> HostedSession {
+        guard let id = request.parameters.get("session"), let session = await team.session(id) else {
             throw Abort(.notFound, reason: "No such session")
         }
         return session
@@ -36,7 +34,7 @@ func routes(
     // follow each session's events from the `last_seq` it gives.
     app.get("v1", "init") { _ -> InitialState in
         var states: [SessionState] = []
-        for session in sessions {
+        for session in await team.sessions {
             states.append(await session.hub.state)
         }
         return InitialState(sessions: states, lot: await lot.lot, usage: await usage.usage)
@@ -48,10 +46,20 @@ func routes(
     // this to learn who is on the lot, then follow each session's events.
     all.get { _ -> [SessionState] in
         var states: [SessionState] = []
-        for session in sessions {
+        for session in await team.sessions {
             states.append(await session.hub.state)
         }
         return states
+    }
+
+    // Server-sent events: who is on the lot now, as a roster, then again each
+    // time an agent joins or leaves, such as when the Team Lead adds one.
+    // A front end that sees it differ from the sessions it follows takes on
+    // everything again with `GET /v1/init`.
+    all.get("events") { _ -> Response in
+        eventStream(await team.subscribe()) { roster in
+            try serverSentEvent(id: roster.revision, type: "roster", data: roster)
+        }
     }
 
     let one = all.grouped(":session")
@@ -65,7 +73,7 @@ func routes(
     //   ?after=<seq>              the last sequence number the client has seen
     //   ?conversation=<id>        the conversation that number belongs to
     one.get("events") { request -> Response in
-        let hub = try session(request).hub
+        let hub = try await session(request).hub
         let after = (try? request.query.get(Int.self, at: "after")) ?? 0
         let conversationID = try? request.query.get(String.self, at: "conversation")
         let events = await hub.subscribe(conversationID: conversationID, after: after)
@@ -75,7 +83,7 @@ func routes(
     }
 
     one.post("messages") { request -> HTTPStatus in
-        let backend = try session(request).backend
+        let backend = try await session(request).backend
         let body = try request.content.decode(SendMessageRequest.self)
         let text = body.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw Abort(.badRequest, reason: "The message is empty") }
@@ -89,7 +97,7 @@ func routes(
     }
 
     one.post("approvals", ":approval") { request -> HTTPStatus in
-        let backend = try session(request).backend
+        let backend = try await session(request).backend
         let id = try request.parameters.require("approval")
         let decision = try request.content.decode(ApprovalDecision.self)
         try await backend.decide(approvalID: id, allow: decision.allow)
@@ -98,7 +106,7 @@ func routes(
 
     // Auto approve, on or off, for this session only.
     one.put("auto-approve") { request -> HTTPStatus in
-        let backend = try session(request).backend
+        let backend = try await session(request).backend
         let setting = try request.content.decode(AutoApproveRequest.self)
         await backend.setAutoApprove(setting.enabled)
         return .accepted
@@ -107,7 +115,7 @@ func routes(
     // The model the character runs on, for every front end; null goes back
     // to the agents file's.
     one.put("model") { request -> HTTPStatus in
-        let backend = try session(request).backend
+        let backend = try await session(request).backend
         let choice = try request.content.decode(ModelChoiceRequest.self)
         try await backend.setModel(choice.model)
         return .accepted

@@ -224,7 +224,7 @@ final class ClaudeCharacterTests: XCTestCase {
         cli.say(result(text: "The sheep jump before they fly off now, and the tests pass."))
         state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
         XCTAssertTrue(state.subagents.isEmpty)
-        XCTAssertEqual(transcript(state).last, "Engineer: The sheep jump before they fly off now, and the tests pass.")
+        XCTAssertEqual(transcript(state).last, "a*life Engineer: The sheep jump before they fly off now, and the tests pass.")
     }
 
     func testTheTeamLeadSendsItsRecruiterToAddAnAgent() async throws {

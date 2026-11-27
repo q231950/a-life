@@ -1,28 +1,30 @@
 import Foundation
 
-/// `ALifeServer add-agent`: adds a new agent to the agents file, which joins
-/// the lot when the server next starts. The Team Lead's recruiter runs it,
-/// with the command and the file the server gives its session in
-/// `ALIFE_SERVER_COMMAND` and `ALIFE_AGENTS_FILE`.
+/// `ALifeServer add-agent`: adds a new agent to the added agents file, which
+/// the running server watches, so the agent joins the lot at once; with no
+/// server running, it joins when the server next starts. The Team Lead's
+/// recruiter runs it, with the command and the files the server gives its
+/// session in `ALIFE_SERVER_COMMAND`, `ALIFE_AGENTS_FILE` and
+/// `ALIFE_ADDED_AGENTS_FILE`.
 ///
 /// The new agent's fields come on standard input, or from the file named
-/// after the command, and are checked as the server checks the file; the
-/// agents already there, and the file's comments, are left as they are.
-/// Nothing else of the server starts.
+/// after the command, and are checked as the server checks the files; the
+/// agents already there, and the files' comments, are left as they are. It
+/// refuses an id or a name that a built-in agent, an agent in the agents
+/// file or an added agent has. Nothing else of the server starts.
 enum AddAgent {
     /// The command's name, as it is given to the server.
     static let command = "add-agent"
 
-    /// Adds the agent `entry` describes to the agents file the environment
-    /// says (see `Cast.file(in:)`), and says what became of it: whether it
-    /// was added, and what to say about it.
+    /// Adds the agent `entry` describes to the added agents file the
+    /// environment says (see `Cast.addedFile(in:)`), and says what became of
+    /// it: whether it was added, and what to say about it.
     static func run(entry: String, environment: [String: String]) -> (added: Bool, said: String) {
-        let file = Cast.file(in: environment)
         do {
-            let agent = try Cast.add(entry, toFileAt: file)
-            return (true, "Added the \(agent.name) (\(agent.id)) to \(file.path). They join the lot when the server restarts.")
+            let (agent, file) = try Cast.add(entry, in: environment)
+            return (true, "Added the \(agent.name) (\(agent.id)) to \(file.path). They join the lot straight away if the server is running, and otherwise when it next starts.")
         } catch {
-            return (false, "\(error)\nNothing was changed in \(file.path).")
+            return (false, "\(error)\nNothing was changed.")
         }
     }
 

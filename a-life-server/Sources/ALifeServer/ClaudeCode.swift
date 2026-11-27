@@ -42,10 +42,14 @@ struct ClaudeCode: ClaudeCodeLauncher {
     /// For a project of several repositories, the directory their clones
     /// are in.
     var clones: [String: Result<URL, ConfigurationError>] = [:]
-    /// The agents file the server read its cast from, which the Team Lead's
-    /// recruiter adds agents to and takes them away from. Its sessions find
-    /// it in `ALIFE_AGENTS_FILE`.
+    /// The agents file the server read the person's own agents from, which
+    /// the Team Lead's recruiter reads to see who is there, and never
+    /// writes. Its sessions find it in `ALIFE_AGENTS_FILE`.
     var agentsFile: URL?
+    /// The added agents file, which the recruiter adds agents to and takes
+    /// them away from, with the commands below. Its sessions find it in
+    /// `ALIFE_ADDED_AGENTS_FILE`.
+    var addedAgentsFile: URL?
     /// This server's own command, which the Team Lead's recruiter runs as
     /// `add-agent` to add an agent, or `remove-agent` to take one away. Its
     /// sessions find it in `ALIFE_SERVER_COMMAND`.
@@ -90,9 +94,10 @@ struct ClaudeCode: ClaudeCodeLauncher {
         // Helpers run in the foreground: the character waits for each one to
         // report back before it carries on, the way the lot shows it.
         environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
-        // For the Team Lead's recruiter, to add an agent to the cast or take
-        // one away.
+        // For the Team Lead's recruiter, to see who is on the lot, add an agent
+        // or take one away.
         if let agentsFile { environment["ALIFE_AGENTS_FILE"] = agentsFile.path }
+        if let addedAgentsFile { environment["ALIFE_ADDED_AGENTS_FILE"] = addedAgentsFile.path }
         if let serverCommand { environment["ALIFE_SERVER_COMMAND"] = serverCommand.path }
 
         return try ClaudeCodeProcess(

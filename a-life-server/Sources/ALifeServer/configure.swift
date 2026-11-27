@@ -40,70 +40,84 @@ enum Players: Sendable {
             let repository = try ClaudeCode.findRepository(in: environment)
             logger.notice("The characters are Claude Code sessions (\(executable.path))")
             var claudeCode = ClaudeCode(executable: executable, lot: lot, repository: repository)
-            // So the Team Lead can add agents to the cast.
+            // So the Team Lead can see who is on the lot, and add agents to it
+            // and take them away.
             claudeCode.agentsFile = Cast.file(in: environment)
+            claudeCode.addedAgentsFile = Cast.addedFile(in: environment)
             claudeCode.serverCommand = Bundle.main.executableURL
-            let projects = ClaudeCode.projectsDirectory(in: environment)
             for character in cast {
-                let name = character.name
-                switch character.workspace {
-                case .lot:
-                    logger.notice("\(name) works on the lot, in \(lot.path)")
-                case .aLife:
-                    if let repository {
-                        logger.notice("\(name) works on a*life, in \(repository.path)")
-                    } else {
-                        logger.warning("There's no a*life checkout for \(name) to work in. Set ALIFE_REPO_DIR to one.")
-                    }
-                case .project(let project):
-                    switch project.source {
-                    case .directory(let directory):
-                        logger.notice("\(name) works on a project, in \(directory.path)")
-                    case .repository(let address, let branch):
-                        // A clone that fails only keeps its own character
-                        // from starting, as a missing a*life checkout does.
-                        do {
-                            switch try ClaudeCode.checkOut(address, branch: branch, for: project.id, in: projects) {
-                            case .cloned(let clone):
-                                logger.notice("\(name) works on \(address), cloned just now into \(clone.path)")
-                                claudeCode.clones[project.id] = .success(clone)
-                            case .reused(let clone):
-                                logger.notice("\(name) works on \(address), in its clone from before, \(clone.path), as it is")
-                                claudeCode.clones[project.id] = .success(clone)
-                            }
-                        } catch {
-                            let problem = error as? ConfigurationError ?? ConfigurationError("\(error)")
-                            logger.error("\(name) can't start until this is fixed: \(problem)")
-                            claudeCode.clones[project.id] = .failure(problem)
-                        }
-                    case .repositories(let repositories):
-                        // As with one repository: if any can't be cloned,
-                        // only this character is kept from starting.
-                        var problems: [String] = []
-                        for (repository, checkout) in zip(repositories, ClaudeCode.checkOut(repositories, for: project.id, in: projects)) {
-                            switch checkout {
-                            case .success(.cloned(let clone)):
-                                logger.notice("\(name) works on \(repository.address), cloned just now into \(clone.path)")
-                            case .success(.reused(let clone)):
-                                logger.notice("\(name) works on \(repository.address), in its clone from before, \(clone.path), as it is")
-                            case .failure(let problem):
-                                logger.error("\(name) can't start until this is fixed: \(problem)")
-                                if !problems.contains(problem.description) { problems.append(problem.description) }
-                            }
-                        }
-                        let directory = projects.appendingPathComponent(project.id, isDirectory: true)
-                        if problems.isEmpty {
-                            logger.notice("\(name) works on its \(repositories.count) repos side by side, in \(directory.path)")
-                            claudeCode.clones[project.id] = .success(directory)
-                        } else {
-                            claudeCode.clones[project.id] = .failure(ConfigurationError(problems.joined(separator: " ")))
-                        }
-                    }
-                }
+                prepare(character, for: &claudeCode, logger: logger)
             }
             return .claudeCode(claudeCode)
         case let other:
             throw ConfigurationError("ALIFE_BACKEND is \(other); it can be claude or dummy.")
+        }
+    }
+
+
+    /// Gets `character` ready to start in `claudeCode`: says where it works,
+    /// and clones its project first if that is a git repository (or several)
+    /// that isn't cloned yet. A clone that fails only keeps its own
+    /// character from starting. Used for each character when the server
+    /// starts, and for each one that joins the lot later.
+    static func prepare(_ character: Character, for claudeCode: inout ClaudeCode, logger: Logger) {
+        let lot = claudeCode.lot
+        let repository = claudeCode.repository
+        let projects = ClaudeCode.projectsDirectory(in: ProcessInfo.processInfo.environment)
+        let name = character.name
+        switch character.workspace {
+        case .lot:
+            logger.notice("\(name) works on the lot, in \(lot.path)")
+        case .aLife:
+            if let repository {
+                logger.notice("\(name) works on a*life, in \(repository.path)")
+            } else {
+                logger.warning("There's no a*life checkout for \(name) to work in. Set ALIFE_REPO_DIR to one.")
+            }
+        case .project(let project):
+            switch project.source {
+            case .directory(let directory):
+                logger.notice("\(name) works on a project, in \(directory.path)")
+            case .repository(let address, let branch):
+                // A clone that fails only keeps its own character
+                // from starting, as a missing a*life checkout does.
+                do {
+                    switch try ClaudeCode.checkOut(address, branch: branch, for: project.id, in: projects) {
+                    case .cloned(let clone):
+                        logger.notice("\(name) works on \(address), cloned just now into \(clone.path)")
+                        claudeCode.clones[project.id] = .success(clone)
+                    case .reused(let clone):
+                        logger.notice("\(name) works on \(address), in its clone from before, \(clone.path), as it is")
+                        claudeCode.clones[project.id] = .success(clone)
+                    }
+                } catch {
+                    let problem = error as? ConfigurationError ?? ConfigurationError("\(error)")
+                    logger.error("\(name) can't start until this is fixed: \(problem)")
+                    claudeCode.clones[project.id] = .failure(problem)
+                }
+            case .repositories(let repositories):
+                // As with one repository: if any can't be cloned,
+                // only this character is kept from starting.
+                var problems: [String] = []
+                for (repository, checkout) in zip(repositories, ClaudeCode.checkOut(repositories, for: project.id, in: projects)) {
+                    switch checkout {
+                    case .success(.cloned(let clone)):
+                        logger.notice("\(name) works on \(repository.address), cloned just now into \(clone.path)")
+                    case .success(.reused(let clone)):
+                        logger.notice("\(name) works on \(repository.address), in its clone from before, \(clone.path), as it is")
+                    case .failure(let problem):
+                        logger.error("\(name) can't start until this is fixed: \(problem)")
+                        if !problems.contains(problem.description) { problems.append(problem.description) }
+                    }
+                }
+                let directory = projects.appendingPathComponent(project.id, isDirectory: true)
+                if problems.isEmpty {
+                    logger.notice("\(name) works on its \(repositories.count) repos side by side, in \(directory.path)")
+                    claudeCode.clones[project.id] = .success(directory)
+                } else {
+                    claudeCode.clones[project.id] = .failure(ConfigurationError(problems.joined(separator: " ")))
+                }
+            }
         }
     }
 
@@ -172,24 +186,38 @@ struct PushSetup: Sendable {
 /// `players`, the lot in `lotDirectory`, the voice model in
 /// `voiceDirectory`, what it remembers between starts in `stateDirectory`,
 /// and push notifications as `push` says. Each is as the environment says
-/// if `nil`: the cast is read from the agents file, `ALIFE_AGENTS_FILE` or
-/// the checkout's `agents.yaml`, the lot is `ALIFE_LOT_DIR`, the voice
+/// if `nil`: the cast is the built-in agents, the agents file's and the
+/// added agents file's (see `Cast`), the lot is `ALIFE_LOT_DIR`, the voice
 /// model `ALIFE_VOICE_DIR`, the state `ALIFE_STATE_DIR` and push
 /// notifications the `ALIFE_APNS_*` settings. Given `players` but no
 /// `lotDirectory`, the lot stays empty, with no `voiceDirectory` there's no
 /// voice model either, with no `stateDirectory` nothing is remembered, and
 /// with no `push` no notifications are sent.
+///
+/// A `cast` that is given is everyone there is, and nobody joins or leaves
+/// the lot unless `addedAgentsFile` names a file to watch, every
+/// `teamWatchInterval`, for agents the Team Lead adds.
 func configure(
     _ app: Application,
     players playersGiven: Players? = nil,
     cast: [Character]? = nil,
+    addedAgentsFile: URL? = nil,
     lotDirectory: URL? = nil,
     voiceDirectory: URL? = nil,
     stateDirectory: URL? = nil,
     push pushGiven: PushSetup? = nil,
-    lotSurveyInterval: Duration = .seconds(1)
+    lotSurveyInterval: Duration = .seconds(1),
+    teamWatchInterval: Duration = .seconds(1)
 ) async throws {
-    let cast = try cast ?? loadCast(logger: app.logger)
+    let layers: Cast.Layers
+    var addedFile = addedAgentsFile
+    if let cast {
+        layers = Cast.Layers(builtIn: cast, own: [], added: [])
+    } else {
+        layers = try loadCast(logger: app.logger)
+        addedFile = Cast.addedFile(in: ProcessInfo.processInfo.environment)
+    }
+    let cast = layers.all
     var lotDirectory = lotDirectory
     var voiceDirectory = voiceDirectory
     var stateDirectory = stateDirectory
@@ -250,8 +278,10 @@ func configure(
         await models.ask(claudeCode, logger: app.logger)
     }
 
-    var sessions: [HostedSession] = []
-    for character in cast {
+    /// Makes the session of `character`: its hub, and what plays it. One
+    /// that joins the lot while the server runs gets prepared first, as the
+    /// ones there at the start were (`Players.prepare`).
+    @Sendable func makeSession(_ character: Character, joining: Bool) async -> HostedSession {
         let model = await choices.model(for: character)
         if model != character.model, let model {
             app.logger.notice("\(character.name) runs on \(model.rawValue), as chosen in the app, rather than the agents file's \(character.model?.rawValue ?? "default")")
@@ -260,19 +290,33 @@ func configure(
         // The one place that chooses what plays each character.
         let backend: any SessionBackend
         switch players {
-        case .claudeCode(let claudeCode):
+        case .claudeCode(var launcher):
+            if joining, let claudeCode = launcher as? ClaudeCode {
+                // Cloning can take a while, so not on the team's own time.
+                let logger = app.logger
+                launcher = await Task.detached {
+                    var prepared = claudeCode
+                    Players.prepare(character, for: &prepared, logger: logger)
+                    return prepared
+                }.value
+            }
             backend = ClaudeCharacter(
-                character, hub: hub, claudeCode: claudeCode, logger: app.logger, continues: continues, usage: usage,
+                character, hub: hub, claudeCode: launcher, logger: app.logger, continues: continues, usage: usage,
                 model: model, choices: choices, models: models
             )
         case .dummies(let step):
             backend = DummyCharacter(character, hub: hub, step: step, usage: usage)
         }
         await backend.reset() // starts the first conversation, and forgets what it waited for
-        if let claude = backend as? ClaudeCharacter, let entry = waiting[character.id] {
+        if !joining, let claude = backend as? ClaudeCharacter, let entry = waiting[character.id] {
             await claude.carryOn(after: entry)
         }
-        sessions.append(HostedSession(id: character.id, hub: hub, backend: backend))
+        return HostedSession(id: character.id, hub: hub, backend: backend)
+    }
+
+    var sessions: [HostedSession] = []
+    for character in cast {
+        sessions.append(await makeSession(character, joining: false))
     }
 
     // The devices registered for notifications, and telling them when any
@@ -286,33 +330,59 @@ func configure(
         app.logger.notice("\(count) device(s) registered for notifications")
     }
 
-    app.lifecycle.use(EndSessionsOnShutdown(sessions: sessions, lot: lot, usage: usage, push: push))
-    routes(app, sessions: sessions, lot: lot, usage: usage, models: models, voice: voiceDirectory, push: push)
+    // Who is on the lot from here on: agents the Team Lead adds join it,
+    // and ones it takes away leave it, as the added agents file says.
+    let team = Team(
+        sessions: sessions, cast: layers, ownSource: Cast.file(in: ProcessInfo.processInfo.environment).path, addedFile: addedFile,
+        make: { await makeSession($0, joining: true) },
+        joined: { await push.follow([$0]) },
+        left: { await push.unfollow($0.id) },
+        logger: app.logger
+    )
+    if let addedFile {
+        app.logger.notice("The agents the Team Lead adds are in \(addedFile.path); they join and leave the lot as it changes")
+        await team.watch(every: teamWatchInterval)
+    }
+
+    app.lifecycle.use(EndSessionsOnShutdown(team: team, lot: lot, usage: usage, push: push))
+    routes(app, team: team, lot: lot, usage: usage, models: models, voice: voiceDirectory, push: push)
 }
 
-/// The cast the agents file lists: the one `ALIFE_AGENTS_FILE` names, or the
-/// one in the checkout the server was built from, or the shipped one.
-private func loadCast(logger: Logger) throws -> [Character] {
-    let file = Cast.file(in: ProcessInfo.processInfo.environment)
-    let cast = try Cast.load(contentsOf: file)
-    logger.notice("On the lot: \(cast.map(\.name).joined(separator: ", ")), from \(file.path)")
-    return cast
+/// The cast: the built-in agents, the agents file's (see `Cast.file(in:)`)
+/// and the added agents file's (see `Cast.addedFile(in:)`), each of which
+/// may not be there. Says in the log who is on the lot, and warns about each
+/// entry in either file that is a built-in agent, which is left out.
+private func loadCast(logger: Logger) throws -> Cast.Layers {
+    let environment = ProcessInfo.processInfo.environment
+    let agentsFile = Cast.file(in: environment)
+    let addedFile = Cast.addedFile(in: environment)
+    let layers = try Cast.layers(in: environment, warn: { logger.warning("\($0)") })
+    logger.notice("On the lot: \(layers.all.map(\.name).joined(separator: ", "))")
+    logger.notice("Built in: \(layers.builtIn.map(\.name).joined(separator: ", "))")
+    if !FileManager.default.fileExists(atPath: agentsFile.path) {
+        logger.notice("There's no agents file at \(agentsFile.path), so only the built-in agents and the added ones are on the lot")
+    } else {
+        logger.notice("From the agents file \(agentsFile.path): \(layers.own.isEmpty ? "no agents" : layers.own.map(\.name).joined(separator: ", "))")
+    }
+    logger.notice("From the added agents file \(addedFile.path): \(layers.added.isEmpty ? "no agents" : layers.added.map(\.name).joined(separator: ", "))")
+    return layers
 }
 
 /// When the server stops, ends the open event streams, so shutdown doesn't
 /// wait on clients that are still listening, and stops each session,
-/// watching the lot and sending notifications.
+/// watching the lot and the team, and sending notifications.
 private struct EndSessionsOnShutdown: LifecycleHandler {
-    let sessions: [HostedSession]
+    let team: Team
     let lot: LotHub
     let usage: UsageHub
     let push: PushNotifier
 
     func shutdownAsync(_ application: Application) async {
+        await team.stop()
         await lot.stop()
         await usage.stop()
         await push.stop()
-        for session in sessions {
+        for session in await team.sessions {
             await session.hub.closeStreams()
             await session.backend.shutdown()
         }
