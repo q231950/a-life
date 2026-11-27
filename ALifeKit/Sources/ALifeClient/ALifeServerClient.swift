@@ -116,6 +116,16 @@ public struct ALifeServerClient: Sendable {
         return try await EventStreamConnection<Lot>().open(request, configuration: urlSession.configuration)
     }
 
+    /// Follows who is on the lot: the server sends the roster as it is now,
+    /// then again each time an agent joins or leaves. Returns once the server
+    /// has accepted the connection.
+    public func rosterChanges() async throws -> AsyncThrowingStream<Roster, Error> {
+        var request = makeRequest("GET", "/v1/sessions/events")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 60 // as for a session's events
+        return try await EventStreamConnection<Roster>().open(request, configuration: urlSession.configuration)
+    }
+
     /// How much of Claude's 5-hour usage window is used, as the server last
     /// heard from its characters.
     public func usage() async throws -> Usage {

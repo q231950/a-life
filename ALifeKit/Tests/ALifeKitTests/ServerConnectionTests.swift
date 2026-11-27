@@ -35,7 +35,9 @@ final class ServerConnectionTests: XCTestCase {
 
     /// The sessions' event streams opened so far, oldest first.
     private var streamRequests: [StubServer.Recorded] {
-        StubServer.requests.filter { $0.url.path.hasPrefix("/v1/sessions/") && $0.url.path.hasSuffix("/events") }
+        StubServer.requests.filter {
+            $0.url.path.hasPrefix("/v1/sessions/") && $0.url.path.hasSuffix("/events") && $0.url.path != "/v1/sessions/events"
+        }
     }
 
     func testWithoutAServerAddressAsksForOne() async {
@@ -401,6 +403,55 @@ final class ServerConnectionTests: XCTestCase {
         XCTAssertNil(server.voiceModelURL)
     }
 
+    func testFollowsWhoIsOnTheLotAsAgentsJoinAndLeave() async throws {
+        let (server, _) = makeConnection()
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        XCTAssertTrue(StubServer.requests.contains { $0.url.path == "/v1/sessions/events" })
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        XCTAssertEqual(StubServer.requests.filter { $0.url.path == "/v1/init" }.count, 1)
+
+        // The same roster again changes nothing: nobody reconnects.
+        StubServer.pushRoster(Roster(revision: 1, sessions: ["gardener", "builder"]))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(StubServer.requests.filter { $0.url.path == "/v1/init" }.count, 1)
+
+        // The Team Lead adds a Plumber: it appears, and is followed.
+        StubServer.roster.append(SessionState(id: "plumber", name: "Plumber", color: "#2266AA"))
+        StubServer.pushRoster(Roster(revision: 2, sessions: ["gardener", "builder", "plumber"]))
+        await wait(for: "the Plumber") { server.sessions.map(\.id) == ["gardener", "builder", "plumber"] }
+        XCTAssertEqual(server.session("plumber")?.name, "Plumber")
+        XCTAssertEqual(server.session("plumber")?.color, "#2266AA")
+        // The ones that were there are the same, and it never looked as if
+        // the connection had dropped.
+        XCTAssertTrue(server.session("gardener") === gardener)
+        XCTAssertEqual(server.phase, .live)
+        await wait(for: "the Plumber's events") { StubServer.requests.contains { $0.url.path == "/v1/sessions/plumber/events" } }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "p1")), to: "plumber")
+        await wait(for: "the Plumber's conversation") { server.session("plumber")?.state.conversationID == "p1" }
+
+        // It is taken away again, and the others carry on.
+        StubServer.roster.removeAll { $0.id == "plumber" }
+        StubServer.pushRoster(Roster(revision: 3, sessions: ["gardener", "builder"]))
+        await wait(for: "the Plumber to go") { server.sessions.map(\.id) == ["gardener", "builder"] }
+        XCTAssertNil(server.session("plumber"))
+        XCTAssertTrue(server.session("gardener") === gardener)
+        XCTAssertEqual(server.phase, .live)
+        server.disconnect()
+    }
+
+    func testAServerThatDoesntTellWhoIsOnTheLotStillHasItsSessionsFollowed() async throws {
+        let (server, _) = makeConnection()
+        StubServer.hasRoster = false
+        server.connect()
+        await wait(for: "live") { server.phase == .live }
+        let gardener = try XCTUnwrap(server.session("gardener"))
+        StubServer.push(EventEnvelope(seq: 1, event: .conversationStarted(conversationID: "g1")), to: "gardener")
+        await wait(for: "events") { gardener.state.conversationID == "g1" }
+        server.disconnect()
+    }
+
     func testFollowsTheLot() async throws {
         let (server, _) = makeConnection()
         server.connect()
@@ -575,6 +626,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var _failPosts: (status: Int, reason: String)?
     nonisolated(unsafe) private static var _hasLot = true
     nonisolated(unsafe) private static var _hasUsage = true
+    nonisolated(unsafe) private static var _hasRoster = true
     nonisolated(unsafe) private static var _models: String?
     nonisolated(unsafe) private static var _pushEnabled = true
     nonisolated(unsafe) private static var _hasInit = true
@@ -606,6 +658,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
     static var models: String? {
         get { lock.withLock { _models } }
         set { lock.withLock { _models = newValue } }
+    }
+
+    /// Whether it tells who is on the lot, as servers from before agents
+    /// could join and leave don't.
+    static var hasRoster: Bool {
+        get { lock.withLock { _hasRoster } }
+        set { lock.withLock { _hasRoster = newValue } }
     }
 
     /// Whether it tells the usage, as servers from before it did don't.
@@ -648,6 +707,7 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             _failPosts = nil
             _hasLot = true
             _hasUsage = true
+            _hasRoster = true
             _models = nil
             _hasInit = true
             _lot = Lot()
@@ -680,6 +740,13 @@ final class StubServer: URLProtocol, @unchecked Sendable {
         guard let stream = lock.withLock({ streams["lot"] }) else { return }
         let json = String(decoding: try! JSONEncoder().encode(lot), as: UTF8.self)
         stream.client?.urlProtocol(stream, didLoad: Data("id: \(lot.revision)\nevent: lot\ndata: \(json)\n\n".utf8))
+    }
+
+    /// Sends who is on the lot down the roster's stream.
+    static func pushRoster(_ roster: Roster) {
+        guard let stream = lock.withLock({ streams["roster"] }) else { return }
+        let json = String(decoding: try! JSONEncoder().encode(roster), as: UTF8.self)
+        stream.client?.urlProtocol(stream, didLoad: Data("id: \(roster.revision)\nevent: roster\ndata: \(json)\n\n".utf8))
     }
 
     /// Sends the usage down the usage's stream.
@@ -725,9 +792,14 @@ final class StubServer: URLProtocol, @unchecked Sendable {
             respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
         } else if method == "GET", url.path == "/v1/usage/events", !Self.hasUsage {
             respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
+        } else if method == "GET", url.path == "/v1/sessions/events", !Self.hasRoster {
+            respond(404, body: #"{"error":true,"reason":"Not Found"}"#)
+        } else if method == "GET", url.path == "/v1/sessions/events" {
+            respond(200, contentType: "text/event-stream", body: ": connected\n\n", finish: false)
+            Self.lock.withLock { Self.streams["roster"] = self } // stays open
         } else if method == "GET", url.path.hasSuffix("/events") {
             // A session's stream is kept under its id, the lot's under
-            // "lot" and the usage's under "usage".
+            // "lot", the usage's under "usage" and the roster's under "roster".
             let sessionID = url.deletingLastPathComponent().lastPathComponent
             respond(200, contentType: "text/event-stream", body: ": connected\n\n", finish: false)
             Self.lock.withLock { Self.streams[sessionID] = self } // stays open
