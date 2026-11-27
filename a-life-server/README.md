@@ -175,7 +175,7 @@ flowchart TB
             subgraph container["Docker container a-life: user alife, never root, init: true, restart: unless-stopped"]
                 entry["deploy/docker-entrypoint.sh<br/>git uses GITHUB_TOKEN for github.com,<br/>clones ALIFE_REPO_URL the first time,<br/>copies agents.yaml the first time"]
                 server["ALifeServer serve<br/>--hostname 0.0.0.0 --port 8080"]
-                clis["a claude CLI per character<br/>Claude Code from npm, on Node"]
+                clis["a claude CLI per character<br/>Claude Code from npm, on Node,<br/>with Swift for swift build and swift test"]
             end
 
             subgraph volumes["Docker volumes, in /home/alife"]
@@ -217,7 +217,7 @@ flowchart TB
 ```
 
 - **The trust boundary is your tailnet.** The server has no login: any device that can reach `https://my-droplet.my-tailnet.ts.net` can tell the characters what to do and answer their approvals, and so run commands in the container, on your subscription and with your GitHub token. That's why the port is published on `127.0.0.1` only, and why it is `tailscale serve` and never `tailscale funnel`. See [Keep it to yourself](#keep-it-to-yourself).
-- **Inside the container** the server listens on `0.0.0.0`, which only Docker's port mapping can reach. `init: true` reaps whatever the characters' Claude Code sessions leave behind.
+- **Inside the container** the server listens on `0.0.0.0`, which only Docker's port mapping can reach. `init: true` reaps whatever the characters' Claude Code sessions leave behind. The container has the Swift toolchain in it, so the characters can build and test the Swift packages they work on, as long as those build on Linux.
 - **Going out**, the droplet only talks to the Anthropic API, for the characters' calls to the model, and to GitHub, for the Engineer's checkout and the projects' clones, and whatever else the characters fetch or push.
 - **What matters is on the volumes**, so a new image keeps it. See [What it keeps, and where](#what-it-keeps-and-where).
 
@@ -453,7 +453,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The first start builds the server's image, which takes a while: it builds the server with Swift, then puts it, Node, [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code) and git into a small image to run in. Once it's up, the log says who is on the lot and where each character works; press Ctrl-C to stop following it. Check it:
+The first start builds the server's image, which takes a while: it builds the server with Swift, then puts it, Node, [Claude Code](https://www.npmjs.com/package/@anthropic-ai/claude-code) and git into an image to run in, along with the Swift toolchain itself, so that the characters can build and test Swift packages (`swift build`, `swift test`) in their projects, as long as those build on Linux. Swift makes the image about 1.5 GB bigger than it would be without it. It's Swift 6.2 unless you set `SWIFT_VERSION` in `.env` to another version that has an official `swift:<version>-bookworm` image, such as `6.1`, and build the image again. Once it's up, the log says who is on the lot and where each character works; press Ctrl-C to stop following it. Check it:
 
 ```sh
 curl http://127.0.0.1:8080/health
@@ -513,7 +513,7 @@ The characters who work on repositories clone, fetch and push with git on the se
 
 To have them commit as you, set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in `.env`.
 
-**The Engineer** works on a\*life in the server's own a\*life checkout, since your Mac's isn't there. The container clones it the first time it starts, from `ALIFE_REPO_URL` (the a\*life repository on GitHub unless you set it) into the `checkout` volume (`ALIFE_REPO_DIR`), and uses it as it is after that. To have the Engineer push its work, point `ALIFE_REPO_URL` at your own fork, and give your GitHub token access to it. To start afresh, remove the volume (`docker compose down`, then `docker volume rm a-life-server_checkout`) and start it again. The image has no Swift in it, so the Engineer's a\*life expert can change the code there but can't build it or run its tests; [Without Docker](#without-docker), with Swift installed, it can.
+**The Engineer** works on a\*life in the server's own a\*life checkout, since your Mac's isn't there. The container clones it the first time it starts, from `ALIFE_REPO_URL` (the a\*life repository on GitHub unless you set it) into the `checkout` volume (`ALIFE_REPO_DIR`), and uses it as it is after that. To have the Engineer push its work, point `ALIFE_REPO_URL` at your own fork, and give your GitHub token access to it. To start afresh, remove the volume (`docker compose down`, then `docker volume rm a-life-server_checkout`) and start it again. The image has Swift in it, so the Engineer's a\*life expert can build the server and ALifeKit there and run their tests; the app itself needs Xcode, so it can change the app's code but not build it.
 
 ### Updating
 
@@ -525,6 +525,8 @@ docker compose up -d --build
 ```
 
 That builds the server again from the new code and starts it, keeping the volumes. The Claude Code in the image is the one that was newest when the image was built, and doesn't update itself; to fetch a newer one, build it from scratch with `docker compose build --no-cache` and then `docker compose up -d`. Your agents file and the Engineer's checkout aren't changed by an update.
+
+If your image is from before Swift was added to it, the characters won't find `swift` until you build it again. `docker compose up -d --build` above does that; or build it and start it in two steps, with `docker compose build` and then `docker compose up -d`. The same goes for changing `SWIFT_VERSION` in `.env`.
 
 ### Backups
 
@@ -1126,7 +1128,7 @@ The lot has a hub of its own, `LotHub`, which keeps what stands on the lot, look
 | `JSONValue.swift` | Plain JSON, for reading Claude Code's messages. |
 | `DummyCharacter.swift` | The scripted stand-in, with a made-up context that fills and compacts, and a model it takes from the picker but doesn't run on. |
 | `fetch-voice.sh` | Not in `Sources`: fetches the voice model into `ALIFE_VOICE_DIR`, on a Mac or on Linux. See [Voices](#voices). |
-| `Dockerfile` | Not in `Sources`: the server's image, built from the root of the checkout, with Node, Claude Code and git to run in. See [Run it on a server](#run-it-on-a-server). |
+| `Dockerfile` | Not in `Sources`: the server's image, built from the root of the checkout, with Swift, Node, Claude Code and git to run in. See [Run it on a server](#run-it-on-a-server). |
 | `docker-compose.yml` | Not in `Sources`: runs the image with its volumes, on `127.0.0.1:8080` only, with the settings in `.env`. |
 | `.env.example` | Not in `Sources`: the settings `.env` has for `docker-compose.yml`, above all your Claude token. |
 | `deploy/docker-entrypoint.sh` | Not in `Sources`: starts the server in its container, after setting git up with your GitHub token, cloning the Engineer's checkout and copying the agents file, the first time. |
