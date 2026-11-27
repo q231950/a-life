@@ -12,6 +12,11 @@ services:
       # The whole checkout, since the server needs ALifeKit next to it.
       context: ..
       dockerfile: a-life-server/Dockerfile
+      args:
+        # The Swift the server is built with and the characters have in the
+        # container, from SWIFT_VERSION in .env; 6.2, as in the Dockerfile,
+        # unless you set it.
+        SWIFT_VERSION: ${SWIFT_VERSION:-6.2}
     image: a-life-server
     restart: unless-stopped
     # Reaps the processes the characters' Claude Code sessions leave behind.

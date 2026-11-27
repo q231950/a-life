@@ -3,10 +3,17 @@
 # checkout, since the server needs ALifeKit next to it; docker-compose.yml
 # does that for you. See "Run it on a server" in a-life-server/README.md.
 
-# The build: the server, with the Swift runtime linked in, so the image it
-# runs in doesn't need Swift.
+# SWIFT_VERSION is the Swift the server is built with and the Swift the
+# characters have in the image it runs in; docker-compose.yml takes it from
+# .env.
 ARG SWIFT_VERSION=6.2
 ARG NODE_VERSION=22
+
+# Node, for Claude Code, which the image the server runs in copies from here.
+FROM node:${NODE_VERSION}-bookworm-slim AS node
+
+# The build: the server, with the Swift runtime linked in, so that it doesn't
+# depend on the Swift the characters use next to it.
 FROM swift:${SWIFT_VERSION}-bookworm AS build
 WORKDIR /src
 
@@ -27,10 +34,17 @@ RUN bin="$(swift build --package-path /src/a-life-server -c release --show-bin-p
     && cp /src/a-life-server/Sources/ALifeServer/agents.yaml . \
     && cp /src/a-life-server/fetch-voice.sh /src/a-life-server/deploy/docker-entrypoint.sh .
 
-# What the server runs in: Node for Claude Code, git for the characters'
-# repositories, and curl and unzip for fetching the voice model. Debian 12,
-# like the build, so the server finds the C library it was built against.
-FROM node:${NODE_VERSION}-bookworm-slim
+# What the server runs in: Swift, so that the characters can build and test
+# the Swift packages they work on, Node for Claude Code, git for the
+# characters' repositories, and curl and unzip for fetching the voice model.
+# Debian 12, like the build, so the server finds the C library it was built
+# against.
+FROM swift:${SWIFT_VERSION}-bookworm
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata git openssh-client curl unzip \
@@ -40,11 +54,18 @@ RUN apt-get update \
 ARG CLAUDE_CODE_VERSION=latest
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && npm cache clean --force
 
-# The server runs as alife, not root. The image's node user (uid 1000)
-# becomes alife, and its home has a directory for each volume, so that each
-# volume starts out belonging to it.
-RUN groupmod -n alife node \
-    && usermod -l alife -d /home/alife -m node \
+# The server runs as alife, not root, with uid and gid 1000. Should the Swift
+# image ever come with a user of its own on uid 1000, that one becomes alife.
+# Its home has a directory for each volume, so that each volume starts out
+# belonging to it.
+RUN existing="$(getent passwd 1000 | cut -d: -f1)" \
+    && if [ -n "$existing" ]; then \
+        groupmod -n alife "$(id -gn "$existing")" \
+        && usermod -l alife -d /home/alife -m "$existing"; \
+    else \
+        groupadd --gid 1000 alife \
+        && useradd --uid 1000 --gid alife --home-dir /home/alife --create-home --shell /bin/bash alife; \
+    fi \
     && mkdir -p /home/alife/a-life-lot /home/alife/a-life-state /home/alife/a-life-voice \
         /home/alife/a-life-projects /home/alife/a-life /home/alife/a-life-cast /home/alife/.claude \
     && chown -R alife:alife /home/alife
