@@ -173,7 +173,7 @@ flowchart TB
             envfile[".env, chmod 600<br/>CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN,<br/>GIT_AUTHOR_NAME and the like, ALIFE_REPO_URL"]
 
             subgraph container["Docker container a-life: user alife, never root, init: true, restart: unless-stopped"]
-                entry["deploy/docker-entrypoint.sh<br/>git uses GITHUB_TOKEN for github.com,<br/>clones ALIFE_REPO_URL the first time,<br/>copies agents.yaml the first time"]
+                entry["deploy/docker-entrypoint.sh<br/>git gets GITHUB_TOKEN for github.com<br/>from a credential helper,<br/>clones ALIFE_REPO_URL the first time,<br/>copies agents.yaml the first time"]
                 server["ALifeServer serve<br/>--hostname 0.0.0.0 --port 8080"]
                 clis["a claude CLI per character<br/>Claude Code from npm, on Node,<br/>with Swift for swift build and swift test"]
             end
@@ -210,7 +210,7 @@ flowchart TB
     clis --- vprojects
     clis --- vclaude
     clis -->|"HTTPS, with CLAUDE_CODE_OAUTH_TOKEN"| anthropic
-    clis -->|"git fetch and push, with GITHUB_TOKEN"| github
+    clis -->|"git fetch and push, and gh, with GITHUB_TOKEN"| github
     entry -->|"git clone"| github
     server -->|"git clone of the projects"| github
     internet -.->|"SSH only, behind a cloud firewall.<br/>Port 8080 is never published"| droplet
@@ -508,7 +508,8 @@ To use a cast of your own instead, such as the one you keep on your Mac in `~/.c
 
 The characters who work on repositories clone, fetch and push with git on the server, which has none of your Mac's keys. Give it access to only the repositories they work on:
 
-- **A fine-grained GitHub token** is the simplest. On GitHub, under Settings, Developer settings, Personal access tokens, Fine-grained tokens, make one with access to only those repositories, and **Contents: Read and write** (Read is enough if they never push). Put it in `.env` as `GITHUB_TOKEN`. The container then has git use it for every GitHub address, the ssh ones in the agents file (`git@github.com:you/my-app.git`) as well as https ones, without writing it to a file. The characters' sessions can use it too, which is the point: keep its access to what they need.
+- **A fine-grained GitHub token** is the simplest. On GitHub, under Settings, Developer settings, Personal access tokens, Fine-grained tokens, make one with access to only those repositories, and **Contents: Read and write** (Read is enough if they never push). Put it in `.env` as `GITHUB_TOKEN`. The container then has git use it for every GitHub address, the ssh ones in the agents file (`git@github.com:you/my-app.git`) as well as https ones, without writing it to a file: the ssh addresses become plain https ones, and git gets the token from a credential helper that reads it from the environment each time, so it never shows in a remote's address, in `git remote -v` or in git's errors. The characters' sessions can use it too, which is the point: keep its access to what they need.
+- **The GitHub CLI, `gh`,** is in the image as well, and signs in with the same `GITHUB_TOKEN` by itself, with no `gh auth login`. For the characters to open pull requests with it, give the token **Pull requests: Read and write** as well as Contents, and **Issues: Read and write** if they should open or comment on issues too. Leave those out and `gh` can still read what the token can see.
 - **A deploy key** works as well, for a single repository: an SSH key made on the server, added to the repository under Settings, Deploy keys (with write access if they push). A deploy key only opens one repository, so for several, use the token. With Docker, the key has to be in the container user's `~/.ssh`; the token is easier.
 
 To have them commit as you, set `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in `.env`.
@@ -586,7 +587,7 @@ The server also runs straight on the droplet, under systemd, as a user of its ow
 
 6. Share it with `tailscale serve --bg 8080`, as above.
 
-`GITHUB_TOKEN` only does anything in the container. Without Docker, give `alife` its own git access: an SSH key (`ssh-keygen` as `alife`) added as a deploy key to a repository, or for several, the fine-grained token through git's credential store:
+`GITHUB_TOKEN` only does anything for git in the container, whose entrypoint sets up the credential helper. Without Docker, give `alife` its own git access: an SSH key (`ssh-keygen` as `alife`) added as a deploy key to a repository, or for several, the fine-grained token. One way is git's credential store, which keeps the token in a file of its own in `alife`'s home, readable only by `alife`; another is the container's way, a credential helper that reads `GITHUB_TOKEN` from the environment (see [`deploy/docker-entrypoint.sh`](deploy/docker-entrypoint.sh)). With the store:
 
 ```sh
 git config --global credential.helper store
