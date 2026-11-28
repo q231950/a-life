@@ -371,7 +371,7 @@ actor ClaudeCharacter: SessionBackend {
         if let connection { return connection }
         let connection: any ClaudeCodeConnection
         do {
-            connection = try claudeCode.launch(arguments, in: character.workspace)
+            connection = try claudeCode.launch(arguments, in: character.workspace, for: character.id)
         } catch {
             logger.error("Couldn't start Claude Code for \(character.name): \(error)")
             throw Abort(.serviceUnavailable, reason: "Couldn't start Claude Code for \(character.name): \(error)")

@@ -7,8 +7,16 @@ import Glibc // signal and kill, which Foundation brings along on macOS
 /// put a stand-in here.
 protocol ClaudeCodeLauncher: Sendable {
     /// Starts a Claude Code CLI with these arguments, talking stream-json,
-    /// working in `workspace`.
-    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection
+    /// working in `workspace`, for the character with the id `character`,
+    /// if it is one's.
+    func launch(_ arguments: [String], in workspace: Workspace, for character: String?) throws -> any ClaudeCodeConnection
+}
+
+extension ClaudeCodeLauncher {
+    /// Starts a Claude Code CLI that is no character's.
+    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
+        try launch(arguments, in: workspace, for: nil)
+    }
 }
 
 /// One running Claude Code CLI, as the Agent SDK talks to it: messages go
@@ -51,11 +59,13 @@ struct ClaudeCode: ClaudeCodeLauncher {
     /// `ALIFE_ADDED_AGENTS_FILE`.
     var addedAgentsFile: URL?
     /// This server's own command, which the Team Lead's recruiter runs as
-    /// `add-agent` to add an agent, or `remove-agent` to take one away. Its
-    /// sessions find it in `ALIFE_SERVER_COMMAND`.
+    /// `add-agent` to add an agent, or `remove-agent` to take one away, and
+    /// the construction worker and the keeper as `remove-from-lot` to take
+    /// a building or a bed off the lot. Its sessions find it in
+    /// `ALIFE_SERVER_COMMAND`.
     var serverCommand: URL?
 
-    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
+    func launch(_ arguments: [String], in workspace: Workspace, for character: String?) throws -> any ClaudeCodeConnection {
         let directory: URL
         switch workspace {
         case .lot:
@@ -99,6 +109,10 @@ struct ClaudeCode: ClaudeCodeLauncher {
         if let agentsFile { environment["ALIFE_AGENTS_FILE"] = agentsFile.path }
         if let addedAgentsFile { environment["ALIFE_ADDED_AGENTS_FILE"] = addedAgentsFile.path }
         if let serverCommand { environment["ALIFE_SERVER_COMMAND"] = serverCommand.path }
+        // For the construction worker and the keeper, to take a building or
+        // a bed off the lot, and only from their own character's folder.
+        environment["ALIFE_LOT_DIR"] = lot.path
+        environment["ALIFE_CHARACTER"] = character
 
         return try ClaudeCodeProcess(
             executable: executable,

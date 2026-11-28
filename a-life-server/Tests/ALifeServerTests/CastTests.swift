@@ -67,6 +67,13 @@ final class CastTests: XCTestCase {
             // commands, never by writing a file itself.
             "Read", "Glob", "Grep", "Bash",
         ])
+        for id in ["builder", "conservationist"] {
+            XCTAssertEqual(cast.first { $0.id == id }?.helper.tools, [
+                // Bash only to take a building or a bed off the lot with the
+                // server's remove-from-lot command.
+                "Read", "Glob", "Grep", "Write", "Edit", "Bash",
+            ], id)
+        }
 
         // Every agent has a name and a helper of its own, and a role and
         // helper that say who they are.
@@ -667,6 +674,30 @@ final class CastTests: XCTestCase {
         }
     }
 
+    func testEachSessionIsGivenTheLotAndWhoseItIs() async throws {
+        // A stand-in for the claude command that says what it was given.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("claude")
+        try """
+            #!/bin/sh
+            printf '{"lot":"%s","character":"%s"}\\n' "$ALIFE_LOT_DIR" "${ALIFE_CHARACTER-none}"
+            """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let launcher = ClaudeCode(executable: script, lot: directory)
+
+        for (character, said) in [("conservationist", "conservationist"), (nil, "none")] as [(String?, String)] {
+            let connection = try launcher.launch([], in: .lot, for: character)
+            var message: JSONValue?
+            for await line in connection.messages { message = line; break }
+            XCTAssertEqual(message?["lot"]?.string, directory.path)
+            // remove-from-lot lets only the Builder's and the
+            // Conservationist's sessions take things off the lot.
+            XCTAssertEqual(message?["character"]?.string, said)
+        }
+    }
+
     // MARK: What a file says
 
     func testEveryFieldIsRead() throws {
@@ -846,7 +877,7 @@ final class CastTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let character = try XCTUnwrap(Cast.decode(painter(onProject: "{path: \(directory.path)}"), from: "agents.yaml").first)
-        XCTAssertEqual(character.workspace, .project(Project(id: "painter", source: .directory(directory.standardizedFileURL))))
+        XCTAssertEqual(character.workspace, .project(Project(id: "painter", source: .directory(URL(fileURLWithPath: directory.path, isDirectory: true).standardizedFileURL))))
 
         // ~ is your home directory.
         let home = try XCTUnwrap(Cast.decode(painter(onProject: "{path: \"~\"}"), from: "agents.yaml").first)
@@ -905,7 +936,7 @@ final class CastTests: XCTestCase {
         let engineer = try XCTUnwrap(Cast.decode(onAPath, from: "agents.yaml").first)
         XCTAssertEqual(engineer.name, "App Engineer")
         XCTAssertEqual(engineer.helper.name, "app-expert")
-        XCTAssertEqual(engineer.workspace, .project(Project(id: "app-engineer", source: .directory(directory.standardizedFileURL))))
+        XCTAssertEqual(engineer.workspace, .project(Project(id: "app-engineer", source: .directory(URL(fileURLWithPath: directory.path, isDirectory: true).standardizedFileURL))))
 
         let onARepository = onAPath
             .replacingOccurrences(of: "    path: \(directory.path)\n", with: "")
