@@ -24,8 +24,8 @@ let package = Package(
                 .product(name: "APNSCore", package: "apnswift"),
                 .product(name: "ALifeAPI", package: "ALifeKit"),
             ],
-            // The cast the server ships with.
-            resources: [.copy("agents.yaml")]
+            // The agents the server has built in, and the agents file it ships with.
+            resources: [.copy("agents.yaml"), .copy("builtin-agents.yaml")]
         ),
         .testTarget(
             name: "ALifeServerTests",

@@ -9,7 +9,6 @@ import FoundationNetworking
 /// What the characters build and plant: the files in the lot's
 /// `buildings/` and `garden/` that say where they stand, what the server
 /// makes of them, and the front ends following the lot.
-@MainActor
 final class LotTests: XCTestCase {
     private var lot: URL!
 
@@ -284,6 +283,9 @@ final class LotTests: XCTestCase {
 
     // MARK: The server
 
+    // On the main actor, as ServerConnection is, and only this test: on
+    // Linux, XCTest can't run a test that isn't async on the main actor.
+    @MainActor
     func testTheFrontEndsSeeWhatIsBuiltAndPlanted() async throws {
         try write(restaurant, to: "buildings/restaurant.md")
 

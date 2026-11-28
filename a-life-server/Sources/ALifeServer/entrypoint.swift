@@ -4,14 +4,17 @@ import Vapor
 @main
 enum Entrypoint {
     static func main() async throws {
-        // Adding an agent to the cast, or taking one away, needs nothing
-        // else of the server.
+        // Adding an agent to the cast, taking one away, or taking something
+        // off the lot needs nothing else of the server.
         let arguments = CommandLine.arguments.dropFirst()
         if arguments.first == AddAgent.command {
             exit(AddAgent.main(Array(arguments.dropFirst())))
         }
         if arguments.first == RemoveAgent.command {
             exit(RemoveAgent.main(Array(arguments.dropFirst())))
+        }
+        if arguments.first == RemoveFromLot.command {
+            exit(RemoveFromLot.main(Array(arguments.dropFirst())))
         }
 
         var environment = try Environment.detect()

@@ -92,7 +92,7 @@ final class ClaudeCharacterTests: XCTestCase {
         XCTAssertEqual(value(after: "--model", in: arguments), "haiku") // the agents file's
         XCTAssertFalse(arguments.contains("--resume"))
         let agents = try JSONValue.decode(Data(XCTUnwrap(value(after: "--agents", in: arguments)).utf8))
-        XCTAssertEqual(agents["construction-worker"]?["tools"], ["Read", "Glob", "Grep", "Write", "Edit"])
+        XCTAssertEqual(agents["construction-worker"]?["tools"], ["Read", "Glob", "Grep", "Write", "Edit", "Bash"])
         XCTAssertEqual(agents["construction-worker"]?["model"], "inherit")
         XCTAssertNil(agents["keeper"])
         XCTAssertTrue(try XCTUnwrap(value(after: "--append-system-prompt", in: arguments)).contains("`construction-worker` agent"))
@@ -224,7 +224,7 @@ final class ClaudeCharacterTests: XCTestCase {
         cli.say(result(text: "The sheep jump before they fly off now, and the tests pass."))
         state = await until(hub, "the end of the turn") { $0.stopReason == .endTurn }
         XCTAssertTrue(state.subagents.isEmpty)
-        XCTAssertEqual(transcript(state).last, "Engineer: The sheep jump before they fly off now, and the tests pass.")
+        XCTAssertEqual(transcript(state).last, "a*life Engineer: The sheep jump before they fly off now, and the tests pass.")
     }
 
     func testTheTeamLeadSendsItsRecruiterToAddAnAgent() async throws {
@@ -862,7 +862,7 @@ final class FakeClaudeCode: ClaudeCodeLauncher, @unchecked Sendable {
         set { lock.lock(); defer { lock.unlock() }; _failure = newValue }
     }
 
-    func launch(_ arguments: [String], in workspace: Workspace) throws -> any ClaudeCodeConnection {
+    func launch(_ arguments: [String], in workspace: Workspace, for character: String?) throws -> any ClaudeCodeConnection {
         lock.lock()
         defer { lock.unlock() }
         if let _failure { throw _failure }

@@ -97,14 +97,15 @@ enum Buildings {
 
     // MARK: Kinds
 
-    private enum Roof {
+    enum Roof {
         case flat(PlatformColor)
         /// A gable roof, its ridge along x.
         case pitched(PlatformColor)
     }
 
-    /// How a kind of building looks.
-    private struct Style {
+    /// How a kind of building looks, on the lot and in its picture in the
+    /// Builder's conversation (`KindPicture`).
+    struct Style {
         var walls: PlatformColor
         var roof: Roof
         var height: Float
@@ -128,49 +129,52 @@ enum Buildings {
 
         /// The style of the first kind whose words are in `kind`, or a plain building.
         init(kind: String) {
-            func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> PlatformColor { PlatformColor(red: r, green: g, blue: b, alpha: 1) }
-            let kind = Kind(kind)
-            func `is`(_ words: String...) -> Bool { kind.isOne(of: words) }
+            self.init(LotItem.Building(kind: kind))
+        }
 
-            if `is`("restaurant", "bistro", "diner", "pizzeria", "trattoria", "pub", "inn", "tavern") {
+        /// How `building` looks, or a plain building for `nil`.
+        init(_ building: LotItem.Building?) {
+            func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> PlatformColor { PlatformColor(red: r, green: g, blue: b, alpha: 1) }
+            switch building {
+            case .restaurant:
                 self.init(walls: rgb(0.93, 0.68, 0.5), roof: .flat(rgb(0.4, 0.3, 0.28)), height: 1.2)
                 awning = rgb(0.82, 0.15, 0.17)
-            } else if `is`("cafe", "café", "coffee", "bakery", "tea", "ice cream", "patisserie") {
+            case .cafe:
                 self.init(walls: rgb(0.72, 0.9, 0.82), roof: .flat(rgb(0.38, 0.42, 0.4)), height: 1.0)
                 awning = rgb(0.93, 0.45, 0.6)
-            } else if `is`("shed", "garage", "workshop", "hut", "cabin", "greenhouse") {
+            case .shed:
                 self.init(walls: rgb(0.6, 0.45, 0.3), roof: .pitched(rgb(0.38, 0.28, 0.2)), height: 0.8)
-            } else if `is`("shop", "store", "market", "grocer", "boutique", "kiosk", "pharmacy") {
+            case .shop:
                 self.init(walls: rgb(0.88, 0.88, 0.9), roof: .flat(rgb(0.35, 0.38, 0.45)), height: 1.1)
                 awning = rgb(0.2, 0.45, 0.82)
-            } else if `is`("tower", "turbine") {
+            case .tower:
                 self.init(walls: rgb(0.95, 0.95, 0.96), roof: .flat(rgb(0.95, 0.95, 0.96)), height: 5)
                 isWindTurbine = true
-            } else if `is`("skyscraper", "apartment", "flats", "block", "hotel") {
+            case .flats:
                 self.init(walls: rgb(0.68, 0.7, 0.74), roof: .flat(rgb(0.3, 0.32, 0.36)), height: 5)
                 hasWindowBands = true
-            } else if `is`("office", "bank", "studio", "lab") {
+            case .office:
                 self.init(walls: rgb(0.5, 0.6, 0.72), roof: .flat(rgb(0.3, 0.33, 0.38)), height: 2.6)
                 hasWindowBands = true
-            } else if `is`("hospital", "clinic", "surgery") {
+            case .hospital:
                 self.init(walls: rgb(0.97, 0.97, 0.97), roof: .flat(rgb(0.6, 0.62, 0.65)), height: 1.9)
                 hasRedCross = true
-            } else if `is`("church", "chapel", "temple", "cathedral") {
+            case .church:
                 self.init(walls: rgb(0.95, 0.94, 0.9), roof: .pitched(rgb(0.4, 0.42, 0.48)), height: 1.5)
                 hasSpire = true
-            } else if `is`("school", "library", "town hall", "museum", "university", "college", "station") {
+            case .school:
                 self.init(walls: rgb(0.72, 0.36, 0.28), roof: .pitched(rgb(0.33, 0.36, 0.42)), height: 1.4)
                 door = rgb(0.2, 0.3, 0.55)
-            } else if `is`("barn", "stable", "farm", "farmyard", "ranch", "paddock") {
+            case .barn:
                 self.init(walls: rgb(0.7, 0.18, 0.15), roof: .pitched(rgb(0.3, 0.3, 0.33)), height: 1.5)
                 isBarn = true
-            } else if `is`("mill") {
+            case .mill:
                 self.init(walls: rgb(0.7, 0.18, 0.15), roof: .pitched(rgb(0.3, 0.3, 0.33)), height: 1.5)
                 door = rgb(0.95, 0.93, 0.88)
-            } else if `is`("house", "home", "cottage", "bungalow", "villa", "lodge") {
+            case .house:
                 self.init(walls: rgb(0.96, 0.9, 0.78), roof: .pitched(rgb(0.72, 0.3, 0.24)), height: 1.0)
                 hasChimney = true
-            } else {
+            case nil:
                 self.init(walls: rgb(0.85, 0.8, 0.7), roof: .flat(rgb(0.5, 0.5, 0.52)), height: 1.2)
             }
         }
@@ -349,27 +353,5 @@ enum Buildings {
 
     static func material(_ color: PlatformColor, roughness: Float = 0.75) -> SimpleMaterial {
         SimpleMaterial(color: color, roughness: .float(roughness), isMetallic: false)
-    }
-}
-
-/// The kind of something on the lot, such as `apple tree` or `bookshop`, to
-/// tell what to draw.
-struct Kind {
-    private let text: String
-    private let words: [Substring]
-
-    init(_ text: String) {
-        self.text = text.lowercased()
-        words = self.text.split { !$0.isLetter }
-    }
-
-    /// Whether it is one of these: one of its words is one of them, with or
-    /// without an s, or ends in one, as a bookshop is a shop. Two words, such
-    /// as `town hall`, have to be in it as they are.
-    func isOne(of names: [String]) -> Bool {
-        names.contains { name in
-            if name.contains(" ") { return text.contains(name) }
-            return words.contains { $0 == name || $0 == name + "s" || ($0.count > name.count + 2 && name.count >= 4 && $0.hasSuffix(name)) }
-        }
     }
 }

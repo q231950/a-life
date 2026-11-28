@@ -169,6 +169,7 @@ public final class ServerConnection {
                 }
                 let lotChanges = try await followLot(client)
                 let usageChanges = try await followUsage(client)
+                let rosterChanges = try await followRoster(client)
                 if streams.isEmpty {
                     reason = "The server has no sessions."
                 } else {
@@ -197,11 +198,22 @@ public final class ServerConnection {
                                 }
                             }
                         }
+                        if let rosterChanges {
+                            group.addTask { @MainActor [weak self] in
+                                for try await roster in rosterChanges {
+                                    // The first roster is who is there already, and the same.
+                                    if let self, roster.sessions != self.sessions.map(\.id) { throw RosterChanged() }
+                                }
+                            }
+                        }
                         // When one stream ends, start over with all of them.
                         _ = try await group.next()
                         group.cancelAll()
                     }
                 }
+            } catch is RosterChanged {
+                // An agent joined or left: take everything on again at once.
+                continue
             } catch {
                 reason = error.localizedDescription
             }
@@ -219,6 +231,16 @@ public final class ServerConnection {
     private func followLot(_ client: ALifeServerClient) async throws -> AsyncThrowingStream<Lot, Error>? {
         do {
             return try await client.lotChanges()
+        } catch ALifeClientError.server(status: 404, reason: _) {
+            return nil
+        }
+    }
+
+    /// Who is on the lot, starting with who is there now, or `nil` if the
+    /// server is from before agents could join and leave while it ran.
+    private func followRoster(_ client: ALifeServerClient) async throws -> AsyncThrowingStream<Roster, Error>? {
+        do {
+            return try await client.rosterChanges()
         } catch ALifeClientError.server(status: 404, reason: _) {
             return nil
         }
@@ -264,3 +286,6 @@ public final class ServerConnection {
         if usage != initial.usage { usage = initial.usage }
     }
 }
+/// Who is on the lot isn't what a front end follows: it needs to take on everything again.
+private struct RosterChanged: Error {}
+

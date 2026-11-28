@@ -119,14 +119,29 @@ struct Helper: Equatable, Sendable {
     }
 }
 
-/// The characters on the lot, as the agents file lists them: the
-/// `agents.yaml` next to this file, which the server ships with, or the file
-/// `ALIFE_AGENTS_FILE` names. The file is read once, when the server starts,
-/// and checked; anything wrong with it stops the server with a message that
-/// says where. New agents can be added to it, and agents taken away from it,
-/// as the Team Lead does; either takes effect when the server next starts.
+/// The characters on the lot, in three layers, in this order:
+///
+/// 1. The built-in agents, which the server itself defines (see
+///    `builtIn`): the Team Lead, the Builder, the Conservationist and the
+///    a*life Engineer. They are always there, nothing can change or take
+///    them away, and their roles and helpers update when the server does.
+/// 2. The person's own agents, in the agents file: the `agents.yaml` next to
+///    this file, or the file `ALIFE_AGENTS_FILE` names. Only the person edits
+///    it. Every agent in it is always there, and the Team Lead can't take
+///    one away. An entry that is a built-in agent (by its id or its name)
+///    is left out, with a warning, so that a copy from before the server
+///    had them built in can't hide what the server says now.
+/// 3. The agents the Team Lead adds (and takes away), in the added agents
+///    file: `ALIFE_ADDED_AGENTS_FILE`, or `added-agents.yaml` in the
+///    server's state directory. It is written as the agents file is.
+///
+/// The files are read, and checked, when the server starts; anything wrong
+/// with them stops the server with a message that says where. The added
+/// agents file is watched while the server runs, so agents the Team Lead
+/// adds or takes away join and leave the lot at once (see `Team`).
 enum Cast {
-    /// The agents file the server ships with. `Package.swift` copies it into
+    /// The agents file the server ships with: a template, with no agents,
+    /// whose comment describes every field. `Package.swift` copies it into
     /// the server's resources.
     static var shippedFile: URL {
         guard let file = Bundle.module.url(forResource: "agents", withExtension: "yaml") else {
@@ -134,6 +149,25 @@ enum Cast {
         }
         return file
     }
+
+    /// The agents the server has built in, written as an agents file is.
+    /// `Package.swift` copies it into the server's resources.
+    static var builtInFile: URL {
+        guard let file = Bundle.module.url(forResource: "builtin-agents", withExtension: "yaml") else {
+            fatalError("builtin-agents.yaml is missing from the server's resources")
+        }
+        return file
+    }
+
+    /// The agents the server has built in, which are always on the lot, in
+    /// the order they are on it.
+    static let builtIn: [Character] = {
+        do {
+            return try load(contentsOf: builtInFile)
+        } catch {
+            fatalError("The built-in agents don't load: \(error)")
+        }
+    }()
 
     /// The agents file in the a*life checkout the server was built from, the
     /// one the shipped file is copied from, if it is still there.
@@ -144,16 +178,25 @@ enum Cast {
     }
 
     /// The agents file to read: the one `ALIFE_AGENTS_FILE` names, or else
-    /// the one in the checkout the server was built from, so that an agent
-    /// added to it (by the Team Lead, say) joins the lot when the server
-    /// restarts, without building it again. The shipped copy if there's
-    /// neither.
+    /// the one in the checkout the server was built from, or the shipped
+    /// copy if there's neither. It needn't be there, or list any agents.
     static func file(in environment: [String: String]) -> URL {
         guard let path = environment["ALIFE_AGENTS_FILE"], !path.isEmpty else { return checkoutFile ?? shippedFile }
         return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
     }
 
-    /// Reads the agents file at `file` and checks it.
+    /// The file of the agents the Team Lead adds: the one
+    /// `ALIFE_ADDED_AGENTS_FILE` names, or else `added-agents.yaml` in the
+    /// server's state directory (`ALIFE_STATE_DIR`).
+    static func addedFile(in environment: [String: String]) -> URL {
+        if let path = environment["ALIFE_ADDED_AGENTS_FILE"], !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        return Players.stateDirectory(in: environment).appendingPathComponent("added-agents.yaml")
+    }
+
+    /// Reads the agents file at `file` and checks it. It has to be there,
+    /// but may list no agents.
     static func load(contentsOf file: URL) throws -> [Character] {
         let yaml: String
         do {
@@ -164,12 +207,21 @@ enum Cast {
         return try decode(yaml, from: file.path)
     }
 
-    /// The characters the text of an agents file lists, once checked.
-    /// `source` names the file in errors.
+    /// As `load(contentsOf:)`, but a file that isn't there lists no agents.
+    static func loadIfThere(contentsOf file: URL) throws -> [Character] {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        return try load(contentsOf: file)
+    }
+
+    /// The characters the text of an agents file lists, once checked, which
+    /// may be none. `source` names the file in errors.
     static func decode(_ yaml: String, from source: String) throws -> [Character] {
-        guard !yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw CastError("\(source) is empty. It should list the agents under agents:.")
+        // Nothing but comments, or nothing at all, lists no agents.
+        let hasContent = yaml.split(separator: "\n").contains { line in
+            let text = line.trimmingCharacters(in: .whitespaces)
+            return !text.isEmpty && !text.hasPrefix("#")
         }
+        if !hasContent { return [] }
         do {
             return try YAMLDecoder().decode(AgentsFile.self, from: yaml).agents
         } catch let error as DecodingError {
@@ -193,29 +245,160 @@ enum Cast {
     /// `default`.
     static let permissionModes = ["default", "manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]
 
-    // MARK: Adding an agent
+    // MARK: The layers
 
-    /// Adds the agent `entry` describes to the agents file at `file`, as
-    /// `adding(_:to:from:)` does, and says who it is. The file is left as it
-    /// was if the agent can't be added.
-    @discardableResult
-    static func add(_ entry: String, toFileAt file: URL) throws -> Character {
-        let yaml: String
-        do {
-            yaml = try String(contentsOf: file, encoding: .utf8)
-        } catch {
-            throw CastError("Couldn't read the agents file \(file.path): \(error.localizedDescription)")
-        }
-        let (text, added) = try adding(entry, to: yaml, from: file.path)
-        do {
-            try text.write(to: file, atomically: true, encoding: .utf8)
-        } catch {
-            throw CastError("Couldn't write the agents file \(file.path): \(error.localizedDescription)")
-        }
-        return added
+    /// Where an agent comes from.
+    enum Origin: Equatable, Sendable {
+        /// Built into the server.
+        case builtIn
+        /// The person's own, in the agents file.
+        case agentsFile
+        /// Added by the Team Lead.
+        case added
     }
 
-    /// The text of the agents file `yaml` with one more agent at the end of
+    /// The characters on the lot, by layer. Ids and names are unique across
+    /// all of them.
+    struct Layers: Equatable, Sendable {
+        /// The built-in agents.
+        var builtIn: [Character]
+        /// The agents in the agents file, without the ones that are
+        /// built in.
+        var own: [Character]
+        /// The agents the Team Lead added.
+        var added: [Character]
+
+        /// Everyone on the lot, in the order they are on it.
+        var all: [Character] { builtIn + own + added }
+
+        /// The agent `idOrName` names, by its id or its name (in any case),
+        /// and where it comes from.
+        func agent(_ idOrName: String) -> (character: Character, origin: Origin)? {
+            let wanted = idOrName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let layers: [(Origin, [Character])] = [(.builtIn, builtIn), (.agentsFile, own), (.added, added)]
+            for (origin, characters) in layers {
+                if let found = characters.first(where: { $0.id == wanted }) { return (found, origin) }
+            }
+            for (origin, characters) in layers {
+                if let found = characters.first(where: { $0.name.lowercased() == wanted.lowercased() }) { return (found, origin) }
+            }
+            return nil
+        }
+    }
+
+    /// The layers, from the agents file at `agentsFile` and the added agents
+    /// file at `addedFile`, either of which may not be there. Throws if one
+    /// is wrong, or if the two share an id or a name; an entry in either
+    /// that is a built-in agent is left out, and `warn` says so.
+    static func layers(
+        agentsFile: URL, addedFile: URL, builtIn: [Character] = Cast.builtIn, warn: (String) -> Void = { _ in }
+    ) throws -> Layers {
+        let own = try loadIfThere(contentsOf: agentsFile)
+        let added = try loadIfThere(contentsOf: addedFile)
+        return try layers(builtIn: builtIn, own: own, from: agentsFile.path, added: added, from: addedFile.path, warn: warn)
+    }
+
+    /// As `layers(agentsFile:addedFile:builtIn:warn:)`, for the agents
+    /// already read, `own` from `ownSource` and `added` from `addedSource`.
+    static func layers(
+        builtIn: [Character], own: [Character], from ownSource: String, added: [Character], from addedSource: String,
+        warn: (String) -> Void = { _ in }
+    ) throws -> Layers {
+        /// The built-in agent that has this character's id or name.
+        func builtInClash(_ character: Character) -> Character? {
+            builtIn.first { $0.id == character.id || $0.name.lowercased() == character.name.lowercased() }
+        }
+        var keptOwn: [Character] = []
+        for character in own {
+            if let builtInAgent = builtInClash(character) {
+                warn("\(ownSource) has the \(character.name) (\(character.id)), which is the server's built-in \(builtInAgent.name) (\(builtInAgent.id)): the server's is used instead, and this entry is ignored. Take it out of the file.")
+            } else {
+                keptOwn.append(character)
+            }
+        }
+        var keptAdded: [Character] = []
+        for character in added {
+            if let builtInAgent = builtInClash(character) {
+                warn("\(addedSource) has the \(character.name) (\(character.id)), which is the server's built-in \(builtInAgent.name) (\(builtInAgent.id)): the server's is used instead, and this entry is ignored.")
+                continue
+            }
+            if let own = keptOwn.first(where: { $0.id == character.id }) ?? keptOwn.first(where: { $0.name.lowercased() == character.name.lowercased() }) {
+                let what = own.id == character.id ? "the id \"\(character.id)\"" : "the name \"\(character.name)\""
+                throw CastError("\(ownSource) and \(addedSource) both have \(what), the \(own.name) (\(own.id)) in the first and the \(character.name) (\(character.id)) in the second. Each agent needs an id and a name of its own: take one of them out.")
+            }
+            keptAdded.append(character)
+        }
+        return Layers(builtIn: builtIn, own: keptOwn, added: keptAdded)
+    }
+
+    /// The layers the environment says: the agents file (see `file(in:)`)
+    /// and the added agents file (see `addedFile(in:)`).
+    static func layers(in environment: [String: String], warn: (String) -> Void = { _ in }) throws -> Layers {
+        try layers(agentsFile: file(in: environment), addedFile: addedFile(in: environment), warn: warn)
+    }
+
+    // MARK: Adding an agent
+
+    /// What the added agents file starts with when the first agent is added.
+    static let addedFileHeader = """
+        # The agents the Team Lead has added to the lot, and takes away again.
+        # The server watches this file, so they join and leave the lot as it
+        # changes. It is written as the agents file is; see "The agents file" in
+        # the server's README. Leave it to the Team Lead: your own agents belong
+        # in the agents file, where the Team Lead can't take them away.
+
+        agents:
+
+        """
+
+    /// Adds the agent `entry` describes to the added agents file the
+    /// environment says (see `addedFile(in:)`), making the file if it isn't
+    /// there, and says who it is and which file it went to. The agent needs
+    /// an id and a name that no built-in agent, agent in the agents file or
+    /// added agent has already; the files are left as they were if it can't
+    /// be added.
+    @discardableResult
+    static func add(_ entry: String, in environment: [String: String]) throws -> (agent: Character, file: URL) {
+        let agentsFile = Self.file(in: environment)
+        let file = Self.addedFile(in: environment)
+        // Everyone already on the lot, as the server reads the files.
+        let layers = try Self.layers(agentsFile: agentsFile, addedFile: file)
+        let yaml: String
+        if FileManager.default.fileExists(atPath: file.path) {
+            do {
+                yaml = try String(contentsOf: file, encoding: .utf8)
+            } catch {
+                throw CastError("Couldn't read the added agents file \(file.path): \(error.localizedDescription)")
+            }
+        } else {
+            yaml = addedFileHeader
+        }
+        let (text, added) = try adding(entry, to: yaml, from: file.path)
+        if let clash = layers.agent(added.id) ?? layers.agent(added.name) {
+            throw CastError(taken(added, by: clash.character, origin: clash.origin, agentsFile: agentsFile, addedFile: file))
+        }
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            throw CastError("Couldn't write the added agents file \(file.path): \(error.localizedDescription)")
+        }
+        return (added, file)
+    }
+
+    /// Why a new agent can't join: its id or name is another's.
+    private static func taken(_ new: Character, by other: Character, origin: Origin, agentsFile: URL, addedFile: URL) -> String {
+        let what = other.id == new.id ? "the id \"\(new.id)\"" : "the name \"\(new.name)\""
+        let whose: String
+        switch origin {
+        case .builtIn: whose = "the built-in \(other.name) (\(other.id))"
+        case .agentsFile: whose = "the \(other.name) (\(other.id)) in \(agentsFile.path)"
+        case .added: whose = "the \(other.name) (\(other.id)), already added in \(addedFile.path)"
+        }
+        return "\(what) is already \(whose). Each agent needs an id and a name of its own."
+    }
+
+    /// The text of an agents file `yaml` with one more agent at the end of
     /// its list: the one `entry` describes, its fields as an agent in the
     /// file has them (with or without the `- ` in front). Everything already
     /// in the file, its agents and its comments, stays as it is, word for
@@ -229,7 +412,10 @@ enum Cast {
         let cast = try decode(yaml, from: source)
         let fields = try fields(of: entry)
 
-        let lines = yaml.components(separatedBy: "\n")
+        // An empty list, "agents: []", makes room for the first agent.
+        let lines = yaml.components(separatedBy: "\n").map { line in
+            line.range(of: #"^agents:\s*\[\s*\]\s*$"#, options: .regularExpression) == nil ? line : "agents:"
+        }
         // As the file's agents are indented, such as "  - id: builder".
         let indent = lines.lazy
             .compactMap { line -> String? in
@@ -313,53 +499,51 @@ enum Cast {
 
     // MARK: Taking an agent away
 
-    /// The agents that are never taken away: the Team Lead, who takes them
-    /// away, and the Builder and the Conservationist, who look after the lot.
-    static let keptIDs = ["team-lead", "builder", "conservationist"]
-
-    /// Takes the agent `id` names away from the agents file at `file`, as
-    /// `removing(_:from:source:)` does, and says who it was. The file is left
-    /// as it was if the agent can't be taken away.
+    /// Takes the agent `id` names, by its id or its name, away from the added
+    /// agents file the environment says, as `removing(_:from:source:)` does,
+    /// and says who it was and which file it left. Only added agents can be
+    /// taken away; see `removable(_:in:)`. The file is left as it was if the
+    /// agent can't be taken away.
     @discardableResult
-    static func remove(_ id: String, fromFileAt file: URL) throws -> Character {
+    static func remove(_ id: String, in environment: [String: String]) throws -> (agent: Character, file: URL) {
+        let (agent, file) = try removable(id, in: environment)
         let yaml: String
         do {
             yaml = try String(contentsOf: file, encoding: .utf8)
         } catch {
-            throw CastError("Couldn't read the agents file \(file.path): \(error.localizedDescription)")
+            throw CastError("Couldn't read the added agents file \(file.path): \(error.localizedDescription)")
         }
-        let (text, removed) = try removing(id, from: yaml, source: file.path)
+        let (text, removed) = try removing(agent.id, from: yaml, source: file.path)
         do {
             try text.write(to: file, atomically: true, encoding: .utf8)
         } catch {
-            throw CastError("Couldn't write the agents file \(file.path): \(error.localizedDescription)")
+            throw CastError("Couldn't write the added agents file \(file.path): \(error.localizedDescription)")
         }
-        return removed
+        return (removed, file)
     }
 
-    /// The agent `id` names, by its id or its name, as the agents file `yaml`
-    /// lists it, once checked that it can be taken away: it is there, it
-    /// isn't one of the `keptIDs`, and it isn't the only agent.
-    static func agent(_ id: String, toRemoveFrom yaml: String, source: String) throws -> Character {
-        let cast = try decode(yaml, from: source)
+    /// The agent `id` names, by its id or its name, once checked that it can
+    /// be taken away, and the added agents file it is in. Only added agents
+    /// can: the built-in agents always stay, and so does every agent in the
+    /// agents file, which the person edits themselves. Throws, saying so, if
+    /// it isn't an added agent, or isn't there at all.
+    static func removable(_ id: String, in environment: [String: String]) throws -> (agent: Character, file: URL) {
+        let agentsFile = Self.file(in: environment)
+        let file = Self.addedFile(in: environment)
+        let layers = try Self.layers(agentsFile: agentsFile, addedFile: file)
         let wanted = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let agent = cast.first(where: { $0.id == wanted })
-            ?? cast.first(where: { $0.name.lowercased() == wanted.lowercased() })
-        else {
-            if keptIDs.contains(wanted) { throw kept(wanted, named: nil) }
-            let ids = cast.map(\.id).joined(separator: ", ")
-            throw CastError("\(source) has no agent \"\(wanted)\". The agents there are \(ids).")
+        guard let (agent, origin) = layers.agent(wanted) else {
+            let ids = layers.added.map(\.id).joined(separator: ", ")
+            throw CastError("There's no agent \"\(wanted)\". The agents that can be taken away, the added ones, are \(ids.isEmpty ? "none right now" : ids).")
         }
-        if keptIDs.contains(agent.id) { throw kept(agent.id, named: agent.name) }
-        guard cast.count > 1 else {
-            throw CastError("The \(agent.name) (\(agent.id)) is the only agent in \(source), and there has to be at least one.")
+        switch origin {
+        case .builtIn:
+            throw CastError("The \(agent.name) (\(agent.id)) can't be taken away: it is built into the server, and always stays on the lot.")
+        case .agentsFile:
+            throw CastError("The \(agent.name) (\(agent.id)) can't be taken away: it is in \(agentsFile.path), where the person keeps their own agents, and always stays on the lot. To drop it, they take it out of that file themselves and restart the server.")
+        case .added:
+            return (agent, file)
         }
-        return agent
-    }
-
-    /// Why a kept agent can't be taken away.
-    private static func kept(_ id: String, named name: String?) -> CastError {
-        CastError("The \(name ?? id) (\(id)) can't be taken away: the Team Lead, the Builder and the Conservationist always stay on the lot.")
     }
 
     /// The text of the agents file `yaml` without the agent `id` names, by
@@ -367,12 +551,15 @@ enum Cast {
     /// agent go with it; everything else in the file, the other agents and
     /// the other comments, stays as it is, word for word.
     ///
-    /// Throws, saying why, if the agent isn't there, is one of the
-    /// `keptIDs`, or can't be taken out without changing the others; and if
-    /// the file is wrong already.
+    /// Throws, saying why, if the agent isn't there, or can't be taken out
+    /// without changing the others; and if the file is wrong already. It
+    /// doesn't ask whether the agent may be taken away: see `removable(_:in:)`.
     static func removing(_ id: String, from yaml: String, source: String) throws -> (text: String, removed: Character) {
         let cast = try decode(yaml, from: source)
-        let agent = try Self.agent(id, toRemoveFrom: yaml, source: source)
+        let wanted = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let agent = cast.first(where: { $0.id == wanted }) ?? cast.first(where: { $0.name.lowercased() == wanted.lowercased() }) else {
+            throw CastError("\(source) has no agent \"\(wanted)\". The agents there are \(cast.map(\.id).joined(separator: ", ")).")
+        }
         guard let index = cast.firstIndex(of: agent) else { throw CastError("\(source) has no agent \"\(id)\".") }
         let byHand = CastError("\(source): the \(agent.name) (\(agent.id)) couldn't be taken away without changing the others. Take it out of the file by hand.")
 
@@ -490,7 +677,7 @@ private struct FieldError: Error {
     }
 }
 
-/// The agents file, decoded and checked as it goes, so that each problem is
+/// An agents file, decoded and checked as it goes, so that each problem is
 /// reported with where it is.
 private struct AgentsFile: Decodable {
     let agents: [Character]
@@ -502,10 +689,8 @@ private struct AgentsFile: Decodable {
     init(from decoder: any Decoder) throws {
         try rejectUnknownFields(in: decoder, CodingKeys.self, of: "the file")
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let entries = try container.decode([AgentEntry].self, forKey: .agents)
-        guard !entries.isEmpty else {
-            throw FieldError([CodingKeys.agents], "is empty. There has to be at least one agent.")
-        }
+        // No agents at all is fine: the built-in ones are always there.
+        let entries = try container.decodeIfPresent([AgentEntry].self, forKey: .agents) ?? []
         for (index, entry) in entries.enumerated() {
             if let first = entries.firstIndex(where: { $0.character.id == entry.character.id }), first < index {
                 throw FieldError(
@@ -545,6 +730,10 @@ private struct AgentEntry: Decodable {
 
         let id = try container.text(.id)
         try checkName(id, at: container.codingPath + [CodingKeys.id], what: "An id", example: "builder")
+        // /v1/sessions/events is the roster's stream, not a session's.
+        guard id != "events" else {
+            throw FieldError(container.codingPath + [CodingKeys.id], "\"events\" is taken: /v1/sessions/events is the stream of who is on the lot. Choose another id.")
+        }
 
         let color = try container.optional(String.self, .color)
         if let color, !Self.isColor(color) {

@@ -54,8 +54,8 @@ final class ALifeServerTests: XCTestCase {
 
     func testEveryCharacterHasASessionOfItsOwn() async throws {
         let (server, birdwatcher, builder) = try await connect()
-        XCTAssertEqual(server.sessions.map(\.name), ["Birdwatcher", "Builder", "Engineer"])
-        // Each wears its own colour; the Engineer's shirt is purple.
+        XCTAssertEqual(server.sessions.map(\.name), ["Birdwatcher", "Builder", "a*life Engineer"])
+        // Each wears its own colour; the a*life Engineer's shirt is purple.
         XCTAssertEqual(server.sessions.map(\.color), ["#D9594D", "#F2A633", "#8050C8"])
         XCTAssertEqual(birdwatcher.status, .idle)
 
@@ -140,11 +140,11 @@ final class ALifeServerTests: XCTestCase {
 
         // The Engineer still asks.
         await engineer.send("Tidy the lot")
-        await wait(for: "the Engineer's approval") { engineer.stopReason == .requiresAction }
+        await wait(for: "the a*life Engineer's approval") { engineer.stopReason == .requiresAction }
         XCTAssertTrue(engineer.isWaitingForYou)
-        // Turning it on for the Engineer lets through what is waiting.
+        // Turning it on for the a*life Engineer lets through what is waiting.
         await engineer.setAutoApprove(true)
-        await wait(for: "the Engineer to finish") { engineer.stopReason == .endTurn }
+        await wait(for: "the a*life Engineer to finish") { engineer.stopReason == .endTurn }
         XCTAssertTrue(engineer.conversation.contains {
             if case .approval(_, .autoApproved) = $0 { return true }
             return false

@@ -25,8 +25,10 @@ RUN swift package --package-path a-life-server resolve
 COPY a-life-server a-life-server
 RUN swift build --package-path a-life-server -c release --product ALifeServer --static-swift-stdlib
 
-# The server and its resources (the shipped agents file), side by side, as
-# the server looks for them.
+# The server and its resources (the built-in agents, and the agents file it
+# ships with), side by side, as the server looks for them. The shipped agents
+# file is also copied out on its own, for the entrypoint to put in the cast
+# volume.
 WORKDIR /staging
 RUN bin="$(swift build --package-path /src/a-life-server -c release --show-bin-path)" \
     && cp "$bin/ALifeServer" . \
@@ -86,19 +88,22 @@ RUN mv /app/fetch-voice.sh /usr/local/bin/fetch-voice.sh
 USER alife
 WORKDIR /home/alife
 # Claude Code keeps its settings, its sessions and its .claude.json in
-# CLAUDE_CONFIG_DIR, on a volume of its own. The Engineer works in the a*life
-# checkout in ALIFE_REPO_DIR, which the entrypoint clones from ALIFE_REPO_URL
-# the first time. The cast is in ALIFE_AGENTS_FILE, which the entrypoint
-# copies from the shipped agents file the first time, so that the Team Lead's
-# additions and your own edits outlast a new image. The lot, the state, the
-# voice model and the projects are where the server keeps them anyway, in
-# its home.
+# CLAUDE_CONFIG_DIR, on a volume of its own. The a*life Engineer works in the
+# a*life checkout in ALIFE_REPO_DIR, which the entrypoint clones from
+# ALIFE_REPO_URL the first time. The built-in agents are part of the server, so
+# a new image updates them. Your own agents are in ALIFE_AGENTS_FILE, which the
+# entrypoint copies from the shipped agents file (a template) the first time,
+# so that your edits outlast a new image. The agents the Team Lead adds are in
+# ALIFE_ADDED_AGENTS_FILE, next to it in the cast volume, so they do too. The
+# lot, the state, the voice model and the projects are where the server keeps
+# them anyway, in its home.
 ENV HOME=/home/alife \
     CLAUDE_CONFIG_DIR=/home/alife/.claude \
     DISABLE_AUTOUPDATER=1 \
     ALIFE_REPO_DIR=/home/alife/a-life \
     ALIFE_REPO_URL=https://github.com/q231950/a-life.git \
-    ALIFE_AGENTS_FILE=/home/alife/a-life-cast/agents.yaml
+    ALIFE_AGENTS_FILE=/home/alife/a-life-cast/agents.yaml \
+    ALIFE_ADDED_AGENTS_FILE=/home/alife/a-life-cast/added-agents.yaml
 
 EXPOSE 8080
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

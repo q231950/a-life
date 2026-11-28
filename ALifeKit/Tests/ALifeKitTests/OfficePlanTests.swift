@@ -82,4 +82,28 @@ final class OfficePlanTests: XCTestCase {
         let all = OfficePlan.sheepSpots(in: room)
         XCTAssertEqual(OfficePlan.sheepSpot(in: room, place: all.count), spots[0])
     }
+
+    func testSheepStrollAroundTheirRoomWithoutLeavingItOrCrossingTheDesk() {
+        let room = OfficePlan.room(forSlot: 0)
+        var generator = SystemRandomNumberGenerator()
+        for place in 0..<8 {
+            var spot = OfficePlan.sheepSpot(in: room, place: place)
+            XCTAssertTrue(OfficePlan.isFree(spot, in: room))
+            for _ in 0..<200 {
+                guard let next = OfficePlan.strollSpot(from: spot, in: room, using: &generator) else { continue }
+                XCTAssertTrue(OfficePlan.isFree(next, in: room), "\(next)")
+                XCTAssertTrue(OfficePlan.canWalk(from: spot, to: next, in: room))
+                spot = next
+            }
+        }
+    }
+
+    func testSheepCannotStandAtTheDeskOrOutsideTheRoom() {
+        let room = OfficePlan.room(forSlot: 1)
+        XCTAssertFalse(OfficePlan.isFree(room.desk, in: room))
+        XCTAssertFalse(OfficePlan.isFree(OfficePlan.Spot(x: room.minX - 0.1, y: room.desk.y - 1), in: room))
+        let left = OfficePlan.Spot(x: room.desk.x - 1, y: room.desk.y)
+        let right = OfficePlan.Spot(x: room.desk.x + 1, y: room.desk.y)
+        XCTAssertFalse(OfficePlan.canWalk(from: left, to: right, in: room)) // not through the character
+    }
 }

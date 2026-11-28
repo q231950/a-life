@@ -24,22 +24,26 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
     export GIT_CONFIG_VALUE_2='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
 fi
 
-# The Engineer's a*life checkout, cloned the first time, and used as it is
+# The a*life Engineer's checkout, cloned the first time, and used as it is
 # after that.
 if [ -n "${ALIFE_REPO_DIR:-}" ] && [ ! -e "$ALIFE_REPO_DIR/.git" ]; then
     if [ -n "${ALIFE_REPO_URL:-}" ] && GIT_TERMINAL_PROMPT=0 git clone --quiet "$ALIFE_REPO_URL" "$ALIFE_REPO_DIR"; then
-        echo "Cloned $ALIFE_REPO_URL into $ALIFE_REPO_DIR for the Engineer to work in."
+        echo "Cloned $ALIFE_REPO_URL into $ALIFE_REPO_DIR for the a*life Engineer to work in."
     else
-        echo "There's no a*life checkout in $ALIFE_REPO_DIR, so the Engineer can't start. Set ALIFE_REPO_URL to one it can clone." >&2
+        echo "There's no a*life checkout in $ALIFE_REPO_DIR, so the a*life Engineer can't start. Set ALIFE_REPO_URL to one it can clone." >&2
         unset ALIFE_REPO_DIR
     fi
 fi
 
-# The cast, copied from the one the server ships with the first time.
+# Your own agents: the agents file, copied from the one the server ships with
+# (a template with no agents in it) the first time, and yours from then on.
+# The built-in agents are part of the server, and the agents the Team Lead
+# adds are in ALIFE_ADDED_AGENTS_FILE, which the server makes itself, in the
+# same volume.
 if [ -n "${ALIFE_AGENTS_FILE:-}" ] && [ ! -e "$ALIFE_AGENTS_FILE" ]; then
     mkdir -p "$(dirname "$ALIFE_AGENTS_FILE")"
     cp /app/agents.yaml "$ALIFE_AGENTS_FILE"
-    echo "Copied the shipped agents file to $ALIFE_AGENTS_FILE. Edit it there to change who is on the lot."
+    echo "Copied the shipped agents file to $ALIFE_AGENTS_FILE. Add your own agents there; the built-in ones are always on the lot."
 fi
 
 exec /app/ALifeServer "$@"

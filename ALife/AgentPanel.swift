@@ -521,6 +521,7 @@ private struct ConversationView: View {
     @Environment(\.narrator) private var narrator
     let session: AgentSession
     @State private var draft = ""
+    @FocusState private var draftIsFocused: Bool
 
     private var isConnected: Bool { server.phase == .live }
 
@@ -567,12 +568,24 @@ private struct ConversationView: View {
                     .foregroundStyle(.red)
             }
 
+            // What the Builder and the Conservationist can make, to start a
+            // request for one.
+            let suggestions = LotSuggestion.offered(by: session.id)
+            if !suggestions.isEmpty {
+                LotSuggestionRow(suggestions: suggestions) { suggestion in
+                    draft = suggestion.request
+                    draftIsFocused = true
+                }
+                .disabled(session.isWaitingForYou || !isConnected)
+            }
+
             HStack {
                 // Works while the character is busy, too: it answers at its
                 // next step. Not while it waits for an answer, though.
                 Group {
                     TextField(prompt, text: $draft)
                         .textFieldStyle(.roundedBorder)
+                        .focused($draftIsFocused)
                         .onSubmit(send)
                     Button("Send", systemImage: "paperplane.fill", action: send)
                         .labelStyle(.iconOnly)

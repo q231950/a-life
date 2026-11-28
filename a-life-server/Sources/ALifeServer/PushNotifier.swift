@@ -166,7 +166,7 @@ actor PushNotifier {
     /// The bundle id devices must register with, if it is known.
     let topic: String?
     private let logger: Logger
-    private var following: [Task<Void, Never>] = []
+    private var following: [String: Task<Void, Never>] = [:]
 
     init(registry: DeviceRegistry, sender: (any PushSender)?, topic: String?, logger: Logger = Logger(label: "a-life.push")) {
         self.registry = registry
@@ -184,14 +184,21 @@ actor PushNotifier {
         for session in sessions {
             let (state, events) = await session.hub.follow()
             let id = session.id
-            following.append(Task { [weak self] in
+            following[id]?.cancel()
+            following[id] = Task { [weak self] in
                 var watch = JobWatch(seededFrom: state)
                 for await envelope in events {
                     guard let ending = watch.feed(envelope) else { continue }
                     await self?.notify(ending, name: state.name, sessionID: id)
                 }
-            })
+            }
         }
+    }
+
+    /// Stops following the session `id`, which has left the lot.
+    func unfollow(_ id: String) {
+        following[id]?.cancel()
+        following[id] = nil
     }
 
     /// Sends the notification for a job that ended.
@@ -243,8 +250,8 @@ actor PushNotifier {
 
     /// The server is stopping.
     func stop() async {
-        for task in following { task.cancel() }
-        following = []
+        for task in following.values { task.cancel() }
+        following = [:]
         await sender?.shutdown()
     }
 }
