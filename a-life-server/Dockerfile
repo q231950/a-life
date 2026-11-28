@@ -36,9 +36,11 @@ RUN bin="$(swift build --package-path /src/a-life-server -c release --show-bin-p
 
 # What the server runs in: Swift, so that the characters can build and test
 # the Swift packages they work on, Node for Claude Code, git for the
-# characters' repositories, and curl and unzip for fetching the voice model.
-# Debian 12, like the build, so the server finds the C library it was built
-# against.
+# characters' repositories, the GitHub CLI (gh) for their pull requests and
+# issues, from GitHub's own apt repository, and curl and unzip for fetching
+# the voice model. gh signs in with GITHUB_TOKEN from the environment by
+# itself, so it needs no gh auth login. Debian 12, like the build, so the
+# server finds the C library it was built against.
 FROM swift:${SWIFT_VERSION}-bookworm
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
@@ -48,6 +50,14 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata git openssh-client curl unzip \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 # Claude Code. It's updated by building the image again, not by itself.
