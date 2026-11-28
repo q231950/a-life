@@ -57,8 +57,9 @@ enum Animals {
         return bed
     }
 
-    /// The coats `animal`s come in when their bed has no colour.
-    private static func coats(of animal: LotItem.Animal) -> [PlatformColor] {
+    /// The coats `animal`s come in when their bed has no colour. The first
+    /// is the one in its picture in the Conservationist's conversation.
+    static func coats(of animal: LotItem.Animal) -> [PlatformColor] {
         switch animal {
         case .foal:
             [

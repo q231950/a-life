@@ -44,12 +44,13 @@ enum Plants {
 
     // MARK: Kinds
 
-    private enum Vegetable {
+    enum Vegetable {
         case carrot, lettuce, cabbage, tomato, pumpkin, potato, other
     }
 
-    /// What a kind of plant looks like.
-    private enum Shape {
+    /// What a kind of plant looks like, on the lot and in its picture in the
+    /// Conservationist's conversation (`KindPicture`).
+    enum Shape {
         case flower(PlatformColor, Flower)
         case tree(crown: PlatformColor, trunk: PlatformColor, fruit: PlatformColor?)
         case conifer
@@ -65,66 +66,44 @@ enum Plants {
             case round, cup, daisy, tall, spike
         }
 
+        /// The shape of the first kind whose words are in `kind`, or a little green plant.
         init(kind: String) {
-            func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> PlatformColor { PlatformColor(red: r, green: g, blue: b, alpha: 1) }
-            let kind = Kind(kind)
-            func `is`(_ words: String...) -> Bool { kind.isOne(of: words) }
+            self.init(LotItem.Plant(kind: kind), blueberries: kind.lowercased().contains("blueberr"))
+        }
 
-            // Herbs first, so rosemary isn't a rose.
-            if `is`("grass", "lawn", "meadow", "clover", "moss", "turf") {
-                self = .grass
-            } else if `is`("hedge", "hedgerow", "privet") {
-                self = .hedge
-            } else if `is`("carrot", "parsnip", "radish") {
-                self = .vegetable(.carrot)
-            } else if `is`("lettuce", "salad", "spinach", "kale", "chard", "herb", "basil", "parsley", "rosemary", "thyme", "mint", "sage") {
-                self = .vegetable(.lettuce)
-            } else if `is`("cabbage", "broccoli", "cauliflower", "sprout") {
-                self = .vegetable(.cabbage)
-            } else if `is`("tomato", "pepper", "chilli", "chili", "strawberry") {
-                self = .vegetable(.tomato)
-            } else if `is`("pumpkin", "squash", "melon", "courgette", "zucchini", "gourd") {
-                self = .vegetable(.pumpkin)
-            } else if `is`("potato", "onion", "garlic", "leek", "beet", "beetroot", "turnip") {
-                self = .vegetable(.potato)
-            } else if `is`("vegetable", "veg", "veggie", "bean", "pea", "corn", "cucumber") {
-                self = .vegetable(.other)
-            } else if `is`("sunflower") {
-                self = .flower(rgb(0.98, 0.8, 0.1), .tall)
-            } else if `is`("lavender", "foxglove", "lupin", "lupine", "salvia", "delphinium", "heather") {
-                self = .flower(rgb(0.6, 0.45, 0.85), .spike)
-            } else if `is`("daisy", "chamomile", "camomile", "aster") {
-                self = .flower(rgb(0.98, 0.98, 0.95), .daisy)
-            } else if `is`("tulip", "lily", "crocus", "daffodil", "narcissus", "bluebell") {
-                self = .flower(rgb(0.95, 0.35, 0.5), .cup)
-            } else if `is`("rose") {
-                self = .flower(rgb(0.84, 0.15, 0.24), .round)
-            } else if `is`("poppy", "marigold", "nasturtium") {
-                self = .flower(rgb(0.95, 0.35, 0.15), .round)
-            } else if `is`("flower", "bloom", "peony", "dahlia", "orchid", "pansy", "violet", "iris", "carnation", "geranium", "petunia", "begonia", "hibiscus", "wildflower") {
-                self = .flower(rgb(0.93, 0.5, 0.75), .round)
-            } else if `is`("pine", "fir", "spruce", "conifer", "cedar", "cypress", "yew", "larch") {
-                self = .conifer
-            } else if `is`("palm", "coconut") {
-                self = .palm
-            } else if `is`("birch", "aspen", "poplar") {
-                self = .tree(crown: rgb(0.55, 0.78, 0.35), trunk: rgb(0.93, 0.92, 0.88), fruit: nil)
-            } else if `is`("apple", "orchard", "pear", "plum") {
-                self = .tree(crown: rgb(0.3, 0.6, 0.25), trunk: rgb(0.45, 0.3, 0.2), fruit: rgb(0.85, 0.12, 0.12))
-            } else if `is`("orange", "lemon", "citrus") {
-                self = .tree(crown: rgb(0.25, 0.55, 0.25), trunk: rgb(0.45, 0.3, 0.2), fruit: rgb(0.98, 0.6, 0.1))
-            } else if `is`("cherry", "blossom", "sakura", "magnolia") {
-                self = .tree(crown: rgb(0.97, 0.7, 0.82), trunk: rgb(0.38, 0.25, 0.2), fruit: nil)
-            } else if `is`("maple", "acer", "autumn") {
-                self = .tree(crown: rgb(0.88, 0.38, 0.15), trunk: rgb(0.42, 0.28, 0.2), fruit: nil)
-            } else if `is`("oak", "tree", "willow", "elm", "beech", "chestnut", "ash", "lime", "linden", "sycamore") {
-                self = .tree(crown: rgb(0.2, 0.48, 0.2), trunk: rgb(0.42, 0.28, 0.18), fruit: nil)
-            } else if `is`("berry", "blueberry", "raspberry", "blackberry", "currant", "holly") {
-                self = .bush(berries: `is`("blueberry") ? rgb(0.3, 0.35, 0.8) : rgb(0.8, 0.1, 0.2))
-            } else if `is`("bush", "shrub", "boxwood", "box", "topiary", "fern", "hydrangea", "rhododendron") {
-                self = .bush(berries: nil)
-            } else {
-                self = .plant
+        /// What `plant` looks like, or a little green plant for `nil`. A
+        /// berry bush has blue berries if they are `blueberries`, and red ones
+        /// otherwise.
+        init(_ plant: LotItem.Plant?, blueberries: Bool = false) {
+            func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> PlatformColor { PlatformColor(red: r, green: g, blue: b, alpha: 1) }
+            switch plant {
+            case .grass: self = .grass
+            case .hedge: self = .hedge
+            case .carrot: self = .vegetable(.carrot)
+            case .lettuce: self = .vegetable(.lettuce)
+            case .cabbage: self = .vegetable(.cabbage)
+            case .tomato: self = .vegetable(.tomato)
+            case .pumpkin: self = .vegetable(.pumpkin)
+            case .potato: self = .vegetable(.potato)
+            case .vegetable: self = .vegetable(.other)
+            case .sunflower: self = .flower(rgb(0.98, 0.8, 0.1), .tall)
+            case .lavender: self = .flower(rgb(0.6, 0.45, 0.85), .spike)
+            case .daisy: self = .flower(rgb(0.98, 0.98, 0.95), .daisy)
+            case .tulip: self = .flower(rgb(0.95, 0.35, 0.5), .cup)
+            case .rose: self = .flower(rgb(0.84, 0.15, 0.24), .round)
+            case .poppy: self = .flower(rgb(0.95, 0.35, 0.15), .round)
+            case .flower: self = .flower(rgb(0.93, 0.5, 0.75), .round)
+            case .pine: self = .conifer
+            case .palm: self = .palm
+            case .birch: self = .tree(crown: rgb(0.55, 0.78, 0.35), trunk: rgb(0.93, 0.92, 0.88), fruit: nil)
+            case .apple: self = .tree(crown: rgb(0.3, 0.6, 0.25), trunk: rgb(0.45, 0.3, 0.2), fruit: rgb(0.85, 0.12, 0.12))
+            case .orange: self = .tree(crown: rgb(0.25, 0.55, 0.25), trunk: rgb(0.45, 0.3, 0.2), fruit: rgb(0.98, 0.6, 0.1))
+            case .cherry: self = .tree(crown: rgb(0.97, 0.7, 0.82), trunk: rgb(0.38, 0.25, 0.2), fruit: nil)
+            case .maple: self = .tree(crown: rgb(0.88, 0.38, 0.15), trunk: rgb(0.42, 0.28, 0.2), fruit: nil)
+            case .oak: self = .tree(crown: rgb(0.2, 0.48, 0.2), trunk: rgb(0.42, 0.28, 0.18), fruit: nil)
+            case .berry: self = .bush(berries: blueberries ? rgb(0.3, 0.35, 0.8) : rgb(0.8, 0.1, 0.2))
+            case .bush: self = .bush(berries: nil)
+            case nil: self = .plant
             }
         }
 

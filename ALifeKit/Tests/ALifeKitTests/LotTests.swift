@@ -111,4 +111,66 @@ final class LotTests: XCTestCase {
         ])
         XCTAssertEqual(LotItem.Animal.allCases.filter(\.flies), [.bird, .pegasus, .pterosaur])
     }
+
+    func testBuildingsAreDrawnByTheFirstKindWhoseWordsAreInTheirs() {
+        let kinds: [String: LotItem.Building] = [
+            "restaurant": .restaurant, "Luigi's pizzeria": .restaurant, "pub": .restaurant,
+            "coffee shop": .cafe, "tea house": .cafe, "Café": .cafe,
+            "workshop": .shed, "garden shed": .shed, "bookshop": .shop, "shops": .shop,
+            "tower": .tower, "wind turbine": .tower, "block of flats": .flats, "hotel": .flats,
+            "office": .office, "bank": .office, "hospital": .hospital, "chapel": .church,
+            "town hall": .school, "school": .school, "stable": .barn, "farm": .barn,
+            "windmill": .mill, "house": .house, "farmhouse": .house, "cottage": .house,
+        ]
+        for (kind, expected) in kinds {
+            XCTAssertEqual(LotItem.Building(kind: kind), expected, kind)
+        }
+        for kind in ["building", "pavilion", "inner courtyard"] {
+            XCTAssertNil(LotItem.Building(kind: kind), kind)
+        }
+        let barn = LotItem(id: "buildings/barn.md", category: .building, kind: "red barn", name: "Barn", area: LotArea(x: 1, y: 1))
+        XCTAssertEqual(barn.building, .barn)
+        XCTAssertNil(barn.plant)
+    }
+
+    func testPlantsAreDrawnByTheFirstKindWhoseWordsAreInTheirs() {
+        func item(_ kind: String) -> LotItem {
+            LotItem(id: "garden/x.md", category: .plant, kind: kind, name: "X", area: LotArea(x: 1, y: 1))
+        }
+        let kinds: [String: LotItem.Plant] = [
+            "lawn": .grass, "privet": .hedge, "rosemary": .lettuce, "rose": .rose, "roses": .rose,
+            "cherry tomatoes": .tomato, "strawberry": .tomato, "spruce": .pine, "pine tree": .pine,
+            "apple tree": .apple, "cherry blossom": .cherry, "bird cherry": .cherry, "oak": .oak,
+            "weeping willow": .oak, "wildflowers": .flower, "sunflower": .sunflower,
+            "blueberry bush": .berry, "bushes": .bush, "daisies": .daisy, "potatoes": .potato,
+        ]
+        for (kind, expected) in kinds {
+            XCTAssertEqual(item(kind).plant, expected, kind)
+        }
+        XCTAssertNil(item("cactus").plant)
+        // A bed of animals isn't a plant, and a building is never one.
+        XCTAssertNil(item("unicorn").plant)
+        XCTAssertNil(LotItem(id: "buildings/x.md", category: .building, kind: "rose", name: "X", area: LotArea(x: 1, y: 1)).plant)
+    }
+
+    func testEachKindIsDrawnAsItselfWhenItIsNamedAsItIsCalled() {
+        // So asking for one by its name gets that one on the lot.
+        for building in LotItem.Building.allCases {
+            XCTAssertEqual(LotItem.Building(kind: building.rawValue), building, building.rawValue)
+            XCTAssertEqual(LotItem.Building(kind: building.name), building, building.name)
+        }
+        for plant in LotItem.Plant.allCases {
+            for kind in [plant.rawValue, plant.name, plant.plural] {
+                XCTAssertEqual(LotItem.Plant(kind: kind), plant, kind)
+                let bed = LotItem(id: "garden/x.md", category: .plant, kind: kind, name: "X", area: LotArea(x: 1, y: 1))
+                XCTAssertNil(bed.animal, kind)
+            }
+        }
+        for animal in LotItem.Animal.allCases {
+            for kind in [animal.kind, animal.name, animal.plural] {
+                let bed = LotItem(id: "garden/x.md", category: .plant, kind: kind, name: "X", area: LotArea(x: 1, y: 1))
+                XCTAssertEqual(bed.animal, animal, kind)
+            }
+        }
+    }
 }
