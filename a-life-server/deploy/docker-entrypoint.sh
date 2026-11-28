@@ -1,18 +1,27 @@
 #!/bin/sh
 # Starts a-life-server in its container, after getting what it needs ready:
-# git access with your GitHub token, the a*life Engineer's checkout, and your
-# own agents file. See "Run it on a server" in a-life-server/README.md.
+# git and gh access with your GitHub token, the Engineer's a*life checkout,
+# and the agents file. See "Run it on a server" in a-life-server/README.md.
 set -eu
 
 # A fine-grained GitHub token, if you gave one: git uses it for every GitHub
 # address, ssh (git@github.com:...) and https alike, for cloning, fetching and
-# pushing. It's only kept in this process's environment, never in a file.
+# pushing. The ssh addresses are turned into plain https ones, with no token
+# in them, so the token never shows in `git remote -v` or in git's errors.
+# git asks a credential helper for the token instead, only for
+# https://github.com, and the helper reads it from GITHUB_TOKEN each time it's
+# asked, so it's only ever in the environment, never in a file. The helper is
+# a few lines of shell rather than `gh auth git-credential`, so git keeps
+# working whatever becomes of gh. gh itself needs nothing from here: it signs
+# in with GITHUB_TOKEN from the environment by itself.
 if [ -n "${GITHUB_TOKEN:-}" ]; then
-    with_token="url.https://x-access-token:${GITHUB_TOKEN}@github.com/.insteadOf"
     export GIT_CONFIG_COUNT=3
-    export GIT_CONFIG_KEY_0="$with_token" GIT_CONFIG_VALUE_0="git@github.com:"
-    export GIT_CONFIG_KEY_1="$with_token" GIT_CONFIG_VALUE_1="ssh://git@github.com/"
-    export GIT_CONFIG_KEY_2="$with_token" GIT_CONFIG_VALUE_2="https://github.com/"
+    export GIT_CONFIG_KEY_0="url.https://github.com/.insteadOf" GIT_CONFIG_VALUE_0="git@github.com:"
+    export GIT_CONFIG_KEY_1="url.https://github.com/.insteadOf" GIT_CONFIG_VALUE_1="ssh://git@github.com/"
+    # Single quotes: $1 and $GITHUB_TOKEN are the helper's, read when git
+    # calls it, not this script's.
+    export GIT_CONFIG_KEY_2="credential.https://github.com.helper"
+    export GIT_CONFIG_VALUE_2='!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
 fi
 
 # The a*life Engineer's checkout, cloned the first time, and used as it is
