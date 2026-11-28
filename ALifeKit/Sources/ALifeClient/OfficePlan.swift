@@ -1,4 +1,5 @@
 import ALifeAPI
+import Foundation
 
 /// The office the characters work in, on the house's tiles in the middle of
 /// the lot: a lobby on the ground floor, with the door at the front and a
@@ -67,6 +68,10 @@ public enum OfficePlan {
     /// character.
     static let sheepMargin: Float = 0.3
     static let sheepRoom: Float = 0.55
+    /// How far a sheep strolls from where it is in one go, and how close it
+    /// comes to the desk and the character at it, in tiles.
+    static let sheepStroll: Float = 2
+    static let deskReach: Float = 0.5
 
     /// The storeys for `rooms` rooms: the lobby, and as many floors of rooms
     /// over it as they need, one at least.
@@ -132,5 +137,39 @@ public enum OfficePlan {
             if $0.row != $1.row { return $0.row > $1.row }
             return $0.column < $1.column
         }.map(spot)
+    }
+
+    /// Whether a sheep can stand on `spot` in `room`: inside its walls, and
+    /// not at the desk, nor on the character at it.
+    public static func isFree(_ spot: Spot, in room: Room) -> Bool {
+        let desk = room.desk
+        let atDesk = abs(spot.x - desk.x) < deskReach && spot.y > desk.y - deskReach
+        return room.contains(spot, margin: sheepMargin) && !atDesk
+    }
+
+    /// Whether a sheep can walk straight from `start` to `end` in `room`
+    /// without leaving it or going through the desk.
+    public static func canWalk(from start: Spot, to end: Spot, in room: Room) -> Bool {
+        let steps = 12
+        return (0...steps).allSatisfy { step in
+            let t = Float(step) / Float(steps)
+            return isFree(Spot(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t), in: room)
+        }
+    }
+
+    /// Somewhere for a sheep at `spot` to stroll to next, a little way off
+    /// and straight on, or `nil` if it finds nowhere.
+    public static func strollSpot<Generator: RandomNumberGenerator>(
+        from spot: Spot, in room: Room, using generator: inout Generator
+    ) -> Spot? {
+        for _ in 0..<12 {
+            let angle = Float.random(in: 0..<(2 * .pi), using: &generator)
+            let distance = Float.random(in: 0.5...sheepStroll, using: &generator)
+            let target = Spot(x: spot.x + cos(angle) * distance, y: spot.y + sin(angle) * distance)
+            if canWalk(from: spot, to: target, in: room) {
+                return target
+            }
+        }
+        return nil
     }
 }

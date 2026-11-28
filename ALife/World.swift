@@ -221,9 +221,10 @@ final class World {
         let room = OfficePlan.room(forSlot: agent.slot)
 
         let entity = Self.makeSheep(scarf: agent.shirt)
-        entity.position = lot.position(of: OfficePlan.sheepSpot(in: room, place: place), height: room.floor)
+        let spot = OfficePlan.sheepSpot(in: room, place: place)
+        entity.position = lot.position(of: spot, height: room.floor)
         entity.scale = SIMD3(repeating: 0.01) // it pops up from nothing
-        entity.components.set(SheepComponent(agent: agent.entity, spot: entity.position, place: place, scarf: agent.shirt))
+        entity.components.set(SheepComponent(agent: agent.entity, spot: entity.position, place: place, room: room, start: spot, tileSize: lot.tileSize, scarf: agent.shirt))
         root.addChild(entity)
         return entity
     }
